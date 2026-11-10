@@ -174,9 +174,6 @@ class EditorViewModel @Inject constructor(
     }
 
     // ------------------------------------------------------------------ Add More Media (+)
-    /**
-     * வீடியோக்கள் மற்றும் புகைப்படங்கள் (Images) இரண்டையும் துல்லியமாகப் பிரித்தறிந்து Main Track-ல் சேர்க்கும் செயல்பாடு
-     */
     private suspend fun resolveAnyMedia(uriStr: String): MediaItem? {
         val parsedUri = Uri.parse(uriStr)
         val mimeType = runCatching { context.contentResolver.getType(parsedUri) }.getOrNull()
@@ -201,17 +198,15 @@ class EditorViewModel @Inject constructor(
                 uri = uriStr,
                 type = MediaType.IMAGE,
                 displayName = title,
-                durationMs = 8_000L, // HTML எடிட்டரில் உள்ளது போல் 8 நொடிகள்
+                durationMs = 8_000L,
                 width = bounds.outWidth.coerceAtLeast(0),
                 height = bounds.outHeight.coerceAtLeast(0),
             )
         }
 
-        // வீடியோவாக இருந்தால் வழக்கமான resolveMedia மூலம் பெறப்படும்
         val videoItem = resolveMedia(uriStr)
         if (videoItem != null) return videoItem
 
-        // Fallback: ஒருவேளை MimeType இல்லாத இமேஜாக இருந்தால்
         val fallbackBounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         val isDecodable = runCatching {
             context.contentResolver.openInputStream(parsedUri)?.use {
