@@ -12,6 +12,12 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+/** One scoreboard row: its rectangle inside the rendered card, and its pixel range in the source screenshot. */
+data class RowInfo(val rect: RectF, val srcTop: Int, val srcBottom: Int)
+
+/** The rendered rows card plus where each row sits. */
+data class RenderedCard(val bitmap: Bitmap, val rows: List<RowInfo>)
+
 /** Which kind of scoreboard the screenshot is. Only changes the accent colour for now. */
 enum class ScoreCardType(val label: String, val accent: Int) {
     BATTING("SCORE", 0xFF00E5FF.toInt()),
@@ -41,7 +47,10 @@ object ScoreCardRenderer {
     /**
      * @param startFraction / [endFraction] vertical crop lines as fractions (0..1) of [source] height.
      */
-    fun render(source: Bitmap, startFraction: Float, endFraction: Float, type: ScoreCardType): Bitmap {
+    fun render(source: Bitmap, startFraction: Float, endFraction: Float, type: ScoreCardType): Bitmap =
+        renderWithRows(source, startFraction, endFraction, type).bitmap
+
+    fun renderWithRows(source: Bitmap, startFraction: Float, endFraction: Float, type: ScoreCardType): RenderedCard {
         val w = source.width
         val top = (source.height * min(startFraction, endFraction)).toInt()
             .coerceIn(0, source.height - 2)
@@ -65,6 +74,7 @@ object ScoreCardRenderer {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
+        val infos = ArrayList<RowInfo>()
         var y = pad
         rows.forEachIndexed { index, range ->
             val rowH = range.last - range.first + 1
@@ -73,6 +83,7 @@ object ScoreCardRenderer {
 
             val isHeader = hasColoredBackground(rowPixels, w, rowH)
             val rect = RectF(pad.toFloat(), y.toFloat(), (pad + w).toFloat(), (y + rowH).toFloat())
+            infos.add(RowInfo(RectF(rect), top + range.first, top + range.last + 1))
             val radius = min(rowH * 0.3f, max(10f, w / 40f))
 
             val gradFrom: Int
@@ -105,7 +116,7 @@ object ScoreCardRenderer {
 
             y += rowH + gap
         }
-        return out
+        return RenderedCard(out, infos)
     }
 
     /** A row whose left/right edge is clearly tinted (e.g. the green innings header). */
