@@ -2,7 +2,6 @@ package com.actioncut.feature.editor.ui.scorecard
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
@@ -28,7 +27,6 @@ object ScoreCardComposer {
         player: Player?,
         photo: Bitmap?,
         fallbackName: String? = null,
-        timeInClipMs: Long = 0L,
     ): ComposedCard {
         val out = Bitmap.createBitmap(CANVAS_W.toInt(), CANVAS_H.toInt(), Bitmap.Config.ARGB_8888)
         val c = Canvas(out)
@@ -48,14 +46,13 @@ object ScoreCardComposer {
             sx += 70f
         }
 
-        // 2. இடதுபுறம்: ஸ்கோர்கார்டு வரிகள் (சரியான அகலம் மற்றும் இடைவெளி)
+        // 2. இடதுபுறம்: ஸ்கோர்கார்டு வரிகள்
         val listLeft = 24f
         val listWidth = 820f
         val listTop = 32f
         val listBottom = CANVAS_H - 32f
         val listHeight = listBottom - listTop
 
-        // துல்லியமான உயரக் கணக்கீடு (Coordinate drift முற்றிலுமாக தவிர்க்கப்பட்டுள்ளது)
         val rowHeights = card.rows.map { r ->
             val srcW = r.rect.width().coerceAtLeast(1f)
             val srcH = r.rect.height().coerceAtLeast(1f)
@@ -98,7 +95,7 @@ object ScoreCardComposer {
 
             c.drawBitmap(card.bitmap, srcRect, dstRect, bmpPaint)
 
-            // தேர்ந்தெடுக்கப்பட்ட வரிக்கு துல்லியமான சிவப்புக் கோடு
+            // தேர்ந்தெடுக்கப்பட்ட வரிக்கு சிவப்புக் கோடு
             if (i == selected) {
                 p.style = Paint.Style.STROKE
                 p.strokeWidth = 4.5f
@@ -112,7 +109,7 @@ object ScoreCardComposer {
         c.restore()
 
         // 3. வலதுபுறம்: பிளேயர் பேனல்
-        val pl = 930f // அம்பு கார்டுக்குள் நுழையாமல் இருக்க இடைவெளி சீரமைக்கப்பட்டது
+        val pl = 960f
         val pr = CANVAS_W - 28f
         val pt = 28f
         val pb = CANVAS_H - 28f
@@ -147,7 +144,6 @@ object ScoreCardComposer {
             c.drawBitmap(playerBmp, null, RectF(dl, pt, dl + dw, pt + dh), bmpPaint)
         }
 
-        // கீழ்புற இருண்ட நிழல்
         val barTop = pb - ph * 0.32f
         p.shader = LinearGradient(0f, barTop, 0f, pb, 0x00000000, 0xFA02060F.toInt(), Shader.TileMode.CLAMP)
         c.drawRect(pl, barTop, pr, pb, p)
@@ -199,46 +195,53 @@ object ScoreCardComposer {
         c.drawRoundRect(panelRect, corner, corner, p)
         p.style = Paint.Style.FILL
 
-        // 4. HTML எடிட்டரில் உள்ள அசல் சிவப்பு அம்பு (அனிமேஷன் துடிப்புடன்)
-        if (selected in renderedRowRects.indices) {
-            val targetRow = renderedRowRects[selected]
-            val cy = targetRow.centerY()
+        return ComposedCard(out, renderedRowRects)
+    }
 
-            // வீடியோ ஓடும்போது அம்பு இயல்பாக துடிக்கும் அனிமேஷன் (Bounce Effect)
-            val bounce = (sin(timeInClipMs / 180.0) * 6.0).toFloat()
-            val tipX = targetRow.right + 4f + bounce
+    /**
+     * பெரிய, வைப்ரண்ட் சிவப்பு அம்பு முன்னும் பின்னும் துடிக்கும் அனிமேஷன் வரைபகுதி
+     */
+    fun drawBouncingArrow(canvas: Canvas, targetRow: RectF, timeInClipMs: Long) {
+        val cy = targetRow.centerY()
 
-            // அம்பு அளவுகள் (கார்டுக்கு வெளியே அழகாக அமையும்)
-            val arrowW = 54f
-            val arrowH = 36f
-            val headLen = 24f
-            val halfHeadH = arrowH / 2f
-            val halfStemH = 7.5f
-            val tailX = tipX + arrowW
+        // 0.75 நொடி இடைவெளியில் முன்னும் பின்னும் 18 பிக்சல் அளவுக்கு அழகாகத் துடிக்கும் கணக்கீடு
+        val bounce = ((1.0 - sin(timeInClipMs * 2.0 * Math.PI / 750.0)) / 2.0 * 18.0).toFloat()
+        val tipX = targetRow.right + 4f + bounce
 
-            val arrowPath = Path().apply {
-                moveTo(tipX, cy)
-                lineTo(tipX + headLen, cy - halfHeadH)
-                lineTo(tipX + headLen, cy - halfStemH)
-                lineTo(tailX, cy - halfStemH)
-                lineTo(tailX, cy + halfStemH)
-                lineTo(tipX + headLen, cy + halfStemH)
-                lineTo(tipX + headLen, cy + halfHeadH)
-                close()
-            }
+        // பெரிய அம்பு அளவுகள் (92px அகலம், 58px உயரம்)
+        val arrowW = 92f
+        val arrowH = 58f
+        val headLen = 36f
+        val halfHeadH = arrowH / 2f
+        val halfStemH = 12f
+        val tailX = tipX + arrowW
 
-            // 3D கருப்பு அவுட்லைன்
-            p.style = Paint.Style.STROKE
-            p.strokeWidth = 3f
-            p.color = 0xFF000000.toInt()
-            c.drawPath(arrowPath, p)
-
-            // அசல் பிரகாசமான சிவப்பு நிறம் (Pure Red #FF0000)
-            p.style = Paint.Style.FILL
-            p.color = 0xFFFF0000.toInt()
-            c.drawPath(arrowPath, p)
+        val arrowPath = Path().apply {
+            moveTo(tipX, cy)
+            lineTo(tipX + headLen, cy - halfHeadH)
+            lineTo(tipX + headLen, cy - halfStemH)
+            lineTo(tailX, cy - halfStemH)
+            lineTo(tailX, cy + halfStemH)
+            lineTo(tipX + headLen, cy + halfStemH)
+            lineTo(tipX + headLen, cy + halfHeadH)
+            close()
         }
 
-        return ComposedCard(out, renderedRowRects)
+        // 3D கருப்பு பார்டர்
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = 0xFF000000.toInt()
+            strokeWidth = 4f
+            strokeJoin = Paint.Join.ROUND
+        }
+
+        // அசல் பிரகாசமான வைப்ரண்ட் சிவப்பு நிறம்
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = 0xFFFF0022.toInt()
+        }
+
+        canvas.drawPath(arrowPath, strokePaint)
+        canvas.drawPath(arrowPath, fillPaint)
     }
 }
