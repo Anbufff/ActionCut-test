@@ -7,6 +7,8 @@ import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
 import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.common.audio.SpeedProvider
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.AbsoluteSizeSpan
@@ -123,20 +125,21 @@ object EffectMapper {
         )
 
         // --- Sticker / text overlays (applied last, on the framed output) ---
-        overlayEffect(clip, overlays)?.let { effects += it }
+        overlayEffect(clip, overlays, targetWidth)?.let { effects += it }
         return effects
     }
 
     /** Builds a Media3 [OverlayEffect] for sticker/text clips overlapping [clip]'s span. */
-    private fun overlayEffect(clip: Clip, overlays: List<Clip>): Effect? {
-        val active = overlays.filter { ov ->
-            !ov.text?.text.isNullOrEmpty() &&
-                ov.timelineStartMs < clip.timelineEndMs &&
-                ov.timelineEndMs > clip.timelineStartMs
+    private fun overlayEffect(clip: Clip, overlays: List<Clip>, targetWidth: Int): Effect? {
+        val overlapping = overlays.filter { ov ->
+            ov.timelineStartMs < clip.timelineEndMs && ov.timelineEndMs > clip.timelineStartMs
         }
-        if (active.isEmpty()) return null
+        val active = overlapping.filter { !it.text?.text.isNullOrEmpty() }
+        // Image stickers (e.g. the cricket score card): a media URI and no text.
+        val images = overlapping.filter { it.mediaUri != null && it.text?.text.isNullOrEmpty() }
+        if (active.isEmpty() && images.isEmpty()) return null
 
-        val textureOverlays: List<TextureOverlay> = active.map { ov ->
+        val textOverlays: List<TextureOverlay> = active.map { ov ->
             val props = ov.text!!
             val span = SpannableString(props.text)
             val sizePx = (props.fontSizeSp * ov.transform.scale * 2.5f).toInt().coerceAtLeast(24)
@@ -151,7 +154,34 @@ object EffectMapper {
                 .build()
             TextOverlay.createStaticTextOverlay(span, settings)
         }
+        val imageOverlays: List<TextureOverlay> = images.mapNotNull { imageOverlay(it, clip, targetWidth) }
+        val textureOverlays = textOverlays + imageOverlays
+        if (textureOverlays.isEmpty()) return null
         return OverlayEffect(ImmutableList.copyOf(textureOverlays))
+    }
+
+    /**
+     * A timed bitmap overlay for an image sticker. The sticker's [Clip.transform] scale is the
+     * fraction of the output frame WIDTH it covers (same meaning as in the editor preview); Media3
+     * draws a bitmap overlay at 1:1 output pixels, so scale = (frame width * fraction) / bitmap width.
+     * Only `file:` URIs written by the app (e.g. score cards) are supported.
+     */
+    private fun imageOverlay(ov: Clip, clip: Clip, targetWidth: Int): TextureOverlay? {
+        val path = ov.mediaUri?.let { Uri.parse(it).path } ?: return null
+        val bitmap = BitmapFactory.decodeFile(path) ?: return null
+        val factor = (targetWidth * ov.transform.scale) / bitmap.width.toFloat()
+        val visible = OverlaySettings.Builder()
+            .setBackgroundFrameAnchor(
+                ov.transform.offsetX.coerceIn(-1f, 1f),
+                -ov.transform.offsetY.coerceIn(-1f, 1f),
+            )
+            .setScale(factor, factor)
+            .setRotationDegrees(ov.transform.rotationDegrees)
+            .build()
+        val hidden = OverlaySettings.Builder().setAlphaScale(0f).build()
+        val startUs = (ov.timelineStartMs - clip.timelineStartMs).coerceAtLeast(0L) * 1_000L
+        val endUs = (ov.timelineEndMs - clip.timelineStartMs).coerceAtLeast(0L) * 1_000L
+        return TimedBitmapOverlay(bitmap, visible, hidden, startUs, endUs)
     }
 
     /**

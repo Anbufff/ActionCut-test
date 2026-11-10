@@ -58,6 +58,17 @@ object ClipFactory {
             timelineEndMs = timelineStartMs + durationMs,
         )
 
+    /** A rendered image (e.g. a cricket score card PNG) placed as an overlay sticker. */
+    fun scoreCard(uri: String, timelineStartMs: Long, durationMs: Long, transform: Transform): Clip =
+        Clip(
+            id = Ids.clip(),
+            type = ClipType.STICKER,
+            mediaUri = uri,
+            timelineStartMs = timelineStartMs,
+            timelineEndMs = timelineStartMs + durationMs,
+            transform = transform,
+        )
+
     /** An emoji "sticker" overlay (rendered as a large glyph; no image asset needed). */
     fun emojiSticker(emoji: String, timelineStartMs: Long, durationMs: Long = DEFAULT_IMAGE_DURATION_MS): Clip =
         Clip(

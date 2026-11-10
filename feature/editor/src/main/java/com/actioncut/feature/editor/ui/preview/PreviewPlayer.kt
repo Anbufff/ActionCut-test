@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
@@ -20,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -240,44 +242,79 @@ private fun OverlayLayer(
                 val baseSp = clip.text?.fontSizeSp ?: 24f
                 val isSelected = clip.id == selectedClipId
 
-                Text(
-                    text = glyph,
-                    fontSize = (baseSp * t.scale).sp,
-                    color = Color(clip.text?.colorArgb ?: 0xFFFFFFFF.toInt()),
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .graphicsLayer {
-                            translationX = (t.offsetX / 2f) * w
-                            translationY = (t.offsetY / 2f) * h
-                            rotationZ = t.rotationDegrees
-                            alpha = props.opacity
-                        }
-                        .then(
-                            if (isSelected) {
-                                Modifier.border(1.dp, Color.White.copy(alpha = 0.6f))
-                            } else {
-                                Modifier
+                val gestureModifier = Modifier
+                    .graphicsLayer {
+                        translationX = (t.offsetX / 2f) * w
+                        translationY = (t.offsetY / 2f) * h
+                        rotationZ = t.rotationDegrees
+                        alpha = props.opacity
+                    }
+                    .then(
+                        if (isSelected) {
+                            Modifier.border(1.dp, Color.White.copy(alpha = 0.6f))
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .pointerInput(clip.id, w, h) {
+                        var ox = t.offsetX
+                        var oy = t.offsetY
+                        detectDragGestures(
+                            onDragStart = {
+                                onSelect(clip.id)
+                                ox = clip.transform.offsetX
+                                oy = clip.transform.offsetY
+                            },
+                            onDrag = { change, drag ->
+                                change.consume()
+                                ox = (ox + drag.x / (w / 2f)).coerceIn(-1f, 1f)
+                                oy = (oy + drag.y / (h / 2f)).coerceIn(-1f, 1f)
+                                onMove(clip.id, ox, oy)
                             },
                         )
-                        .pointerInput(clip.id, w, h) {
-                            var ox = t.offsetX
-                            var oy = t.offsetY
-                            detectDragGestures(
-                                onDragStart = {
-                                    onSelect(clip.id)
-                                    ox = clip.transform.offsetX
-                                    oy = clip.transform.offsetY
-                                },
-                                onDrag = { change, drag ->
-                                    change.consume()
-                                    ox = (ox + drag.x / (w / 2f)).coerceIn(-1f, 1f)
-                                    oy = (oy + drag.y / (h / 2f)).coerceIn(-1f, 1f)
-                                    onMove(clip.id, ox, oy)
-                                },
-                            )
-                        }
-                        .clickableNoRipple { onSelect(clip.id) },
-                )
+                    }
+                    .clickableNoRipple { onSelect(clip.id) }
+
+                val imageUri = clip.mediaUri
+                if (imageUri != null && clip.text == null) {
+                    // Image sticker (e.g. cricket score card): width = scale * preview width.
+                    StickerImage(
+                        uri = imageUri,
+                        widthPx = t.scale * w,
+                        modifier = Modifier.align(Alignment.Center).then(gestureModifier),
+                    )
+                } else {
+                    Text(
+                        text = glyph,
+                        fontSize = (baseSp * t.scale).sp,
+                        color = Color(clip.text?.colorArgb ?: 0xFFFFFFFF.toInt()),
+                        modifier = Modifier.align(Alignment.Center).then(gestureModifier),
+                    )
+                }
             }
     }
+}
+
+/** Draws an image sticker from a `file:` URI at [widthPx] pixels wide, keeping its aspect ratio. */
+@Composable
+private fun StickerImage(uri: String, widthPx: Float, modifier: Modifier = Modifier) {
+    val bitmap = androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(
+        initialValue = null,
+        key1 = uri,
+    ) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                android.graphics.BitmapFactory.decodeFile(android.net.Uri.parse(uri).path)?.asImageBitmap()
+            }.getOrNull()
+        }
+    }.value ?: return
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    androidx.compose.foundation.Image(
+        bitmap = bitmap,
+        contentDescription = null,
+        contentScale = androidx.compose.ui.layout.ContentScale.FillBounds,
+        modifier = modifier
+            .width(with(density) { widthPx.toDp() })
+            .aspectRatio(bitmap.width.toFloat() / bitmap.height.toFloat()),
+    )
 }

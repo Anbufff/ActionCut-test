@@ -134,6 +134,7 @@ class EditorViewModel @Inject constructor(
             EditorTool.EXTRACT_AUDIO -> { detachAudioFromSelected(); clearTool() }
             EditorTool.AUDIO -> clearTool() // the screen launches the audio picker
             EditorTool.PIP -> clearTool() // the screen launches the video picker
+            EditorTool.CRIC -> clearTool() // the screen launches the score card flow
             else -> _uiState.update { it.copy(activeTool = tool) }
         }
     }
@@ -278,6 +279,38 @@ class EditorViewModel @Inject constructor(
     /** Adds an emoji sticker overlay at the playhead on an OVERLAY lane. */
     fun addStickerAtPlayhead(emoji: String) {
         val clip = ClipFactory.emojiSticker(emoji, _uiState.value.playheadMs)
+        val track = _uiState.value.timeline.tracks
+            .firstOrNull { it.type == com.actioncut.core.model.TrackType.OVERLAY }
+        mutate(structural = false) { timeline ->
+            if (track != null) {
+                TimelineEditor.addClip(timeline, track.id, clip)
+            } else {
+                val (withTrack, trackId) =
+                    TimelineEditor.addTrack(timeline, com.actioncut.core.model.TrackType.OVERLAY)
+                TimelineEditor.addClip(withTrack, trackId, clip)
+            }
+        }
+        _uiState.update { it.copy(selectedClipId = clip.id) }
+    }
+
+    /**
+     * Adds a rendered cricket score card (PNG) at the playhead for 5 seconds on an OVERLAY lane,
+     * sized to ~92% of the frame width (shrunk if needed so the whole card fits) and sitting in
+     * the lower part of the frame like a TV score bug.
+     */
+    fun addScoreCardAtPlayhead(uri: String, cardAspect: Float) {
+        val frameAspect = _uiState.value.aspectRatio.value
+        val aspect = if (cardAspect > 0f) cardAspect else 1f
+        var widthFrac = 0.92f
+        if (widthFrac * frameAspect / aspect > 0.9f) widthFrac = 0.9f * aspect / frameAspect
+        val heightFrac = widthFrac * frameAspect / aspect
+        val offsetY = (0.94f - heightFrac).coerceIn(-0.9f, 0.9f)
+        val clip = ClipFactory.scoreCard(
+            uri = uri,
+            timelineStartMs = _uiState.value.playheadMs,
+            durationMs = 5_000L,
+            transform = com.actioncut.core.model.Transform(offsetX = 0f, offsetY = offsetY, scale = widthFrac),
+        )
         val track = _uiState.value.timeline.tracks
             .firstOrNull { it.type == com.actioncut.core.model.TrackType.OVERLAY }
         mutate(structural = false) { timeline ->

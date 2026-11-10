@@ -82,6 +82,10 @@ fun EditorScreen(
             viewModel.addPipAtPlayhead(uri.toString())
         }
     }
+    var cricSource by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    val cricPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri -> if (uri != null) cricSource = uri.toString() }
     val recordPermission = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
     ) { granted -> if (granted) viewModel.startVoiceover() }
@@ -207,6 +211,7 @@ fun EditorScreen(
                             when (tool) {
                                 EditorTool.AUDIO -> audioPicker.launch(arrayOf("audio/*"))
                                 EditorTool.PIP -> videoPicker.launch(arrayOf("video/*"))
+                                EditorTool.CRIC -> cricPicker.launch(arrayOf("image/*"))
                                 else -> viewModel.setActiveTool(tool)
                             }
                         },
@@ -215,6 +220,17 @@ fun EditorScreen(
                 }
             }
         }
+    }
+
+    cricSource?.let { source ->
+        com.actioncut.feature.editor.ui.scorecard.ScoreCardCropDialog(
+            sourceUri = source,
+            onDismiss = { cricSource = null },
+            onDone = { uri, aspect ->
+                viewModel.addScoreCardAtPlayhead(uri, aspect)
+                cricSource = null
+            },
+        )
     }
 
     if (showRename) {
