@@ -135,6 +135,7 @@ class EditorViewModel @Inject constructor(
             EditorTool.AUDIO -> clearTool() // the screen launches the audio picker
             EditorTool.PIP -> clearTool() // the screen launches the video picker
             EditorTool.CRIC -> clearTool() // the screen launches the score card flow
+            EditorTool.CARD_ADD, EditorTool.PLAYER -> clearTool() // the screen opens the player dialogs
             else -> _uiState.update { it.copy(activeTool = tool) }
         }
     }
