@@ -112,6 +112,16 @@ class EditorViewModel @Inject constructor(
 
     fun selectClip(clipId: String?) = _uiState.update { it.copy(selectedClipId = clipId) }
 
+    /** Preview / export mode like the web editor: 16:9 (YouTube) or 4:5 (Facebook). */
+    fun setAspectRatio(ratio: com.actioncut.core.model.AspectRatio) {
+        if (ratio != com.actioncut.core.model.AspectRatio.RATIO_16_9 &&
+            ratio != com.actioncut.core.model.AspectRatio.RATIO_4_5
+        ) return
+        _uiState.update { it.copy(aspectRatio = ratio) }
+        loadedProject = loadedProject?.copy(aspectRatio = ratio)
+        scheduleSave()
+    }
+
     /** Renames the project (persisted on the usual debounced save). */
     fun renameProject(name: String) {
         val trimmed = name.trim()
