@@ -6,6 +6,7 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -31,7 +32,7 @@ object ScoreCardComposer {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
-        // 1. கிரிக்கெட் மைதானப் புல்வெளி பின்னணி (Stadium Pitch Green Backdrop)
+        // 1. கிரிக்கெட் மைதானப் புல்வெளி பின்னணி (Pitch Green Backdrop)
         p.shader = LinearGradient(0f, 0f, 0f, CANVAS_H, 0xFF0E2E11.toInt(), 0xFF050F06.toInt(), Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, CANVAS_W, CANVAS_H, p)
         p.shader = null
@@ -52,7 +53,6 @@ object ScoreCardComposer {
         val listBottom = CANVAS_H - 32f
         val listHeight = listBottom - listTop
 
-        // ஒவ்வொரு வரியின் அளவுகள் கணக்கீடு
         val cardW = card.bitmap.width.toFloat()
         val rowHeights = card.rows.map { r ->
             val rh = (r.srcBottom - r.srcTop).toFloat()
@@ -77,7 +77,6 @@ object ScoreCardComposer {
             cY = listTop - scrollOffset
         }
 
-        // வரிகளை வரைதல்
         val renderedRowRects = ArrayList<RectF>()
         c.save()
         c.clipRect(listLeft - 10f, listTop, listLeft + listWidth + 20f, listBottom)
@@ -88,10 +87,15 @@ object ScoreCardComposer {
             val rowRect = RectF(listLeft, currY, listLeft + listWidth, currY + rh)
             renderedRowRects.add(RectF(rowRect))
 
-            val srcRect = android.graphics.Rect(0, rInfo.srcTop, card.bitmap.width, rInfo.srcBottom)
+            // rInfo.rect அடிப்படையில் card.bitmap-லிருந்து சரியான வரியை எடுத்தல்
+            val srcRect = Rect(
+                rInfo.rect.left.toInt(),
+                rInfo.rect.top.toInt(),
+                rInfo.rect.right.toInt(),
+                rInfo.rect.bottom.toInt()
+            )
             val dstRect = RectF(rowRect)
 
-            // வரியின் படம் வரைதல்
             c.drawBitmap(card.bitmap, srcRect, dstRect, bmpPaint)
 
             // தேர்ந்தெடுக்கப்பட்ட வரிக்கு சிவப்புக் கோடு (Active Red Border)
@@ -117,7 +121,6 @@ object ScoreCardComposer {
         val panelRect = RectF(pl, pt, pr, pb)
         val corner = 20f
 
-        // பேனல் பின்னணி
         p.shader = RadialGradient(
             pl + pw * 0.5f, pt + ph * 0.25f, pw * 0.8f,
             intArrayOf(0xFF183B6B.toInt(), 0xFF0C1C38.toInt(), 0xFF030814.toInt()),
@@ -130,7 +133,7 @@ object ScoreCardComposer {
         c.save()
         c.clipPath(Path().apply { addRoundRect(panelRect, corner, corner, Path.Direction.CW) })
 
-        // 4. வீரர் புகைப்படம் அல்லது கார்ட்டூன் படம் (Cartoon Fallback)
+        // 4. வீரர் புகைப்படம் அல்லது கார்ட்டூன் படம்
         val playerBmp = photo ?: if (type == ScoreCardType.BOWLING) {
             CricketAssets.getBowlerLogo()
         } else {
@@ -145,7 +148,7 @@ object ScoreCardComposer {
             c.drawBitmap(playerBmp, null, RectF(dl, pt, dl + dw, pt + dh), bmpPaint)
         }
 
-        // கீழ்புற இருண்ட நிழல் (Vignette for text)
+        // கீழ்புற இருண்ட நிழல்
         val barTop = pb - ph * 0.32f
         p.shader = LinearGradient(0f, barTop, 0f, pb, 0x00000000, 0xFA02060F.toInt(), Shader.TileMode.CLAMP)
         c.drawRect(pl, barTop, pr, pb, p)
@@ -157,7 +160,7 @@ object ScoreCardComposer {
 
         p.typeface = Typeface.DEFAULT_BOLD
         p.textAlign = Paint.Align.LEFT
-        p.color = 0xFF00E5FF.toInt() // சியான் நிறம்
+        p.color = 0xFF00E5FF.toInt()
         p.textSize = ph * 0.034f
         p.letterSpacing = 0.15f
         c.drawText(tagText, pl + pw * 0.05f, pb - ph * 0.13f, p)
@@ -186,7 +189,7 @@ object ScoreCardComposer {
         p.color = 0xFFD50000.toInt()
         c.drawRoundRect(RectF(bx, by, bx + bw, by + bh), 6f, 6f, p)
         p.color = 0xFFFFE600.toInt()
-        c.drawRect(bx, by, bx + 5f, by + bh, p) // இடதுபுற மஞ்சள் பட்டை
+        c.drawRect(bx, by, bx + 5f, by + bh, p)
         p.color = 0xFFFFFFFF.toInt()
         p.textAlign = Paint.Align.CENTER
         p.textSize = bh * 0.58f
@@ -201,7 +204,7 @@ object ScoreCardComposer {
         c.drawRoundRect(panelRect, corner, corner, p)
         p.style = Paint.Style.FILL
 
-        // 7. தடிமனான சிவப்பு அம்பு (Bold Red Arrow pointing to selected row)
+        // 7. தடிமனான சிவப்பு அம்பு (Bold Red Arrow)
         if (selected in renderedRowRects.indices) {
             val targetRow = renderedRowRects[selected]
             val cy = targetRow.centerY()
@@ -222,11 +225,11 @@ object ScoreCardComposer {
                 close()
             }
 
-            p.color = 0xFFFF0000.toInt() // அசல் சிவப்பு
+            p.color = 0xFFFF0000.toInt()
             c.drawPath(arrowPath, p)
             p.style = Paint.Style.STROKE
             p.strokeWidth = 3f
-            p.color = 0xFF000000.toInt() // கருப்பு பார்டர்
+            p.color = 0xFF000000.toInt()
             c.drawPath(arrowPath, p)
             p.style = Paint.Style.FILL
         }
