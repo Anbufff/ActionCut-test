@@ -65,7 +65,6 @@ fun EditorScreen(
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // (+) பட்டன் மூலம் வீடியோக்கள் மற்றும் இமேஜ்கள் இரண்டையும் அனுமதிக்கும் Multiple Picker
     val addMediaPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
@@ -193,6 +192,7 @@ fun EditorScreen(
             onSelectClip = viewModel::selectClip,
             onTrimStart = viewModel::trimStart,
             onTrimEnd = viewModel::trimEnd,
+            onTrimCommit = viewModel::commitTrim, // விரலை எடுக்கும்போது பிளேயரை அப்டேட் செய்யும் மென்மையான முறை
             onMoveClip = viewModel::moveClip,
             onMoveCommit = viewModel::commitArrangement,
             onLoadWaveform = viewModel::loadWaveform,
