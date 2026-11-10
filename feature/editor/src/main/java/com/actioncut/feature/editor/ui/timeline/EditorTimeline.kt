@@ -3,6 +3,7 @@ package com.actioncut.feature.editor.ui.timeline
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
@@ -39,8 +41,12 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -55,6 +61,7 @@ import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.Timeline
 import com.actioncut.core.model.Track
+import com.actioncut.core.model.TrackType
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -77,11 +84,15 @@ fun EditorTimeline(
     onMoveClip: (String, Long) -> Unit = { _, _ -> },
     onMoveCommit: () -> Unit = {},
     onLoadWaveform: (suspend (String) -> FloatArray)? = null,
+    onAddMedia: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
     val scrollState = rememberScrollState()
-    val layoutDurationMs = durationMs.coerceAtLeast(2_000)
+
+    // (+) பட்டன் தெரிவதற்குத் தேவையான கூடுதல் இடத்தை டைம்லைனில் ஒதுக்குதல்
+    val extraPaddingMs = with(density) { (90.dp.toPx() / pxPerSecond * 1000f).toLong() }
+    val layoutDurationMs = (durationMs + extraPaddingMs).coerceAtLeast(3_000L)
 
     fun msToPxF(ms: Long): Float = ms / 1000f * pxPerSecond
     fun pxToMs(px: Int): Long = (px / pxPerSecond * 1000f).toLong()
@@ -127,6 +138,7 @@ fun EditorTimeline(
                         onMoveClip = onMoveClip,
                         onMoveCommit = onMoveCommit,
                         onLoadWaveform = onLoadWaveform,
+                        onAddMedia = onAddMedia,
                         playheadMs = playheadMs,
                     )
                 }
@@ -189,6 +201,7 @@ private fun TrackLane(
     onMoveClip: (String, Long) -> Unit,
     onMoveCommit: () -> Unit,
     onLoadWaveform: (suspend (String) -> FloatArray)?,
+    onAddMedia: () -> Unit,
     playheadMs: Long,
 ) {
     val density = LocalDensity.current
@@ -212,6 +225,38 @@ private fun TrackLane(
                     onMoveCommit = onMoveCommit,
                     onLoadWaveform = onLoadWaveform,
                     playheadMs = playheadMs,
+                )
+            }
+        }
+
+        // HTML எடிட்டரில் உள்ளது போலவே Main Track முடிவில் மஞ்சள் நிற புள்ளிக்கோடு (+) பட்டன்
+        if (track.type == TrackType.VIDEO) {
+            val addBtnOffsetDp = with(density) { (track.durationMs / 1000f * pxPerSecond).toDp() + 14.dp }
+            Box(
+                modifier = Modifier
+                    .offset(x = addBtnOffsetDp)
+                    .size(46.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF222222))
+                    .drawBehind {
+                        val stroke = Stroke(
+                            width = 2.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+                        )
+                        drawRoundRect(
+                            color = Color(0xFFFFCC00),
+                            cornerRadius = CornerRadius(8.dp.toPx()),
+                            style = stroke
+                        )
+                    }
+                    .clickable { onAddMedia() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = "Add Media",
+                    tint = Color(0xFFFFCC00),
+                    modifier = Modifier.size(26.dp)
                 )
             }
         }
@@ -288,7 +333,6 @@ private fun ClipBlock(
             )
         }
 
-        // ==================== Scorecard Keyframe Diamonds (Smart Cast Fix) ====================
         val sc = clip.scorecard
         if (sc != null) {
             val kfs = sc.keyframes
