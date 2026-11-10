@@ -110,7 +110,7 @@ fun ScoreCardCropDialog(
     }
 
     val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val bottomSpace = if (navInset > 0.dp) navInset else 48.dp
+    val bottomSpace = maxOf(navInset, 56.dp)
 
     val onRowTap: (Int) -> Unit = { index ->
         selected = index
