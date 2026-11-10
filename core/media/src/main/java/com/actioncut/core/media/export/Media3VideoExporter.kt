@@ -32,18 +32,6 @@ import kotlinx.coroutines.flow.callbackFlow
 import javax.inject.Inject
 import kotlin.math.roundToInt
 
-/**
- * Default [VideoExporter] backed by **AndroidX Media3 Transformer** — hardware-accelerated
- * and fully available on Maven Central (unlike the retired FFmpegKit artifacts).
- *
- * Builds a [Composition] from the project's video lane (each clip trimmed to its source
- * window and scaled to the target resolution via a [Presentation] effect), then renders to
- * an MP4/WebM file. Progress is polled on the main [Looper] and streamed as [ExportState].
- *
- * Transformer must be driven from a thread with a [Looper]; we marshal all calls onto the
- * main thread so the exporter works equally from a ViewModel or a background WorkManager
- * worker.
- */
 class Media3VideoExporter @Inject constructor(
     @ApplicationContext private val context: Context,
     private val reverser: com.actioncut.core.media.reverse.VideoReverser,
@@ -63,8 +51,6 @@ class Media3VideoExporter @Inject constructor(
             return@callbackFlow
         }
 
-        // Reverse is not a Media3 effect: pre-process reversed clips into a temp file off the
-        // main thread, then treat them as ordinary forward clips below.
         val clips = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             rawClips.map { clip ->
                 if (clip.isReversed && clip.type == ClipType.VIDEO && clip.mediaUri != null) {
@@ -80,8 +66,6 @@ class Media3VideoExporter @Inject constructor(
             }
         }
 
-        // Preset support: an explicit aspect override (Instagram/TikTok/…) wins over the
-        // project's own aspect, letting one project export to many platform shapes.
         val aspect = settings.aspectRatio ?: project.aspectRatio
         val (targetWidth, targetHeight) = targetDimensions(aspect, settings.resolution)
         val handler = Handler(Looper.getMainLooper())
@@ -98,8 +82,24 @@ class Media3VideoExporter @Inject constructor(
                     com.actioncut.core.model.FitMode.FILL -> Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
                     com.actioncut.core.model.FitMode.STRETCH -> Presentation.LAYOUT_STRETCH_TO_FIT
                 }
-                val editedItems = clips.mapIndexed { index, clip ->
-                    val incoming = clips.getOrNull(index - 1)?.transitionToNext
+
+                // ஆடியோவின் மொத்த கால அளவு வரை வீடியோ நீட்டிக்கப்படுவதை உறுதி செய்தல்
+                val totalTimelineMs = project.timeline.durationMs
+                val totalVideoMs = clips.sumOf { it.timelineDurationMs }
+
+                val exportClips = if (totalTimelineMs > totalVideoMs && clips.isNotEmpty()) {
+                    val lastIndex = clips.size - 1
+                    val lastClip = clips[lastIndex]
+                    val remainingMs = totalTimelineMs - (totalVideoMs - lastClip.timelineDurationMs)
+                    clips.mapIndexed { idx, c ->
+                        if (idx == lastIndex) c.copy(timelineEndMs = c.timelineStartMs + remainingMs) else c
+                    }
+                } else {
+                    clips
+                }
+
+                val editedItems = exportClips.mapIndexed { index, clip ->
+                    val incoming = exportClips.getOrNull(index - 1)?.transitionToNext
                         ?.takeIf { it.type != com.actioncut.core.model.TransitionType.NONE }
                     val outgoing = clip.transitionToNext
                         ?.takeIf { it.type != com.actioncut.core.model.TransitionType.NONE }
@@ -112,7 +112,6 @@ class Media3VideoExporter @Inject constructor(
 
                 val sequences = mutableListOf(videoSequence)
 
-                // Picture-in-picture: overlay video clips composited over the main video.
                 val pipClips = project.timeline.tracks
                     .filter { it.type == com.actioncut.core.model.TrackType.OVERLAY }
                     .flatMap { it.clips }
@@ -129,7 +128,6 @@ class Media3VideoExporter @Inject constructor(
                     )
                 }
 
-                // Mix the audio lane (background music / added audio) as another sequence.
                 val audioClips = project.timeline.audioTracks
                     .flatMap { it.clips }
                     .filter { it.mediaUri != null && it.volume > 0f }
@@ -139,9 +137,6 @@ class Media3VideoExporter @Inject constructor(
                 }
 
                 val compositionBuilder = Composition.Builder(sequences)
-                    // Force a (silent) audio track so a sequence that mixes clips without
-                    // audio (images, muted clips) and clips with audio doesn't fail with
-                    // "preceding MediaItem does not contain any track of type 1".
                     .experimentalSetForceAudioTrack(true)
                 if (pipClips.isNotEmpty()) {
                     compositionBuilder.setVideoCompositorSettings(pipCompositorSettings(pipClips.first()))
@@ -161,8 +156,6 @@ class Media3VideoExporter @Inject constructor(
                             result: ExportResult,
                             exception: ExportException,
                         ) {
-                            // Surface the *root* cause (e.g. the GL shader compile log),
-                            // not just the opaque top-level "Video frame processing error".
                             val chain = generateSequence(exception as Throwable) { it.cause }
                                 .mapNotNull { it.message?.trim() }
                                 .filter { it.isNotEmpty() }
@@ -178,14 +171,14 @@ class Media3VideoExporter @Inject constructor(
                 t.start(composition, outputFilePath)
                 trySend(ExportState.InProgress(0f))
 
-                // Poll progress every 200ms.
                 val holder = ProgressHolder()
                 progressRunnable = object : Runnable {
                     override fun run() {
                         val current = transformer ?: return
                         val stateInt = current.getProgress(holder)
                         if (stateInt != Transformer.PROGRESS_STATE_NOT_STARTED) {
-                            trySend(ExportState.InProgress(holder.progress / 100f))
+                            val progressFrac = (holder.progress / 100f).coerceIn(0f, 0.98f)
+                            trySend(ExportState.InProgress(progressFrac))
                         }
                         handler.postDelayed(this, 200L)
                     }
@@ -230,8 +223,6 @@ class Media3VideoExporter @Inject constructor(
         val videoEffects = EffectMapper.videoEffects(this, targetWidth, targetHeight, overlays, presentationLayout)
             .toMutableList()
 
-        // Transitions: ramp this clip's leading/trailing edge (fade/zoom/blur). Applied
-        // after the framing/overlays so the whole composited frame transitions.
         val clipDurUs = timelineDurationMs * 1_000L
         incoming?.let { tr ->
             val edgeUs = (tr.durationMs * 1_000L).coerceAtMost(clipDurUs / 2)
@@ -255,7 +246,6 @@ class Media3VideoExporter @Inject constructor(
         val builder = EditedMediaItem.Builder(mediaItemBuilder.build())
             .setEffects(Effects(audioProcessors, videoEffects))
 
-        // Mute / "remove audio from this video": strip the clip's own audio track.
         if (volume == 0f && type == ClipType.VIDEO) {
             builder.setRemoveAudio(true)
         }
@@ -267,7 +257,6 @@ class Media3VideoExporter @Inject constructor(
         return builder.build()
     }
 
-    /** Audio-only edited item for the background-audio sequence (music / voiceover). */
     private fun Clip.toAudioEditedMediaItem(): EditedMediaItem {
         val mediaItem = MediaItem.Builder()
             .setUri(mediaUri)
@@ -284,11 +273,6 @@ class Media3VideoExporter @Inject constructor(
             .build()
     }
 
-    /**
-     * Compositor settings that scale + position the PiP input (id 1) over the main (id 0).
-     * Reads keyframes per-frame so an animated PiP moves/zooms across the export, matching
-     * the live preview. Assumes the PiP lane starts at timeline 0 (best-effort).
-     */
     private fun pipCompositorSettings(pip: com.actioncut.core.model.Clip): VideoCompositorSettings =
         object : VideoCompositorSettings {
             override fun getOutputSize(inputSizes: List<Size>): Size = inputSizes.first()
@@ -309,7 +293,6 @@ class Media3VideoExporter @Inject constructor(
                 }
         }
 
-    /** Computes even, codec-friendly output dimensions for the given aspect + resolution. */
     private fun targetDimensions(aspect: AspectRatio, resolution: Resolution): Pair<Int, Int> {
         val longEdge = resolution.longEdge
         return if (aspect.value >= 1f) {
