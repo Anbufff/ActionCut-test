@@ -16,6 +16,8 @@ enum class EditorTool(val label: String, val opensPanel: Boolean) {
     VOICEOVER("Voiceover", true),
     PIP("PiP", false),
     CRIC("CRIC", false),
+    CARD_ADD("Card Add", false),
+    PLAYER("Player", false),
     EXTRACT_AUDIO("Detach", false),
     REVERSE("Reverse", false),
     ROTATE("Rotate", false),
