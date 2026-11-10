@@ -32,12 +32,11 @@ object ScoreCardComposer {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
-        // 1. கிரிக்கெட் மைதானப் புல்வெளி பின்னணி (Pitch Green Backdrop)
+        // 1. மைதானப் புல்வெளி பின்னணி
         p.shader = LinearGradient(0f, 0f, 0f, CANVAS_H, 0xFF0E2E11.toInt(), 0xFF050F06.toInt(), Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, CANVAS_W, CANVAS_H, p)
         p.shader = null
 
-        // Diagonal mowing stripes (மைதானப் புல்வெளிக் கோடுகள்)
         p.color = 0x0DFFFFFF
         p.strokeWidth = 35f
         var sx = -CANVAS_H
@@ -46,7 +45,7 @@ object ScoreCardComposer {
             sx += 70f
         }
 
-        // 2. இடதுபுறம்: ஸ்கோர்கார்டு வரிகள் (Scorecard Rows List)
+        // 2. இடதுபுறம்: ஸ்கோர்கார்டு வரிகள்
         val listLeft = 32f
         val listWidth = 835f
         val listTop = 32f
@@ -61,10 +60,8 @@ object ScoreCardComposer {
         val gap = 6f
         val totalH = rowHeights.sum() + gap * (card.rows.size - 1)
 
-        // தேர்ந்தெடுத்த வரி நடுவில் வருமாறு தானாக scroll செய்தல்
-        var cY: Float
-        if (totalH <= listHeight) {
-            cY = listTop + (listHeight - totalH) / 2f
+        val cY = if (totalH <= listHeight) {
+            listTop + (listHeight - totalH) / 2f
         } else {
             var activeTop = 0f
             for (i in 0 until selected.coerceIn(0, card.rows.size - 1)) {
@@ -74,7 +71,7 @@ object ScoreCardComposer {
             val desiredTop = activeTop - (listHeight - activeH) / 2f
             val maxScroll = totalH - listHeight
             val scrollOffset = desiredTop.coerceIn(0f, maxScroll)
-            cY = listTop - scrollOffset
+            listTop - scrollOffset
         }
 
         val renderedRowRects = ArrayList<RectF>()
@@ -87,7 +84,6 @@ object ScoreCardComposer {
             val rowRect = RectF(listLeft, currY, listLeft + listWidth, currY + rh)
             renderedRowRects.add(RectF(rowRect))
 
-            // rInfo.rect அடிப்படையில் card.bitmap-லிருந்து சரியான வரியை எடுத்தல்
             val srcRect = Rect(
                 rInfo.rect.left.toInt(),
                 rInfo.rect.top.toInt(),
@@ -98,11 +94,11 @@ object ScoreCardComposer {
 
             c.drawBitmap(card.bitmap, srcRect, dstRect, bmpPaint)
 
-            // தேர்ந்தெடுக்கப்பட்ட வரிக்கு சிவப்புக் கோடு (Active Red Border)
+            // தேர்ந்தெடுக்கப்பட்ட வரியின் சிவப்புக் கோடு
             if (i == selected) {
                 p.style = Paint.Style.STROKE
-                p.strokeWidth = 4f
-                p.color = 0xFFFF0000.toInt()
+                p.strokeWidth = 5f
+                p.color = 0xFFFF1744.toInt()
                 c.drawRoundRect(rowRect, 10f, 10f, p)
                 p.style = Paint.Style.FILL
             }
@@ -111,7 +107,7 @@ object ScoreCardComposer {
         }
         c.restore()
 
-        // 3. வலதுபுறம்: பிளேயர் பேனல் (Right Player Panel)
+        // 3. வலதுபுற பிளேயர் பேனல்
         val pl = 902f
         val pr = CANVAS_W - 32f
         val pt = 32f
@@ -133,7 +129,6 @@ object ScoreCardComposer {
         c.save()
         c.clipPath(Path().apply { addRoundRect(panelRect, corner, corner, Path.Direction.CW) })
 
-        // 4. வீரர் புகைப்படம் அல்லது கார்ட்டூன் படம்
         val playerBmp = photo ?: if (type == ScoreCardType.BOWLING) {
             CricketAssets.getBowlerLogo()
         } else {
@@ -148,13 +143,11 @@ object ScoreCardComposer {
             c.drawBitmap(playerBmp, null, RectF(dl, pt, dl + dw, pt + dh), bmpPaint)
         }
 
-        // கீழ்புற இருண்ட நிழல்
         val barTop = pb - ph * 0.32f
         p.shader = LinearGradient(0f, barTop, 0f, pb, 0x00000000, 0xFA02060F.toInt(), Shader.TileMode.CLAMP)
         c.drawRect(pl, barTop, pr, pb, p)
         p.shader = null
 
-        // 5. பெயர் மற்றும் விவரங்கள் (Name Plate)
         val displayName = (player?.name ?: fallbackName ?: if (type == ScoreCardType.BOWLING) "BOWLER" else "BATTER").trim()
         val tagText = if (type == ScoreCardType.BOWLING) "KEY BOWLER" else "KEY BATSMAN"
 
@@ -175,13 +168,11 @@ object ScoreCardComposer {
         c.drawText(nm, pl + pw * 0.05f, pb - ph * 0.062f, p)
         p.letterSpacing = 0f
 
-        // அலங்காரக் கோடுகள் (Gold & Cyan Accent Lines)
         p.color = 0xFFFFCC00.toInt()
         c.drawRoundRect(RectF(pl + pw * 0.05f, pb - ph * 0.035f, pl + pw * 0.32f, pb - ph * 0.027f), 3f, 3f, p)
         p.color = 0xFF00E5FF.toInt()
         c.drawRoundRect(RectF(pl + pw * 0.34f, pb - ph * 0.035f, pr - pw * 0.05f, pb - ph * 0.029f), 2f, 2f, p)
 
-        // 6. "⚡ NEWS CRICK" பேட்ஜ்
         val bw = pw * 0.30f
         val bh = ph * 0.055f
         val bx = pl + pw * 0.035f
@@ -197,22 +188,21 @@ object ScoreCardComposer {
 
         c.restore()
 
-        // வலது பேனல் எல்லை (Cyan Border)
         p.style = Paint.Style.STROKE
         p.strokeWidth = 4f
         p.color = 0xFF00E5FF.toInt()
         c.drawRoundRect(panelRect, corner, corner, p)
         p.style = Paint.Style.FILL
 
-        // 7. தடிமனான சிவப்பு அம்பு (Bold Red Arrow)
+        // 4. HTML எடிட்டரில் உள்ள அசல் 3D Red Arrow Mark டிசைன்
         if (selected in renderedRowRects.indices) {
             val targetRow = renderedRowRects[selected]
             val cy = targetRow.centerY()
-            val tipX = targetRow.right + 6f
-            val tailX = pl - 12f
-            val arrowH = min(targetRow.height() * 0.9f, 65f)
-            val headLen = arrowH * 0.85f
-            val stemH = arrowH * 0.38f
+            val tipX = targetRow.right + 4f
+            val tailX = pl + pw * 0.12f // வலது பேனலுக்குள் நுழையும் வால் பகுதி
+            val arrowH = min(targetRow.height() * 0.95f, 75f)
+            val headLen = arrowH * 0.82f
+            val stemH = arrowH * 0.36f
 
             val arrowPath = Path().apply {
                 moveTo(tipX, cy)
@@ -225,13 +215,16 @@ object ScoreCardComposer {
                 close()
             }
 
-            p.color = 0xFFFF0000.toInt()
-            c.drawPath(arrowPath, p)
+            // கருப்பு நிழல் மற்றும் அவுட்லைன் (3D Border)
             p.style = Paint.Style.STROKE
-            p.strokeWidth = 3f
+            p.strokeWidth = 6f
             p.color = 0xFF000000.toInt()
             c.drawPath(arrowPath, p)
+
+            // அசல் வைப்ரண்ட் சிவப்பு நிற நிரப்பல் (Pure Red Fill)
             p.style = Paint.Style.FILL
+            p.color = 0xFFFF1744.toInt()
+            c.drawPath(arrowPath, p)
         }
 
         return ComposedCard(out, renderedRowRects)
