@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.RectF
 import android.net.Uri
+import com.actioncut.core.media.export.ScorecardBridge
 import com.actioncut.core.model.ScorecardClipData
 import com.actioncut.core.model.ScorecardKeyframe
 import java.io.File
@@ -16,6 +17,12 @@ object ScorecardManager {
 
     private val cardCache = mutableMapOf<String, MutableMap<Int, Bitmap>>()
     private val rowRectsCache = mutableMapOf<String, List<RectF>>()
+
+    init {
+        ScorecardBridge.bitmapProvider = { clipId, data, timeInClipMs ->
+            getActiveBitmap(clipId, data, timeInClipMs)
+        }
+    }
 
     suspend fun prepareCard(
         context: Context,
@@ -44,7 +51,8 @@ object ScorecardManager {
                 selected = i,
                 player = player,
                 photo = photoBmp,
-                fallbackName = row.fallbackName
+                fallbackName = row.fallbackName,
+                timeInClipMs = 0L
             )
             rowMap[i] = composed.bitmap
             if (i == 0 || !rowRectsCache.containsKey(data.id)) {
