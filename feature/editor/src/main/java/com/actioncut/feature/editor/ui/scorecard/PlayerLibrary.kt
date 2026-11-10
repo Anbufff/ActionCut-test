@@ -4,10 +4,14 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Base64
+import android.util.JsonReader
+import android.util.JsonToken
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStreamReader
 import java.util.UUID
 import kotlin.math.max
 
@@ -67,6 +71,78 @@ class PlayerLibrary(private val context: Context) {
         save(all() + player)
         return player
     }
+
+
+    /**
+     * Imports a "Players Backup" .json exported by the web video editor
+     * ({"type":"fkb-players-backup","players":[{name, role, photoBase64}, ...]}).
+     * Players already registered (same name and role) are skipped. Returns how many were added.
+     */
+    fun importBackup(uri: Uri): Int {
+        var added = 0
+        val existing = all().map { it.name.trim().lowercase() + "|" + it.role }.toMutableSet()
+        val list = all().toMutableList()
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            JsonReader(InputStreamReader(stream, Charsets.UTF_8)).use { reader ->
+                fun readPlayers() {
+                    reader.beginArray()
+                    while (reader.hasNext()) {
+                        var name = ""
+                        var role = "bat"
+                        var country = ""
+                        var photo = ""
+                        reader.beginObject()
+                        while (reader.hasNext()) {
+                            when (reader.nextName()) {
+                                "name" -> name = reader.nextString()
+                                "role" -> role = reader.nextString()
+                                "country" -> country = if (reader.peek() == JsonToken.STRING) reader.nextString() else { reader.skipValue(); "" }
+                                "photoBase64" -> photo = if (reader.peek() == JsonToken.STRING) reader.nextString() else { reader.skipValue(); "" }
+                                else -> reader.skipValue()
+                            }
+                        }
+                        reader.endObject()
+                        val key = name.trim().lowercase() + "|" + role
+                        if (name.isBlank() || photo.isBlank() || key in existing) continue
+                        val saved = savePhotoFromDataUrl(photo) ?: continue
+                        existing.add(key)
+                        list.add(Player(saved.first, name.trim(), if (role == "bowl") "bowl" else "bat", country.trim(), saved.second))
+                        added++
+                    }
+                    reader.endArray()
+                }
+                if (reader.peek() == JsonToken.BEGIN_ARRAY) {
+                    readPlayers()
+                } else {
+                    reader.beginObject()
+                    while (reader.hasNext()) {
+                        if (reader.nextName() == "players") readPlayers() else reader.skipValue()
+                    }
+                    reader.endObject()
+                }
+            }
+        }
+        if (added > 0) save(list)
+        return added
+    }
+
+    /** Decodes a data-URL / base64 photo, down-sizes it and stores it. Returns (id, fileName). */
+    private fun savePhotoFromDataUrl(dataUrl: String): Pair<String, String>? = runCatching {
+        val b64 = dataUrl.substringAfter(",", dataUrl)
+        val bytes = Base64.decode(b64, Base64.DEFAULT)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        val longest = max(bounds.outWidth, bounds.outHeight)
+        while (longest / sample > 1280) sample *= 2
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+            ?: return@runCatching null
+        val id = UUID.randomUUID().toString()
+        val fileName = "$id.jpg"
+        FileOutputStream(File(dir, fileName)).use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        bmp.recycle()
+        Pair(id, fileName)
+    }.getOrNull()
 
     fun delete(id: String) {
         val list = all()
