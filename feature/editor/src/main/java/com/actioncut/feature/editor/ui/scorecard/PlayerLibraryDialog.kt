@@ -30,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +44,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.actioncut.core.designsystem.component.SelectableChip
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Player register: list (tap a player to use it), add new (name, BAT/BOWL, country, photo), delete. */
 @Composable
@@ -61,8 +65,25 @@ fun PlayerLibraryDialog(
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) pickedUri = uri
     }
+    val scope = rememberCoroutineScope()
+    var importing by remember { mutableStateOf(false) }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            importing = true
+            scope.launch {
+                val count = withContext(Dispatchers.IO) { runCatching { library.importBackup(uri) }.getOrNull() }
+                importing = false
+                if (count == null) {
+                    Toast.makeText(context, "Backup file could not be read", Toast.LENGTH_LONG).show()
+                } else {
+                    players = library.all()
+                    Toast.makeText(context, "$count players imported", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
     val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val bottomSpace = if (navInset > 0.dp) navInset else 48.dp
+    val bottomSpace = maxOf(navInset, 56.dp)
     val white = TextStyle(color = Color.White)
 
     Dialog(
@@ -83,6 +104,9 @@ fun PlayerLibraryDialog(
                     SelectableChip(label = "ALL", selected = filter == "all", onClick = { filter = "all" })
                     SelectableChip(label = "BAT", selected = filter == "bat", onClick = { filter = "bat" })
                     SelectableChip(label = "BOWL", selected = filter == "bowl", onClick = { filter = "bowl" })
+                    TextButton(enabled = !importing, onClick = { importLauncher.launch("*/*") }) {
+                        Text(if (importing) "Importing..." else "Import backup")
+                    }
                 }
                 val shown = players.filter { filter == "all" || it.role == filter }
                 LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
