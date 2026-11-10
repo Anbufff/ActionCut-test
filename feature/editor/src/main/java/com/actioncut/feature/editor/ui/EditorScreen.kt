@@ -65,7 +65,7 @@ fun EditorScreen(
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // (+) பட்டன் மூலம் Main Track-ல் புதிய வீடியோக்கள் / போட்டோக்களைச் சேர்க்கும் Picker
+    // (+) பட்டன் மூலம் வீடியோக்கள் மற்றும் இமேஜ்கள் இரண்டையும் அனுமதிக்கும் Multiple Picker
     val addMediaPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
     ) { uris ->
@@ -196,7 +196,7 @@ fun EditorScreen(
             onMoveClip = viewModel::moveClip,
             onMoveCommit = viewModel::commitArrangement,
             onLoadWaveform = viewModel::loadWaveform,
-            onAddMedia = { addMediaPicker.launch(arrayOf("video/*", "image/*")) },
+            onAddMedia = { addMediaPicker.launch(arrayOf("image/*", "video/*")) },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(120.dp),
