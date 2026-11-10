@@ -119,7 +119,6 @@ private fun SettingsContent(
 ) {
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         SectionHeader("Platform")
-        // Only the two web-editor sizes: YouTube 16:9 (1920x1080) and Facebook 4:5 (1080x1350).
         ChipRow(
             listOf(ExportPreset.YOUTUBE, ExportPreset.FACEBOOK_4_5),
             selectedPreset,
@@ -170,10 +169,17 @@ private fun <T> ChipRow(
 
 @Composable
 private fun ProgressContent(progress: Float, onCancel: () -> Unit) {
+    // 100%-ல் முடங்காமல் யூசருக்கு நிலைமையை விளக்கும் உரை
+    val statusLabel = when {
+        progress >= 0.985f -> "Saving video to Gallery... Please wait"
+        progress >= 0.95f -> "Finalizing video... ${(progress * 100).roundToInt()}%"
+        else -> "Exporting video... ${(progress * 100).roundToInt()}%"
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.padding(top = 40.dp)) {
         LabeledProgressBar(
             progress = progress,
-            label = "Exporting… ${(progress * 100).roundToInt()}%",
+            label = statusLabel,
         )
         SecondaryButton(text = "Cancel", onClick = onCancel)
     }
