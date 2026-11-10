@@ -382,11 +382,18 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(selectedClipId = copy.id) }
     }
 
+    // இழுக்கும் போது லேக் இல்லாமல் அதியுயர் Smooth-ஆக Trim ஆவதற்கு structural = false பயன்படுத்தப்படுகிறது
     fun trimStart(clipId: String, newStartMs: Long) =
-        mutate(structural = true) { TimelineEditor.trimClipStart(it, clipId, newStartMs) }
+        mutate(structural = false) { TimelineEditor.trimClipStart(it, clipId, newStartMs) }
 
     fun trimEnd(clipId: String, newEndMs: Long) =
-        mutate(structural = true) { TimelineEditor.trimClipEnd(it, clipId, newEndMs) }
+        mutate(structural = false) { TimelineEditor.trimClipEnd(it, clipId, newEndMs) }
+
+    // விரலை எடுத்து விட்டதும் பிளேயரை அப்டேட் செய்யும் ஃபங்ஷன்
+    fun commitTrim() {
+        playerController.setTimeline(_uiState.value.timeline)
+        playerController.seekTo(_uiState.value.playheadMs)
+    }
 
     fun moveClip(clipId: String, newStartMs: Long) {
         val track = TimelineEditor.findClip(_uiState.value.timeline, clipId)?.first ?: return
