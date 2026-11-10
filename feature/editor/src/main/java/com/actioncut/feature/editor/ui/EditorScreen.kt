@@ -9,10 +9,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -30,6 +30,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,7 +43,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.actioncut.core.common.time.TimeFormatter
 import com.actioncut.core.designsystem.component.PrimaryButton
 import com.actioncut.core.designsystem.component.rememberHaptic
+import com.actioncut.core.model.AspectRatio
 import com.actioncut.feature.editor.ui.preview.PreviewPlayer
+import com.actioncut.feature.editor.ui.scorecard.PlayerLibrary
+import com.actioncut.feature.editor.ui.scorecard.PlayerLibraryDialog
+import com.actioncut.feature.editor.ui.scorecard.PlayerRegisterDialog
+import com.actioncut.feature.editor.ui.scorecard.ScoreCardCropDialog
 import com.actioncut.feature.editor.ui.timeline.EditorTimeline
 import com.actioncut.feature.editor.ui.tools.EditorToolbar
 import com.actioncut.feature.editor.ui.tools.ToolPanel
@@ -53,7 +60,7 @@ fun EditorScreen(
     viewModel: EditorViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    var showRename by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var showRename by remember { mutableStateOf(false) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val audioPicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -82,10 +89,10 @@ fun EditorScreen(
             viewModel.addPipAtPlayhead(uri.toString())
         }
     }
-    var cricSource by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
-    var showPlayers by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    var showRegister by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    val playerLibrary = androidx.compose.runtime.remember { com.actioncut.feature.editor.ui.scorecard.PlayerLibrary(context) }
+    var cricSource by remember { mutableStateOf<String?>(null) }
+    var showPlayers by remember { mutableStateOf(false) }
+    var showRegister by remember { mutableStateOf(false) }
+    val playerLibrary = remember { PlayerLibrary(context) }
     val cricPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
     ) { uri -> if (uri != null) cricSource = uri.toString() }
@@ -140,6 +147,8 @@ fun EditorScreen(
             onScaleOverlay = viewModel::setOverlayScale,
             fitMode = uiState.canvas.fitMode,
             backgroundColorArgb = uiState.canvas.backgroundColorArgb,
+            allClips = uiState.timeline.allClips,
+            onScorecardRowTapped = viewModel::onScorecardRowTapped,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
@@ -201,7 +210,7 @@ fun EditorScreen(
                     onClearKeyframes = viewModel::clearKeyframes,
                 )
             } else {
-                androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     if (uiState.selectedClip != null) {
                         SelectedClipBar(
                             onSplit = viewModel::splitAtPlayhead,
@@ -230,24 +239,24 @@ fun EditorScreen(
     }
 
     if (showRegister) {
-        com.actioncut.feature.editor.ui.scorecard.PlayerRegisterDialog(
+        PlayerRegisterDialog(
             library = playerLibrary,
             onDismiss = { showRegister = false },
         )
     }
     if (showPlayers) {
-        com.actioncut.feature.editor.ui.scorecard.PlayerLibraryDialog(
+        PlayerLibraryDialog(
             library = playerLibrary,
             onDismiss = { showPlayers = false },
         )
     }
 
     cricSource?.let { source ->
-        com.actioncut.feature.editor.ui.scorecard.ScoreCardCropDialog(
+        ScoreCardCropDialog(
             sourceUri = source,
             onDismiss = { cricSource = null },
-            onDone = { uri, aspect ->
-                viewModel.addScoreCardAtPlayhead(uri, aspect)
+            onDone = { scorecardData ->
+                viewModel.addScorecardClip(scorecardData)
                 cricSource = null
             },
         )
@@ -272,8 +281,8 @@ private fun EditorTopBar(
     onBack: () -> Unit,
     onExport: () -> Unit,
     onTitleClick: () -> Unit,
-    aspectRatio: com.actioncut.core.model.AspectRatio,
-    onAspectRatio: (com.actioncut.core.model.AspectRatio) -> Unit,
+    aspectRatio: AspectRatio,
+    onAspectRatio: (AspectRatio) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -308,15 +317,14 @@ private fun EditorTopBar(
                 modifier = Modifier.size(16.dp),
             )
         }
-        // 16:9 / 4:5 preview + export mode (as in the web editor)
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(50))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
             listOf(
-                com.actioncut.core.model.AspectRatio.RATIO_16_9,
-                com.actioncut.core.model.AspectRatio.RATIO_4_5,
+                AspectRatio.RATIO_16_9,
+                AspectRatio.RATIO_4_5,
             ).forEach { r ->
                 val on = aspectRatio == r
                 Text(
@@ -326,7 +334,7 @@ private fun EditorTopBar(
                     color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
-                        .background(if (on) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent)
+                        .background(if (on) MaterialTheme.colorScheme.primary else Color.Transparent)
                         .clickable { onAspectRatio(r) }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 )
@@ -348,9 +356,7 @@ private fun RenameDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
-    var draft by androidx.compose.runtime.remember(currentName) {
-        androidx.compose.runtime.mutableStateOf(currentName)
-    }
+    var draft by remember(currentName) { mutableStateOf(currentName) }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Rename project") },
