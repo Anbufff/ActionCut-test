@@ -17,7 +17,9 @@ enum class AspectRatio(val width: Int, val height: Int, val label: String) {
     val value: Float get() = width.toFloat() / height.toFloat()
 
     companion object {
-        val DEFAULT = RATIO_9_16
+        // Web editor sizes: 16:9 (YouTube, 1920x1080) and 4:5 (Facebook, 1080x1350). The other
+        // entries are kept only so older saved projects still load; the UI offers just these two.
+        val DEFAULT = RATIO_16_9
     }
 }
 
