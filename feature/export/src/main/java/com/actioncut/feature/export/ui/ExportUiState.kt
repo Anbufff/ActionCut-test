@@ -7,7 +7,7 @@ import com.actioncut.core.model.ExportState
 data class ExportUiState(
     val projectName: String = "",
     val settings: ExportSettings = ExportSettings(),
-    val selectedPreset: ExportPreset? = ExportPreset.ORIGINAL,
+    val selectedPreset: ExportPreset? = ExportPreset.YOUTUBE,
     val exportState: ExportState = ExportState.Idle,
     val outputPath: String? = null,
 ) {
