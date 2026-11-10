@@ -83,16 +83,16 @@ class Media3VideoExporter @Inject constructor(
                     com.actioncut.core.model.FitMode.STRETCH -> Presentation.LAYOUT_STRETCH_TO_FIT
                 }
 
-                // ஆடியோவின் மொத்த கால அளவு வரை வீடியோ நீட்டிக்கப்படுவதை உறுதி செய்தல்
+                // எக்ஸ்போர்ட் செய்யப்படும் வீடியோ ஆடியோவின் மொத்த நீளம் (06:12) வரை ரெண்டர் ஆவதை உறுதி செய்தல்
                 val totalTimelineMs = project.timeline.durationMs
                 val totalVideoMs = clips.sumOf { it.timelineDurationMs }
 
                 val exportClips = if (totalTimelineMs > totalVideoMs && clips.isNotEmpty()) {
                     val lastIndex = clips.size - 1
                     val lastClip = clips[lastIndex]
-                    val remainingMs = totalTimelineMs - (totalVideoMs - lastClip.timelineDurationMs)
+                    val extraMs = totalTimelineMs - totalVideoMs
                     clips.mapIndexed { idx, c ->
-                        if (idx == lastIndex) c.copy(timelineEndMs = c.timelineStartMs + remainingMs) else c
+                        if (idx == lastIndex) c.copy(timelineEndMs = c.timelineEndMs + extraMs) else c
                     }
                 } else {
                     clips
