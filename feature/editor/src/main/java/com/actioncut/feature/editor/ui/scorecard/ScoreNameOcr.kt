@@ -47,7 +47,6 @@ object ScoreNameOcr {
     fun cleanRawName(s: String): String {
         if (s.isBlank()) return ""
         var line = s.split("\n").map { it.trim() }.firstOrNull { it.length >= 3 } ?: ""
-        // அடைப்புக்குறி நீக்குதல் எ.கா: (c), (wk)
         line = line.replace(Regex("\\([a-zA-Z]+\\)"), "").trim()
         line = line.replace(Regex("[^A-Za-z .'-]"), " ").replace(Regex("\\s+"), " ").trim()
         if (line.length < 3) return ""
