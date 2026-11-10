@@ -115,6 +115,8 @@ fun EditorScreen(
             onBack = onBack,
             onExport = onExport,
             onTitleClick = { showRename = true },
+            aspectRatio = uiState.aspectRatio,
+            onAspectRatio = viewModel::setAspectRatio,
         )
 
         PreviewPlayer(
@@ -270,6 +272,8 @@ private fun EditorTopBar(
     onBack: () -> Unit,
     onExport: () -> Unit,
     onTitleClick: () -> Unit,
+    aspectRatio: com.actioncut.core.model.AspectRatio,
+    onAspectRatio: (com.actioncut.core.model.AspectRatio) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -303,6 +307,30 @@ private fun EditorTopBar(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(16.dp),
             )
+        }
+        // 16:9 / 4:5 preview + export mode (as in the web editor)
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            listOf(
+                com.actioncut.core.model.AspectRatio.RATIO_16_9,
+                com.actioncut.core.model.AspectRatio.RATIO_4_5,
+            ).forEach { r ->
+                val on = aspectRatio == r
+                Text(
+                    text = r.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (on) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent)
+                        .clickable { onAspectRatio(r) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
         }
         IconButton(onClick = onUndo, enabled = canUndo) {
             Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo")
