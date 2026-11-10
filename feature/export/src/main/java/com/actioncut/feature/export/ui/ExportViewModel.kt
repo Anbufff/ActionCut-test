@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.actioncut.core.domain.usecase.GetProjectUseCase
+import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.ExportPreset
 import com.actioncut.core.model.ExportState
 import com.actioncut.core.model.FrameRate
@@ -37,10 +38,18 @@ class ExportViewModel @Inject constructor(
         viewModelScope.launch {
             val project = getProject(projectId)
             if (project != null) {
+                // Same as the web editor: the export size follows the preview mode -
+                // 4:5 -> Facebook 1080x1350, otherwise YouTube 16:9 1920x1080.
+                val preset = if (project.aspectRatio == AspectRatio.RATIO_4_5) {
+                    ExportPreset.FACEBOOK_4_5
+                } else {
+                    ExportPreset.YOUTUBE
+                }
                 _uiState.update {
                     it.copy(
                         projectName = project.name,
-                        settings = it.settings.copy(resolution = recommendedResolution()),
+                        selectedPreset = preset,
+                        settings = preset.applyTo(it.settings),
                     )
                 }
             }
