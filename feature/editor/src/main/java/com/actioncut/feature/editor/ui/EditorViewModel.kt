@@ -1,30 +1,611 @@
-fun addScorecardClip(data: ScorecardClipData) {
-    val durationMs = 120_000L
-    
-    // மூல ஸ்கிரீன்ஷாட்டுக்கு பதிலாக தயாரிக்கப்பட்ட 16:9 ஸ்கோர்கார்டு இமேஜை அமைத்தல்
-    val cardFile = java.io.File(context.cacheDir, "card_${data.id}.png")
-    val cardUri = if (cardFile.exists()) {
-        android.net.Uri.fromFile(cardFile).toString()
-    } else {
-        data.sourceImageUri
+package com.actioncut.feature.editor.ui
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.actioncut.core.domain.editor.ClipFactory
+import com.actioncut.core.domain.editor.TimelineEditor
+import com.actioncut.core.domain.usecase.GetProjectUseCase
+import com.actioncut.core.domain.usecase.ResolveLibraryAudioUseCase
+import com.actioncut.core.domain.usecase.ResolveMediaUseCase
+import com.actioncut.core.domain.usecase.SaveProjectUseCase
+import com.actioncut.core.media.audio.VoiceRecorder
+import com.actioncut.core.media.player.PlayerController
+import com.actioncut.core.media.waveform.WaveformExtractor
+import com.actioncut.core.model.AspectRatio
+import com.actioncut.core.model.CanvasSettings
+import com.actioncut.core.model.Clip
+import com.actioncut.core.model.ClipType
+import com.actioncut.core.model.ColorAdjustments
+import com.actioncut.core.model.Filter
+import com.actioncut.core.model.FitMode
+import com.actioncut.core.model.MediaType
+import com.actioncut.core.model.Project
+import com.actioncut.core.model.ScorecardClipData
+import com.actioncut.core.model.ScorecardKeyframe
+import com.actioncut.core.model.SpeedRamp
+import com.actioncut.core.model.TextProperties
+import com.actioncut.core.model.Timeline
+import com.actioncut.core.model.TrackType
+import com.actioncut.core.model.Transform
+import com.actioncut.core.model.Transition
+import com.actioncut.core.model.VisualEffect
+import com.actioncut.core.model.VisualEffectType
+import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import java.util.UUID
+import javax.inject.Inject
+import kotlin.math.abs
+
+@HiltViewModel
+class EditorViewModel @Inject constructor(
+    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context,
+    savedStateHandle: SavedStateHandle,
+    private val getProject: GetProjectUseCase,
+    private val saveProject: SaveProjectUseCase,
+    private val resolveMedia: ResolveMediaUseCase,
+    private val resolveLibraryAudio: ResolveLibraryAudioUseCase,
+    private val waveformExtractor: WaveformExtractor,
+    private val voiceRecorder: VoiceRecorder,
+    val playerController: PlayerController,
+) : ViewModel() {
+
+    private val projectId: String = savedStateHandle[ARG_PROJECT_ID] ?: ""
+
+    private val _uiState = MutableStateFlow(EditorUiState())
+    val uiState: StateFlow<EditorUiState> = _uiState.asStateFlow()
+
+    private var loadedProject: Project? = null
+    private val undoStack = ArrayDeque<Timeline>()
+    private val redoStack = ArrayDeque<Timeline>()
+    private var saveJob: Job? = null
+
+    init {
+        observePlayback()
+        loadProject()
     }
 
-    val clip = Clip(
-        id = data.id,
-        type = ClipType.IMAGE,
-        mediaUri = cardUri, // <--- இப்போது பழைய படம் பின்னணியில் தெரியாது!
-        timelineStartMs = _uiState.value.playheadMs,
-        timelineEndMs = _uiState.value.playheadMs + durationMs,
-        scorecard = data
-    )
-    val track = _uiState.value.timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
-    mutate(structural = true) { timeline ->
-        if (track != null) {
-            TimelineEditor.appendClip(timeline, track.id, clip)
-        } else {
-            val (withTrack, trackId) = TimelineEditor.addTrack(timeline, TrackType.VIDEO)
-            TimelineEditor.appendClip(withTrack, trackId, clip)
+    private fun loadProject() {
+        viewModelScope.launch {
+            val project = getProject(projectId)
+            if (project == null) {
+                _uiState.update { it.copy(isLoading = false) }
+                return@launch
+            }
+            loadedProject = project
+            _uiState.update {
+                it.copy(
+                    isLoading = false,
+                    projectName = project.name,
+                    timeline = project.timeline,
+                    aspectRatio = project.aspectRatio,
+                    canvas = project.canvas,
+                    selectedClipId = project.timeline.allClips.firstOrNull()?.id,
+                )
+            }
+            playerController.setTimeline(project.timeline)
         }
     }
-    _uiState.update { it.copy(selectedClipId = clip.id) }
+
+    private fun observePlayback() {
+        viewModelScope.launch {
+            playerController.state.collect { playback ->
+                _uiState.update { state ->
+                    val following = if (playback.isPlaying) {
+                        playback.positionMs.coerceIn(0, state.durationMs)
+                    } else {
+                        state.playheadMs
+                    }
+                    state.copy(isPlaying = playback.isPlaying, playheadMs = following)
+                }
+            }
+        }
+        viewModelScope.launch {
+            playerController.positionFlow().collect { positionMs ->
+                if (_uiState.value.isPlaying) {
+                    _uiState.update { it.copy(playheadMs = positionMs.coerceIn(0, it.durationMs)) }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ Playback
+    fun togglePlayPause() = playerController.togglePlayPause()
+
+    fun seekTo(positionMs: Long) {
+        val clamped = positionMs.coerceIn(0, _uiState.value.durationMs)
+        playerController.seekTo(clamped)
+        _uiState.update { it.copy(playheadMs = clamped) }
+    }
+
+    // ------------------------------------------------------------------ Selection / Tools
+    fun selectClip(clipId: String?) = _uiState.update { it.copy(selectedClipId = clipId) }
+
+    fun setAspectRatio(ratio: AspectRatio) {
+        if (ratio != AspectRatio.RATIO_16_9 && ratio != AspectRatio.RATIO_4_5) return
+        _uiState.update { it.copy(aspectRatio = ratio) }
+        loadedProject = loadedProject?.copy(aspectRatio = ratio)
+        scheduleSave()
+    }
+
+    fun renameProject(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        _uiState.update { it.copy(projectName = trimmed) }
+        loadedProject = loadedProject?.copy(name = trimmed)
+        scheduleSave()
+    }
+
+    suspend fun loadWaveform(uri: String): FloatArray = waveformExtractor.amplitudes(uri)
+
+    fun setActiveTool(tool: EditorTool?) {
+        when (tool) {
+            EditorTool.SPLIT -> { splitAtPlayhead(); clearTool() }
+            EditorTool.DELETE -> { deleteSelected(); clearTool() }
+            EditorTool.REVERSE -> { toggleReverse(); clearTool() }
+            EditorTool.ROTATE -> { rotateSelected(); clearTool() }
+            EditorTool.MUTE -> { toggleMuteSelected(); clearTool() }
+            EditorTool.EXTRACT_AUDIO -> { detachAudioFromSelected(); clearTool() }
+            EditorTool.AUDIO, EditorTool.PIP, EditorTool.CRIC, EditorTool.CARD_ADD, EditorTool.PLAYER -> clearTool()
+            else -> _uiState.update { it.copy(activeTool = tool) }
+        }
+    }
+
+    private fun clearTool() = _uiState.update { it.copy(activeTool = null) }
+
+    fun setZoom(pxPerSecond: Float) = _uiState.update {
+        it.copy(
+            pxPerSecond = pxPerSecond.coerceIn(
+                EditorUiState.MIN_PX_PER_SECOND,
+                EditorUiState.MAX_PX_PER_SECOND,
+            ),
+        )
+    }
+
+    // ------------------------------------------------------------------ Dynamic Scorecard
+    fun addScorecardClip(data: ScorecardClipData) {
+        val durationMs = 120_000L
+        val cardFile = java.io.File(context.cacheDir, "card_${data.id}.png")
+        val cardUri = if (cardFile.exists()) {
+            android.net.Uri.fromFile(cardFile).toString()
+        } else {
+            data.sourceImageUri
+        }
+
+        val clip = Clip(
+            id = data.id,
+            type = ClipType.IMAGE,
+            mediaUri = cardUri,
+            timelineStartMs = _uiState.value.playheadMs,
+            timelineEndMs = _uiState.value.playheadMs + durationMs,
+            scorecard = data
+        )
+        val track = _uiState.value.timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
+        mutate(structural = true) { timeline ->
+            if (track != null) {
+                TimelineEditor.appendClip(timeline, track.id, clip)
+            } else {
+                val (withTrack, trackId) = TimelineEditor.addTrack(timeline, TrackType.VIDEO)
+                TimelineEditor.appendClip(withTrack, trackId, clip)
+            }
+        }
+        _uiState.update { it.copy(selectedClipId = clip.id) }
+    }
+
+    fun onScorecardRowTapped(clipId: String, rowIndex: Int) {
+        val clip = currentClip(clipId) ?: return
+        val sc = clip.scorecard ?: return
+        val timeInClip = (_uiState.value.playheadMs - clip.timelineStartMs).coerceAtLeast(0L)
+
+        val existingKfs = sc.keyframes.toMutableList()
+        val nearIdx = existingKfs.indexOfFirst { abs(it.timeMs - timeInClip) <= 300L }
+
+        if (nearIdx >= 0) {
+            existingKfs[nearIdx] = ScorecardKeyframe(timeInClip, rowIndex)
+        } else {
+            existingKfs.add(ScorecardKeyframe(timeInClip, rowIndex))
+            existingKfs.sortBy { it.timeMs }
+        }
+
+        val updatedSc = sc.copy(keyframes = existingKfs)
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, clipId) { it.copy(scorecard = updatedSc) }
+        }
+    }
+
+    fun toggleScorecardKeyframe() = withSelected { clipId ->
+        val clip = currentClip(clipId) ?: return@withSelected
+        val sc = clip.scorecard ?: return@withSelected
+        val timeInClip = (_uiState.value.playheadMs - clip.timelineStartMs).coerceAtLeast(0L)
+
+        val existingKfs = sc.keyframes.toMutableList()
+        val nearIdx = existingKfs.indexOfFirst { abs(it.timeMs - timeInClip) <= 300L }
+
+        if (nearIdx >= 0 && existingKfs.size > 1) {
+            existingKfs.removeAt(nearIdx)
+        } else if (nearIdx < 0) {
+            val activeRow = ScorecardManager.getActiveRowIndex(sc, timeInClip)
+            existingKfs.add(ScorecardKeyframe(timeInClip, activeRow))
+            existingKfs.sortBy { it.timeMs }
+        }
+
+        val updatedSc = sc.copy(keyframes = existingKfs)
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, clipId) { it.copy(scorecard = updatedSc) }
+        }
+    }
+
+    fun cycleScorecardTheme() = withSelected { clipId ->
+        val clip = currentClip(clipId) ?: return@withSelected
+        val sc = clip.scorecard ?: return@withSelected
+        val nextTheme = (sc.themeIdx + 1) % 4
+        val updatedSc = sc.copy(themeIdx = nextTheme)
+        ScorecardManager.clearCache(clipId)
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, clipId) { it.copy(scorecard = updatedSc) }
+        }
+    }
+
+    fun setScorecardDuration(durationMs: Long) = withSelected { clipId ->
+        val clip = currentClip(clipId) ?: return@withSelected
+        val clamped = durationMs.coerceIn(500L, 180_000L)
+        mutate(structural = true) { timeline ->
+            TimelineEditor.updateClip(timeline, clipId) { 
+                it.copy(timelineEndMs = it.timelineStartMs + clamped) 
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ Structural Edits
+    fun splitAtPlayhead() {
+        val state = _uiState.value
+        val clipId = state.selectedClipId ?: clipAtPlayhead()?.id ?: return
+        mutate(structural = true) { TimelineEditor.splitClip(it, clipId, state.playheadMs) }
+    }
+
+    fun deleteSelected() {
+        val clipId = _uiState.value.selectedClipId ?: return
+        mutate(structural = true) { TimelineEditor.removeClip(it, clipId, ripple = true) }
+        _uiState.update { it.copy(selectedClipId = null) }
+    }
+
+    fun duplicateSelected() = withSelected { id ->
+        val (track, clip) = TimelineEditor.findClip(_uiState.value.timeline, id) ?: return@withSelected
+        val copy = clip.copy(
+            id = UUID.randomUUID().toString(),
+            timelineStartMs = clip.timelineEndMs,
+            timelineEndMs = clip.timelineEndMs + clip.timelineDurationMs,
+        )
+        mutate(structural = true) { TimelineEditor.insertClip(it, track.id, copy) }
+        _uiState.update { it.copy(selectedClipId = copy.id) }
+    }
+
+    fun trimStart(clipId: String, newStartMs: Long) =
+        mutate(structural = true) { TimelineEditor.trimClipStart(it, clipId, newStartMs) }
+
+    fun trimEnd(clipId: String, newEndMs: Long) =
+        mutate(structural = true) { TimelineEditor.trimClipEnd(it, clipId, newEndMs) }
+
+    fun moveClip(clipId: String, newStartMs: Long) {
+        val track = TimelineEditor.findClip(_uiState.value.timeline, clipId)?.first ?: return
+        mutate(structural = false) {
+            TimelineEditor.moveClip(it, clipId, track.id, newStartMs.coerceAtLeast(0))
+        }
+    }
+
+    fun commitArrangement() {
+        playerController.setTimeline(_uiState.value.timeline)
+        playerController.seekTo(_uiState.value.playheadMs)
+    }
+
+    fun detachAudioFromSelected() = withSelected { id ->
+        mutate(structural = true) { TimelineEditor.detachAudio(it, id) }
+    }
+
+    fun setSpeed(speed: Float) = withSelected { id ->
+        mutate(structural = true) { TimelineEditor.setSpeed(it, id, speed) }
+    }
+
+    fun toggleReverse() = withSelected { id ->
+        val current = currentClip(id)?.isReversed ?: false
+        mutate(structural = true) { TimelineEditor.setReversed(it, id, !current) }
+    }
+
+    fun addTextAtPlayhead(text: String) {
+        val state = _uiState.value
+        val track = state.timeline.tracks.firstOrNull { it.type == TrackType.TEXT }
+        val clip = ClipFactory.text(text, state.playheadMs)
+        mutate(structural = true) { timeline ->
+            if (track != null) {
+                TimelineEditor.insertClip(timeline, track.id, clip)
+            } else {
+                val (withTrack, trackId) = TimelineEditor.addTrack(timeline, TrackType.TEXT)
+                TimelineEditor.insertClip(withTrack, trackId, clip)
+            }
+        }
+    }
+
+    fun addAudioAtPlayhead(uri: String) {
+        viewModelScope.launch {
+            val media = resolveMedia(uri) ?: return@launch
+            val audioMedia = media.copy(type = MediaType.AUDIO)
+            val clip = ClipFactory.fromMedia(audioMedia, _uiState.value.playheadMs)
+            val track = _uiState.value.timeline.tracks
+                .firstOrNull { it.type == TrackType.AUDIO }
+            mutate(structural = true) { timeline ->
+                if (track != null) {
+                    TimelineEditor.insertClip(timeline, track.id, clip)
+                } else {
+                    val (withTrack, trackId) =
+                        TimelineEditor.addTrack(timeline, TrackType.AUDIO)
+                    TimelineEditor.insertClip(withTrack, trackId, clip)
+                }
+            }
+            _uiState.update { it.copy(selectedClipId = clip.id) }
+        }
+    }
+
+    fun toggleMuteSelected() = withSelected { id ->
+        val muted = (currentClip(id)?.volume ?: 1f) == 0f
+        mutate(structural = false) { TimelineEditor.setVolume(it, id, if (muted) 1f else 0f) }
+    }
+
+    fun addLibraryTrackAtPlayhead(track: com.actioncut.core.model.LibraryTrack) {
+        viewModelScope.launch {
+            val uri = resolveLibraryAudio(track.rawResName) ?: return@launch
+            addAudioAtPlayhead(uri)
+        }
+    }
+
+    fun startVoiceover() {
+        if (voiceRecorder.start()) {
+            _uiState.update { it.copy(isRecordingVoiceover = true) }
+        }
+    }
+
+    fun stopVoiceover() {
+        val uri = voiceRecorder.stop()
+        _uiState.update { it.copy(isRecordingVoiceover = false) }
+        if (uri != null) addAudioAtPlayhead(uri)
+    }
+
+    fun addStickerAtPlayhead(emoji: String) {
+        val clip = ClipFactory.emojiSticker(emoji, _uiState.value.playheadMs)
+        val track = _uiState.value.timeline.tracks
+            .firstOrNull { it.type == TrackType.OVERLAY }
+        mutate(structural = false) { timeline ->
+            if (track != null) {
+                TimelineEditor.addClip(timeline, track.id, clip)
+            } else {
+                val (withTrack, trackId) =
+                    TimelineEditor.addTrack(timeline, TrackType.OVERLAY)
+                TimelineEditor.addClip(withTrack, trackId, clip)
+            }
+        }
+        _uiState.update { it.copy(selectedClipId = clip.id) }
+    }
+
+    fun setOverlayPosition(clipId: String, offsetX: Float, offsetY: Float) {
+        val clip = currentClip(clipId) ?: return
+        mutate(structural = false) {
+            TimelineEditor.setTransform(it, clipId, clip.transform.copy(offsetX = offsetX, offsetY = offsetY))
+        }
+    }
+
+    fun setOverlayScale(clipId: String, scale: Float) {
+        val clip = currentClip(clipId) ?: return
+        mutate(structural = false) {
+            TimelineEditor.setTransform(it, clipId, clip.transform.copy(scale = scale.coerceIn(0.1f, 1f)))
+        }
+    }
+
+    // ------------------------------------------------------------------ Canvas / Crop
+    fun setFitMode(mode: FitMode) = updateCanvas { it.copy(fitMode = mode) }
+
+    fun setBackgroundColor(argb: Int) = updateCanvas { it.copy(backgroundColorArgb = argb) }
+
+    private fun updateCanvas(transform: (CanvasSettings) -> CanvasSettings) {
+        val newCanvas = transform(_uiState.value.canvas)
+        _uiState.update { it.copy(canvas = newCanvas) }
+        loadedProject = loadedProject?.copy(canvas = newCanvas)
+        scheduleSave()
+    }
+
+    fun setCrop(clipId: String, crop: com.actioncut.core.model.CropRect) {
+        mutate(structural = false) {
+            TimelineEditor.updateClip(it, clipId) { c -> c.copy(crop = crop) }
+        }
+    }
+
+    // ------------------------------------------------------------------ Keyframes (Transform)
+    fun addKeyframeAtPlayhead() = withSelected { id ->
+        val clip = currentClip(id) ?: return@withSelected
+        val timeInClip = (_uiState.value.playheadMs - clip.timelineStartMs).coerceAtLeast(0L)
+        val kf = com.actioncut.core.model.Keyframe(
+            timeMs = timeInClip,
+            offsetX = clip.transform.offsetX,
+            offsetY = clip.transform.offsetY,
+            scale = clip.transform.scale,
+            rotationDegrees = clip.transform.rotationDegrees,
+            opacity = clip.opacity,
+        )
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, id) { c ->
+                val others = c.keyframes.filter { abs(it.timeMs - timeInClip) > 50L }
+                c.copy(keyframes = (others + kf).sortedBy { it.timeMs })
+            }
+        }
+    }
+
+    fun clearKeyframes() = withSelected { id ->
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, id) { c -> c.copy(keyframes = emptyList()) }
+        }
+    }
+
+    fun setSpeedRamp(ramp: SpeedRamp) = withSelected { id ->
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, id) { c -> c.copy(speedRamp = ramp) }
+        }
+    }
+
+    fun addPipAtPlayhead(uri: String) {
+        viewModelScope.launch {
+            val media = resolveMedia(uri) ?: return@launch
+            val base = ClipFactory.fromMedia(
+                media.copy(type = MediaType.VIDEO),
+                _uiState.value.playheadMs,
+            )
+            val clip = base.copy(
+                transform = Transform(offsetX = 0.4f, offsetY = -0.4f, scale = 0.4f),
+            )
+            val track = _uiState.value.timeline.tracks
+                .firstOrNull { it.type == TrackType.OVERLAY }
+            mutate(structural = true) { timeline ->
+                if (track != null) {
+                    TimelineEditor.addClip(timeline, track.id, clip)
+                } else {
+                    val (withTrack, trackId) =
+                        TimelineEditor.addTrack(timeline, TrackType.OVERLAY)
+                    TimelineEditor.addClip(withTrack, trackId, clip)
+                }
+            }
+            _uiState.update { it.copy(selectedClipId = clip.id) }
+        }
+    }
+
+    // ------------------------------------------------------------------ Property Edits
+    fun setVolume(volume: Float) = withSelected { id ->
+        mutate(structural = false) { TimelineEditor.setVolume(it, id, volume) }
+    }
+
+    fun rotateSelected() = withSelected { id ->
+        val current = currentClip(id)?.rotationDegrees ?: 0
+        mutate(structural = false) { TimelineEditor.setRotation(it, id, current + 90) }
+    }
+
+    fun setFilter(filter: Filter?) = withSelected { id ->
+        mutate(structural = false) { TimelineEditor.setFilter(it, id, filter) }
+    }
+
+    fun setAdjustments(adjustments: ColorAdjustments) = withSelected { id ->
+        mutate(structural = false) { TimelineEditor.setAdjustments(it, id, adjustments) }
+    }
+
+    fun setTextProperties(text: TextProperties) = withSelected { id ->
+        mutate(structural = false) { TimelineEditor.updateClip(it, id) { clip -> clip.copy(text = text) } }
+    }
+
+    fun setTransition(transition: Transition?) = withSelected { id ->
+        mutate(structural = false) { TimelineEditor.setTransition(it, id, transition) }
+    }
+
+    fun addEffect(effect: VisualEffect) = withSelected { id ->
+        mutate(structural = false) { TimelineEditor.addEffect(it, id, effect) }
+    }
+
+    fun toggleEffect(type: VisualEffectType) = withSelected { id ->
+        val clip = currentClip(id) ?: return@withSelected
+        val existingIndex = clip.effects.indexOfFirst { it.type == type }
+        mutate(structural = false) { timeline ->
+            if (existingIndex >= 0) {
+                TimelineEditor.removeEffect(timeline, id, existingIndex)
+            } else {
+                TimelineEditor.addEffect(timeline, id, VisualEffect(type))
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ Undo / Redo
+    fun undo() {
+        if (undoStack.isEmpty()) return
+        redoStack.addLast(_uiState.value.timeline)
+        val previous = undoStack.removeLast()
+        applyTimeline(previous, structural = true)
+    }
+
+    fun redo() {
+        if (redoStack.isEmpty()) return
+        undoStack.addLast(_uiState.value.timeline)
+        val next = redoStack.removeLast()
+        applyTimeline(next, structural = true)
+    }
+
+    // ------------------------------------------------------------------ Internals
+    private inline fun withSelected(action: (String) -> Unit) {
+        _uiState.value.selectedClipId?.let(action)
+    }
+
+    private fun currentClip(id: String) = _uiState.value.timeline.allClips.firstOrNull { it.id == id }
+
+    private fun clipAtPlayhead(): Clip? {
+        val playhead = _uiState.value.playheadMs
+        return _uiState.value.timeline.videoTracks.firstOrNull()?.clipAt(playhead)
+    }
+
+    private fun mutate(structural: Boolean, op: (Timeline) -> Timeline) {
+        val current = _uiState.value.timeline
+        val updated = op(current)
+        if (updated == current) return
+        undoStack.addLast(current)
+        if (undoStack.size > MAX_UNDO) undoStack.removeFirst()
+        redoStack.clear()
+        applyTimeline(updated, structural)
+    }
+
+    private fun applyTimeline(timeline: Timeline, structural: Boolean) {
+        _uiState.update {
+            it.copy(
+                timeline = timeline,
+                canUndo = undoStack.isNotEmpty(),
+                canRedo = redoStack.isNotEmpty(),
+                playheadMs = it.playheadMs.coerceIn(0, timeline.durationMs),
+            )
+        }
+        if (structural) {
+            playerController.setTimeline(timeline)
+            playerController.seekTo(_uiState.value.playheadMs)
+        } else {
+            playerController.updateVolumes(timeline)
+            playerController.refreshPreviewEffects(timeline)
+        }
+        scheduleSave()
+    }
+
+    private fun scheduleSave() {
+        val project = loadedProject ?: return
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch {
+            delay(600)
+            val updated = project.copy(timeline = _uiState.value.timeline)
+            loadedProject = updated
+            saveProject(updated)
+        }
+    }
+
+    fun saveNow() {
+        val project = loadedProject ?: return
+        viewModelScope.launch {
+            saveProject(project.copy(timeline = _uiState.value.timeline))
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        saveNow()
+        voiceRecorder.cancel()
+        playerController.release()
+    }
+
+    companion object {
+        const val ARG_PROJECT_ID = "projectId"
+        private const val MAX_UNDO = 50
+    }
 }
