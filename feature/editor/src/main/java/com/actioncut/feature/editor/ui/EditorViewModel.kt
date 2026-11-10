@@ -6,26 +6,43 @@ import androidx.lifecycle.viewModelScope
 import com.actioncut.core.domain.editor.ClipFactory
 import com.actioncut.core.domain.editor.TimelineEditor
 import com.actioncut.core.domain.usecase.GetProjectUseCase
+import com.actioncut.core.domain.usecase.ResolveLibraryAudioUseCase
 import com.actioncut.core.domain.usecase.ResolveMediaUseCase
 import com.actioncut.core.domain.usecase.SaveProjectUseCase
+import com.actioncut.core.media.audio.VoiceRecorder
 import com.actioncut.core.media.player.PlayerController
 import com.actioncut.core.media.waveform.WaveformExtractor
+import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.CanvasSettings
+import com.actioncut.core.model.Clip
+import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.ColorAdjustments
 import com.actioncut.core.model.Filter
+import com.actioncut.core.model.FitMode
+import com.actioncut.core.model.MediaType
 import com.actioncut.core.model.Project
+import com.actioncut.core.model.ScorecardClipData
+import com.actioncut.core.model.ScorecardKeyframe
+import com.actioncut.core.model.SpeedRamp
 import com.actioncut.core.model.TextProperties
 import com.actioncut.core.model.Timeline
+import com.actioncut.core.model.TrackType
+import com.actioncut.core.model.Transform
 import com.actioncut.core.model.Transition
 import com.actioncut.core.model.VisualEffect
+import com.actioncut.core.model.VisualEffectType
+import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
 import javax.inject.Inject
+import kotlin.math.abs
 
 @HiltViewModel
 class EditorViewModel @Inject constructor(
@@ -33,9 +50,9 @@ class EditorViewModel @Inject constructor(
     private val getProject: GetProjectUseCase,
     private val saveProject: SaveProjectUseCase,
     private val resolveMedia: ResolveMediaUseCase,
-    private val resolveLibraryAudio: com.actioncut.core.domain.usecase.ResolveLibraryAudioUseCase,
+    private val resolveLibraryAudio: ResolveLibraryAudioUseCase,
     private val waveformExtractor: WaveformExtractor,
-    private val voiceRecorder: com.actioncut.core.media.audio.VoiceRecorder,
+    private val voiceRecorder: VoiceRecorder,
     val playerController: PlayerController,
 ) : ViewModel() {
 
@@ -98,8 +115,7 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ playback
-
+    // ------------------------------------------------------------------ Playback
     fun togglePlayPause() = playerController.togglePlayPause()
 
     fun seekTo(positionMs: Long) {
@@ -108,21 +124,16 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(playheadMs = clamped) }
     }
 
-    // ------------------------------------------------------------------ selection / tools
-
+    // ------------------------------------------------------------------ Selection / Tools
     fun selectClip(clipId: String?) = _uiState.update { it.copy(selectedClipId = clipId) }
 
-    /** Preview / export mode like the web editor: 16:9 (YouTube) or 4:5 (Facebook). */
-    fun setAspectRatio(ratio: com.actioncut.core.model.AspectRatio) {
-        if (ratio != com.actioncut.core.model.AspectRatio.RATIO_16_9 &&
-            ratio != com.actioncut.core.model.AspectRatio.RATIO_4_5
-        ) return
+    fun setAspectRatio(ratio: AspectRatio) {
+        if (ratio != AspectRatio.RATIO_16_9 && ratio != AspectRatio.RATIO_4_5) return
         _uiState.update { it.copy(aspectRatio = ratio) }
         loadedProject = loadedProject?.copy(aspectRatio = ratio)
         scheduleSave()
     }
 
-    /** Renames the project (persisted on the usual debounced save). */
     fun renameProject(name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
@@ -131,7 +142,6 @@ class EditorViewModel @Inject constructor(
         scheduleSave()
     }
 
-    /** Loads a normalized amplitude envelope for an audio clip's waveform. */
     suspend fun loadWaveform(uri: String): FloatArray = waveformExtractor.amplitudes(uri)
 
     fun setActiveTool(tool: EditorTool?) {
@@ -142,10 +152,7 @@ class EditorViewModel @Inject constructor(
             EditorTool.ROTATE -> { rotateSelected(); clearTool() }
             EditorTool.MUTE -> { toggleMuteSelected(); clearTool() }
             EditorTool.EXTRACT_AUDIO -> { detachAudioFromSelected(); clearTool() }
-            EditorTool.AUDIO -> clearTool() // the screen launches the audio picker
-            EditorTool.PIP -> clearTool() // the screen launches the video picker
-            EditorTool.CRIC -> clearTool() // the screen launches the score card flow
-            EditorTool.CARD_ADD, EditorTool.PLAYER -> clearTool() // the screen opens the player dialogs
+            EditorTool.AUDIO, EditorTool.PIP, EditorTool.CRIC, EditorTool.CARD_ADD, EditorTool.PLAYER -> clearTool()
             else -> _uiState.update { it.copy(activeTool = tool) }
         }
     }
@@ -161,8 +168,110 @@ class EditorViewModel @Inject constructor(
         )
     }
 
-    // ------------------------------------------------------------------ structural edits
+    // ------------------------------------------------------------------ Dynamic Scorecard (Step 4)
 
+    /**
+     * ஸ்கோர்கார்டை மெயின் டிராக்கில் 120 வினாடிகள் ஓடும் கிளிப்பாகச் சேர்த்தல்
+     */
+    fun addScorecardClip(data: ScorecardClipData) {
+        val durationMs = 120_000L // வெப் எடிட்டரைப் போல 120 வினாடிகள்
+        val clip = Clip(
+            id = data.id,
+            type = ClipType.IMAGE,
+            mediaUri = data.sourceImageUri,
+            timelineStartMs = _uiState.value.playheadMs,
+            timelineEndMs = _uiState.value.playheadMs + durationMs,
+            scorecard = data
+        )
+        val track = _uiState.value.timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
+        mutate(structural = true) { timeline ->
+            if (track != null) {
+                TimelineEditor.appendClip(timeline, track.id, clip)
+            } else {
+                val (withTrack, trackId) = TimelineEditor.addTrack(timeline, TrackType.VIDEO)
+                TimelineEditor.appendClip(withTrack, trackId, clip)
+            }
+        }
+        _uiState.update { it.copy(selectedClipId = clip.id) }
+    }
+
+    /**
+     * ப்ளேஹெட் நகரும்போது அல்லது ஸ்கிரீனில் குறிப்பிட்ட வரியைத் தொடும்போது Keyframe சேர்த்தல் / மாற்றுதல்
+     */
+    fun onScorecardRowTapped(clipId: String, rowIndex: Int) {
+        val clip = currentClip(clipId) ?: return
+        val sc = clip.scorecard ?: return
+        val timeInClip = (_uiState.value.playheadMs - clip.timelineStartMs).coerceAtLeast(0L)
+
+        val existingKfs = sc.keyframes.toMutableList()
+        val nearIdx = existingKfs.indexOfFirst { abs(it.timeMs - timeInClip) <= 300L }
+
+        if (nearIdx >= 0) {
+            existingKfs[nearIdx] = ScorecardKeyframe(timeInClip, rowIndex)
+        } else {
+            existingKfs.add(ScorecardKeyframe(timeInClip, rowIndex))
+            existingKfs.sortBy { it.timeMs }
+        }
+
+        val updatedSc = sc.copy(keyframes = existingKfs)
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, clipId) { it.copy(scorecard = updatedSc) }
+        }
+    }
+
+    /**
+     * Toolbar-ல் உள்ள KF +/- பட்டன் செயல்பாடு
+     */
+    fun toggleScorecardKeyframe() = withSelected { clipId ->
+        val clip = currentClip(clipId) ?: return@withSelected
+        val sc = clip.scorecard ?: return@withSelected
+        val timeInClip = (_uiState.value.playheadMs - clip.timelineStartMs).coerceAtLeast(0L)
+
+        val existingKfs = sc.keyframes.toMutableList()
+        val nearIdx = existingKfs.indexOfFirst { abs(it.timeMs - timeInClip) <= 300L }
+
+        if (nearIdx >= 0 && existingKfs.size > 1) {
+            existingKfs.removeAt(nearIdx)
+        } else if (nearIdx < 0) {
+            val activeRow = ScorecardManager.getActiveRowIndex(sc, timeInClip)
+            existingKfs.add(ScorecardKeyframe(timeInClip, activeRow))
+            existingKfs.sortBy { it.timeMs }
+        }
+
+        val updatedSc = sc.copy(keyframes = existingKfs)
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, clipId) { it.copy(scorecard = updatedSc) }
+        }
+    }
+
+    /**
+     * Scorecard Theme-ஐ மாற்றுவது (4 Broadcast Themes)
+     */
+    fun cycleScorecardTheme() = withSelected { clipId ->
+        val clip = currentClip(clipId) ?: return@withSelected
+        val sc = clip.scorecard ?: return@withSelected
+        val nextTheme = (sc.themeIdx + 1) % 4
+        val updatedSc = sc.copy(themeIdx = nextTheme)
+        ScorecardManager.clearCache(clipId)
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, clipId) { it.copy(scorecard = updatedSc) }
+        }
+    }
+
+    /**
+     * Scorecard கால அளவை மாற்றுவது (0.5s - 180s)
+     */
+    fun setScorecardDuration(durationMs: Long) = withSelected { clipId ->
+        val clip = currentClip(clipId) ?: return@withSelected
+        val clamped = durationMs.coerceIn(500L, 180_000L)
+        mutate(structural = true) { timeline ->
+            TimelineEditor.updateClip(timeline, clipId) { 
+                it.copy(timelineEndMs = it.timelineStartMs + clamped) 
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ Structural Edits
     fun splitAtPlayhead() {
         val state = _uiState.value
         val clipId = state.selectedClipId ?: clipAtPlayhead()?.id ?: return
@@ -175,11 +284,10 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(selectedClipId = null) }
     }
 
-    /** Duplicates the selected clip, placing the copy right after it on the same lane. */
     fun duplicateSelected() = withSelected { id ->
         val (track, clip) = TimelineEditor.findClip(_uiState.value.timeline, id) ?: return@withSelected
         val copy = clip.copy(
-            id = java.util.UUID.randomUUID().toString(),
+            id = UUID.randomUUID().toString(),
             timelineStartMs = clip.timelineEndMs,
             timelineEndMs = clip.timelineEndMs + clip.timelineDurationMs,
         )
@@ -193,7 +301,6 @@ class EditorViewModel @Inject constructor(
     fun trimEnd(clipId: String, newEndMs: Long) =
         mutate(structural = true) { TimelineEditor.trimClipEnd(it, clipId, newEndMs) }
 
-    /** Drag-to-move a clip along its lane (no player rebuild during the drag). */
     fun moveClip(clipId: String, newStartMs: Long) {
         val track = TimelineEditor.findClip(_uiState.value.timeline, clipId)?.first ?: return
         mutate(structural = false) {
@@ -201,13 +308,11 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** Rebuilds the preview once a drag-arrange finishes. */
     fun commitArrangement() {
         playerController.setTimeline(_uiState.value.timeline)
         playerController.seekTo(_uiState.value.playheadMs)
     }
 
-    /** Extracts the selected video clip's audio onto a separate audio lane. */
     fun detachAudioFromSelected() = withSelected { id ->
         mutate(structural = true) { TimelineEditor.detachAudio(it, id) }
     }
@@ -223,35 +328,31 @@ class EditorViewModel @Inject constructor(
 
     fun addTextAtPlayhead(text: String) {
         val state = _uiState.value
-        val track = state.timeline.tracks.firstOrNull { it.type == com.actioncut.core.model.TrackType.TEXT }
+        val track = state.timeline.tracks.firstOrNull { it.type == TrackType.TEXT }
         val clip = ClipFactory.text(text, state.playheadMs)
         mutate(structural = true) { timeline ->
             if (track != null) {
                 TimelineEditor.insertClip(timeline, track.id, clip)
             } else {
-                val (withTrack, trackId) = TimelineEditor.addTrack(timeline, com.actioncut.core.model.TrackType.TEXT)
+                val (withTrack, trackId) = TimelineEditor.addTrack(timeline, TrackType.TEXT)
                 TimelineEditor.insertClip(withTrack, trackId, clip)
             }
         }
     }
 
-    /**
-     * Adds a picked audio file (music / voiceover) as an audio clip at the playhead,
-     * creating an AUDIO lane if the project doesn't have one yet.
-     */
     fun addAudioAtPlayhead(uri: String) {
         viewModelScope.launch {
             val media = resolveMedia(uri) ?: return@launch
-            val audioMedia = media.copy(type = com.actioncut.core.model.MediaType.AUDIO)
+            val audioMedia = media.copy(type = MediaType.AUDIO)
             val clip = ClipFactory.fromMedia(audioMedia, _uiState.value.playheadMs)
             val track = _uiState.value.timeline.tracks
-                .firstOrNull { it.type == com.actioncut.core.model.TrackType.AUDIO }
+                .firstOrNull { it.type == TrackType.AUDIO }
             mutate(structural = true) { timeline ->
                 if (track != null) {
                     TimelineEditor.insertClip(timeline, track.id, clip)
                 } else {
                     val (withTrack, trackId) =
-                        TimelineEditor.addTrack(timeline, com.actioncut.core.model.TrackType.AUDIO)
+                        TimelineEditor.addTrack(timeline, TrackType.AUDIO)
                     TimelineEditor.insertClip(withTrack, trackId, clip)
                 }
             }
@@ -259,13 +360,11 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** Toggles the selected clip's audio on/off (volume 0 = muted / audio removed on export). */
     fun toggleMuteSelected() = withSelected { id ->
         val muted = (currentClip(id)?.volume ?: 1f) == 0f
         mutate(structural = false) { TimelineEditor.setVolume(it, id, if (muted) 1f else 0f) }
     }
 
-    /** Adds a bundled music/SFX library track as an audio clip at the playhead. */
     fun addLibraryTrackAtPlayhead(track: com.actioncut.core.model.LibraryTrack) {
         viewModelScope.launch {
             val uri = resolveLibraryAudio(track.rawResName) ?: return@launch
@@ -273,66 +372,34 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** Starts microphone voiceover capture (caller must hold RECORD_AUDIO permission). */
     fun startVoiceover() {
         if (voiceRecorder.start()) {
             _uiState.update { it.copy(isRecordingVoiceover = true) }
         }
     }
 
-    /** Stops voiceover capture and drops the recording on the audio lane at the playhead. */
     fun stopVoiceover() {
         val uri = voiceRecorder.stop()
         _uiState.update { it.copy(isRecordingVoiceover = false) }
         if (uri != null) addAudioAtPlayhead(uri)
     }
 
-    /** Adds an emoji sticker overlay at the playhead on an OVERLAY lane. */
     fun addStickerAtPlayhead(emoji: String) {
         val clip = ClipFactory.emojiSticker(emoji, _uiState.value.playheadMs)
         val track = _uiState.value.timeline.tracks
-            .firstOrNull { it.type == com.actioncut.core.model.TrackType.OVERLAY }
+            .firstOrNull { it.type == TrackType.OVERLAY }
         mutate(structural = false) { timeline ->
             if (track != null) {
                 TimelineEditor.addClip(timeline, track.id, clip)
             } else {
                 val (withTrack, trackId) =
-                    TimelineEditor.addTrack(timeline, com.actioncut.core.model.TrackType.OVERLAY)
+                    TimelineEditor.addTrack(timeline, TrackType.OVERLAY)
                 TimelineEditor.addClip(withTrack, trackId, clip)
             }
         }
         _uiState.update { it.copy(selectedClipId = clip.id) }
     }
 
-    /**
-     * Adds a rendered cricket score card (PNG) to the END of the MAIN video track as a 5-second
-     * still-image clip (like the web editor), instead of an overlay lane.
-     */
-    fun addScoreCardAtPlayhead(uri: String, cardAspect: Float) {
-        val clip = com.actioncut.core.model.Clip(
-            id = com.actioncut.core.common.id.Ids.clip(),
-            type = com.actioncut.core.model.ClipType.IMAGE,
-            mediaUri = uri,
-            timelineStartMs = 0L,
-            timelineEndMs = 5_000L,
-            sourceInMs = 0L,
-            sourceOutMs = 0L,
-        )
-        val track = _uiState.value.timeline.tracks
-            .firstOrNull { it.type == com.actioncut.core.model.TrackType.VIDEO }
-        mutate(structural = true) { timeline ->
-            if (track != null) {
-                TimelineEditor.appendClip(timeline, track.id, clip)
-            } else {
-                val (withTrack, trackId) =
-                    TimelineEditor.addTrack(timeline, com.actioncut.core.model.TrackType.VIDEO)
-                TimelineEditor.appendClip(withTrack, trackId, clip)
-            }
-        }
-        _uiState.update { it.copy(selectedClipId = clip.id) }
-    }
-
-    /** Repositions an overlay (sticker/text) on the preview canvas (normalized -1..1). */
     fun setOverlayPosition(clipId: String, offsetX: Float, offsetY: Float) {
         val clip = currentClip(clipId) ?: return
         mutate(structural = false) {
@@ -340,7 +407,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** Resizes an overlay / PiP (uniform scale). */
     fun setOverlayScale(clipId: String, scale: Float) {
         val clip = currentClip(clipId) ?: return
         mutate(structural = false) {
@@ -348,9 +414,8 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ canvas / crop
-
-    fun setFitMode(mode: com.actioncut.core.model.FitMode) = updateCanvas { it.copy(fitMode = mode) }
+    // ------------------------------------------------------------------ Canvas / Crop
+    fun setFitMode(mode: FitMode) = updateCanvas { it.copy(fitMode = mode) }
 
     fun setBackgroundColor(argb: Int) = updateCanvas { it.copy(backgroundColorArgb = argb) }
 
@@ -361,20 +426,13 @@ class EditorViewModel @Inject constructor(
         scheduleSave()
     }
 
-    /** Sets the crop region (normalized 0..1) of the selected clip. */
     fun setCrop(clipId: String, crop: com.actioncut.core.model.CropRect) {
         mutate(structural = false) {
             TimelineEditor.updateClip(it, clipId) { c -> c.copy(crop = crop) }
         }
     }
 
-    // ------------------------------------------------------------------ keyframes
-
-    /**
-     * Captures the selected clip's current transform + opacity as a keyframe at the
-     * playhead (relative to the clip start). Re-adding near an existing keyframe
-     * (<50ms) replaces it, so you can nudge a pose and re-capture.
-     */
+    // ------------------------------------------------------------------ Keyframes (Transform)
     fun addKeyframeAtPlayhead() = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
         val timeInClip = (_uiState.value.playheadMs - clip.timelineStartMs).coerceAtLeast(0L)
@@ -388,45 +446,42 @@ class EditorViewModel @Inject constructor(
         )
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, id) { c ->
-                val others = c.keyframes.filter { kotlin.math.abs(it.timeMs - timeInClip) > 50L }
+                val others = c.keyframes.filter { abs(it.timeMs - timeInClip) > 50L }
                 c.copy(keyframes = (others + kf).sortedBy { it.timeMs })
             }
         }
     }
 
-    /** Removes all keyframes from the selected clip (returns to a static transform). */
     fun clearKeyframes() = withSelected { id ->
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, id) { c -> c.copy(keyframes = emptyList()) }
         }
     }
 
-    /** Sets a speed ramp preset on the selected clip (best-effort, video lane). */
-    fun setSpeedRamp(ramp: com.actioncut.core.model.SpeedRamp) = withSelected { id ->
+    fun setSpeedRamp(ramp: SpeedRamp) = withSelected { id ->
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, id) { c -> c.copy(speedRamp = ramp) }
         }
     }
 
-    /** Adds a picked video as a picture-in-picture overlay (scaled, in a corner). */
     fun addPipAtPlayhead(uri: String) {
         viewModelScope.launch {
             val media = resolveMedia(uri) ?: return@launch
             val base = ClipFactory.fromMedia(
-                media.copy(type = com.actioncut.core.model.MediaType.VIDEO),
+                media.copy(type = MediaType.VIDEO),
                 _uiState.value.playheadMs,
             )
             val clip = base.copy(
-                transform = com.actioncut.core.model.Transform(offsetX = 0.4f, offsetY = -0.4f, scale = 0.4f),
+                transform = Transform(offsetX = 0.4f, offsetY = -0.4f, scale = 0.4f),
             )
             val track = _uiState.value.timeline.tracks
-                .firstOrNull { it.type == com.actioncut.core.model.TrackType.OVERLAY }
+                .firstOrNull { it.type == TrackType.OVERLAY }
             mutate(structural = true) { timeline ->
                 if (track != null) {
                     TimelineEditor.addClip(timeline, track.id, clip)
                 } else {
                     val (withTrack, trackId) =
-                        TimelineEditor.addTrack(timeline, com.actioncut.core.model.TrackType.OVERLAY)
+                        TimelineEditor.addTrack(timeline, TrackType.OVERLAY)
                     TimelineEditor.addClip(withTrack, trackId, clip)
                 }
             }
@@ -434,8 +489,7 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ property edits
-
+    // ------------------------------------------------------------------ Property Edits
     fun setVolume(volume: Float) = withSelected { id ->
         mutate(structural = false) { TimelineEditor.setVolume(it, id, volume) }
     }
@@ -465,8 +519,7 @@ class EditorViewModel @Inject constructor(
         mutate(structural = false) { TimelineEditor.addEffect(it, id, effect) }
     }
 
-    /** Adds [type] to the selected clip if absent, or removes it if already applied. */
-    fun toggleEffect(type: com.actioncut.core.model.VisualEffectType) = withSelected { id ->
+    fun toggleEffect(type: VisualEffectType) = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
         val existingIndex = clip.effects.indexOfFirst { it.type == type }
         mutate(structural = false) { timeline ->
@@ -478,8 +531,7 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ undo / redo
-
+    // ------------------------------------------------------------------ Undo / Redo
     fun undo() {
         if (undoStack.isEmpty()) return
         redoStack.addLast(_uiState.value.timeline)
@@ -494,15 +546,14 @@ class EditorViewModel @Inject constructor(
         applyTimeline(next, structural = true)
     }
 
-    // ------------------------------------------------------------------ internals
-
+    // ------------------------------------------------------------------ Internals
     private inline fun withSelected(action: (String) -> Unit) {
         _uiState.value.selectedClipId?.let(action)
     }
 
     private fun currentClip(id: String) = _uiState.value.timeline.allClips.firstOrNull { it.id == id }
 
-    private fun clipAtPlayhead(): com.actioncut.core.model.Clip? {
+    private fun clipAtPlayhead(): Clip? {
         val playhead = _uiState.value.playheadMs
         return _uiState.value.timeline.videoTracks.firstOrNull()?.clipAt(playhead)
     }
@@ -522,7 +573,7 @@ class EditorViewModel @Inject constructor(
             it.copy(
                 timeline = timeline,
                 canUndo = undoStack.isNotEmpty(),
-                canRedo = redoStack.isNotEmpty(),
+                canRedo = redoStack.isNotEmpty>,
                 playheadMs = it.playheadMs.coerceIn(0, timeline.durationMs),
             )
         }
@@ -530,8 +581,6 @@ class EditorViewModel @Inject constructor(
             playerController.setTimeline(timeline)
             playerController.seekTo(_uiState.value.playheadMs)
         } else {
-            // Reflect volume/mute + effect/filter/adjust changes in the preview without a
-            // disruptive playlist rebuild (live WYSIWYG).
             playerController.updateVolumes(timeline)
             playerController.refreshPreviewEffects(timeline)
         }
@@ -542,7 +591,7 @@ class EditorViewModel @Inject constructor(
         val project = loadedProject ?: return
         saveJob?.cancel()
         saveJob = viewModelScope.launch {
-            kotlinx.coroutines.delay(600)
+            delay(600)
             val updated = project.copy(timeline = _uiState.value.timeline)
             loadedProject = updated
             saveProject(updated)
