@@ -1,8 +1,10 @@
 package com.actioncut.feature.editor.ui.preview
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
@@ -24,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -33,12 +36,8 @@ import androidx.media3.ui.PlayerView
 import com.actioncut.core.designsystem.component.clickableNoRipple
 import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.Clip
+import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
 
-/**
- * Top-of-editor preview surface. Letterboxes the [ExoPlayer] output to the project's
- * [AspectRatio] on a black canvas, overlays active sticker/text clips (draggable to
- * reposition), and shows a tap-to-toggle play/pause control.
- */
 @Composable
 fun PreviewPlayer(
     player: ExoPlayer,
@@ -55,6 +54,8 @@ fun PreviewPlayer(
     onScaleOverlay: (String, Float) -> Unit = { _, _ -> },
     fitMode: com.actioncut.core.model.FitMode = com.actioncut.core.model.FitMode.FILL,
     backgroundColorArgb: Int = 0xFF000000.toInt(),
+    allClips: List<Clip> = emptyList(),
+    onScorecardRowTapped: (String, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val resizeMode = when (fitMode) {
@@ -112,6 +113,36 @@ fun PreviewPlayer(
                 onMove = onMoveOverlay,
                 modifier = Modifier.fillMaxSize(),
             )
+
+            // ==================== Dynamic Scorecard Preview & Tap Layer ====================
+            val activeScoreClip = allClips.firstOrNull { 
+                it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs 
+            }
+
+            if (activeScoreClip != null && activeScoreClip.scorecard != null) {
+                val sc = activeScoreClip.scorecard!!
+                val timeInClip = (playheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
+                val activeBmp = ScorecardManager.getActiveBitmap(activeScoreClip.id, sc, timeInClip)
+
+                if (activeBmp != null) {
+                    Image(
+                        bitmap = activeBmp.asImageBitmap(),
+                        contentDescription = "Scorecard",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(activeScoreClip.id, playheadMs) {
+                                detectTapGestures { offset ->
+                                    val touchYFraction = offset.y / size.height
+                                    val hitRow = ScorecardManager.hitTestRow(activeScoreClip.id, touchYFraction)
+                                    if (hitRow >= 0) {
+                                        onScorecardRowTapped(activeScoreClip.id, hitRow)
+                                    }
+                                }
+                            }
+                    )
+                }
+            }
 
             if (!isPlaying) {
                 Box(
@@ -198,7 +229,6 @@ private fun PipLayer(
                 update = { it.player = pipPlayer },
                 modifier = Modifier.fillMaxSize(),
             )
-            // Resize handle (drag to scale).
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -277,7 +307,6 @@ private fun OverlayLayer(
 
                 val imageUri = clip.mediaUri
                 if (imageUri != null && clip.text == null) {
-                    // Image sticker (e.g. cricket score card): width = scale * preview width.
                     StickerImage(
                         uri = imageUri,
                         widthPx = t.scale * w,
@@ -295,7 +324,6 @@ private fun OverlayLayer(
     }
 }
 
-/** Draws an image sticker from a `file:` URI at [widthPx] pixels wide, keeping its aspect ratio. */
 @Composable
 private fun StickerImage(uri: String, widthPx: Float, modifier: Modifier = Modifier) {
     val bitmap = androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(
@@ -309,10 +337,10 @@ private fun StickerImage(uri: String, widthPx: Float, modifier: Modifier = Modif
         }
     }.value ?: return
     val density = androidx.compose.ui.platform.LocalDensity.current
-    androidx.compose.foundation.Image(
+    Image(
         bitmap = bitmap,
         contentDescription = null,
-        contentScale = androidx.compose.ui.layout.ContentScale.FillBounds,
+        contentScale = ContentScale.FillBounds,
         modifier = modifier
             .width(with(density) { widthPx.toDp() })
             .aspectRatio(bitmap.width.toFloat() / bitmap.height.toFloat()),
