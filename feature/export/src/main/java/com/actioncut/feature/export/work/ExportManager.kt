@@ -14,15 +14,6 @@ import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Runs a project export and saves the result to the device Gallery.
- *
- * The export runs **directly** (the Media3 exporter already marshals onto the main
- * Looper), collected within the caller's coroutine scope — this removed the WorkManager
- * indirection that was a silent point of failure. On completion the file is copied into
- * `Movies/ActionCut` via [MediaSaver], and the emitted [ExportState.Completed] carries the
- * shareable gallery `content://` URI.
- */
 @Singleton
 class ExportManager @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -46,12 +37,18 @@ class ExportManager @Inject constructor(
             }
             exportProject(project, settings, outputPath).collect { s ->
                 if (s is ExportState.Completed) {
+                    // கேலரியில் சேமிக்கும் போது யூசருக்கு ஸ்டேட்டஸ் அறிவித்தல்
+                    trySend(ExportState.InProgress(0.99f))
                     val mime = if (settings.format == VideoFormat.WEBM_VP9) "video/webm" else "video/mp4"
                     val galleryUri = runCatching {
                         mediaSaver.saveVideoToGallery(outputPath, fileName, mime)
                     }.getOrNull()
                     runCatching { outputFile.delete() }
                     trySend(ExportState.Completed(galleryUri ?: s.outputUri))
+                } else if (s is ExportState.InProgress) {
+                    // 100%-ல் தேங்காமல் இருக்க 98% வரை InProgress அனுப்புதல்
+                    val scaledProgress = (s.progress * 0.98f).coerceIn(0f, 0.98f)
+                    trySend(ExportState.InProgress(scaledProgress))
                 } else {
                     trySend(s)
                 }
@@ -61,6 +58,5 @@ class ExportManager @Inject constructor(
         return ExportHandle(outputPath, state)
     }
 
-    /** Cancellation is handled by cancelling the collecting coroutine (see ViewModel). */
     fun cancel(projectId: String) = Unit
 }
