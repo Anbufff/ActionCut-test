@@ -294,32 +294,28 @@ class EditorViewModel @Inject constructor(
     }
 
     /**
-     * Adds a rendered cricket score card (PNG) at the playhead for 5 seconds on an OVERLAY lane,
-     * sized to ~92% of the frame width (shrunk if needed so the whole card fits) and sitting in
-     * the lower part of the frame like a TV score bug.
+     * Adds a rendered cricket score card (PNG) to the END of the MAIN video track as a 5-second
+     * still-image clip (like the web editor), instead of an overlay lane.
      */
     fun addScoreCardAtPlayhead(uri: String, cardAspect: Float) {
-        val frameAspect = _uiState.value.aspectRatio.value
-        val aspect = if (cardAspect > 0f) cardAspect else 1f
-        var widthFrac = 0.92f
-        if (widthFrac * frameAspect / aspect > 0.9f) widthFrac = 0.9f * aspect / frameAspect
-        val heightFrac = widthFrac * frameAspect / aspect
-        val offsetY = (0.94f - heightFrac).coerceIn(-0.9f, 0.9f)
-        val clip = ClipFactory.scoreCard(
-            uri = uri,
-            timelineStartMs = _uiState.value.playheadMs,
-            durationMs = 5_000L,
-            transform = com.actioncut.core.model.Transform(offsetX = 0f, offsetY = offsetY, scale = widthFrac),
+        val clip = com.actioncut.core.model.Clip(
+            id = com.actioncut.core.common.id.Ids.clip(),
+            type = com.actioncut.core.model.ClipType.IMAGE,
+            mediaUri = uri,
+            timelineStartMs = 0L,
+            timelineEndMs = 5_000L,
+            sourceInMs = 0L,
+            sourceOutMs = 0L,
         )
         val track = _uiState.value.timeline.tracks
-            .firstOrNull { it.type == com.actioncut.core.model.TrackType.OVERLAY }
-        mutate(structural = false) { timeline ->
+            .firstOrNull { it.type == com.actioncut.core.model.TrackType.VIDEO }
+        mutate(structural = true) { timeline ->
             if (track != null) {
-                TimelineEditor.addClip(timeline, track.id, clip)
+                TimelineEditor.appendClip(timeline, track.id, clip)
             } else {
                 val (withTrack, trackId) =
-                    TimelineEditor.addTrack(timeline, com.actioncut.core.model.TrackType.OVERLAY)
-                TimelineEditor.addClip(withTrack, trackId, clip)
+                    TimelineEditor.addTrack(timeline, com.actioncut.core.model.TrackType.VIDEO)
+                TimelineEditor.appendClip(withTrack, trackId, clip)
             }
         }
         _uiState.update { it.copy(selectedClipId = clip.id) }
