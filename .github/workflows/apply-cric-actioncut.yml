@@ -1,0 +1,83 @@
+name: Apply Cric Patch (ActionCut) and Build
+
+# Run manually: Actions tab -> "Apply Cric Patch (ActionCut) and Build" -> Run workflow.
+# Applies cric-actioncut.patch (repo ROOT) once, commits it, builds the debug APK, and runs
+# the new score-row splitter unit test. Fails loudly if the patch is missing / does not apply.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply patch
+        run: |
+          set -e
+          ALREADY=core/domain/src/main/java/com/actioncut/core/domain/scorecard/ScoreRowSplitter.kt
+          PATCH=$(ls *cric*.patch 2>/dev/null | head -1 || true)
+          echo "Patch file found: '${PATCH}'"
+          if [ -f "$ALREADY" ]; then
+            echo "Cricket code already in repo - building current code."
+          elif [ -z "$PATCH" ]; then
+            echo "::error::No cric patch file in repo root. Upload cric-actioncut.patch to the ROOT of the repo."
+            ls -la
+            exit 1
+          else
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+            if git apply --check "$PATCH" 2>/dev/null; then
+              git apply "$PATCH"
+            elif git apply --ignore-whitespace --check "$PATCH" 2>/dev/null; then
+              git apply --ignore-whitespace "$PATCH"
+            else
+              echo "::error::Patch does not apply cleanly (your copy may differ from ActionCut v1.15.0, which the patch was made for)."
+              git apply --check "$PATCH" || true
+              exit 1
+            fi
+            git rm -q "$PATCH"
+            git add -A
+            git commit -m "Add Cricket Score Card (CRIC tool, step 1)"
+            git push
+            echo "Patch applied and pushed."
+          fi
+
+      - name: Confirm CRIC tool is in the code
+        run: |
+          grep -q "CRIC" feature/editor/src/main/java/com/actioncut/feature/editor/ui/EditorTool.kt \
+            && echo "OK: CRIC tool present" \
+            || { echo "::error::CRIC tool missing"; exit 1; }
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle (with cache)
+        uses: gradle/actions/setup-gradle@v4
+
+      - run: chmod +x ./gradlew
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: actioncut-cric-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Unit test - score row splitter (does not block the APK)
+        continue-on-error: true
+        run: ./gradlew :core:domain:test --tests "*ScoreRowSplitterTest" --stacktrace
