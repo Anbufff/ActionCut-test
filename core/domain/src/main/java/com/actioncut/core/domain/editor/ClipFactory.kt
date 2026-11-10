@@ -12,8 +12,11 @@ import com.actioncut.core.model.Transform
 /** Builds [Clip]s from raw media / user actions with sensible defaults. */
 object ClipFactory {
 
-    /** How long a still image occupies the timeline by default. */
+    /** How long a still image occupies the timeline by default (stickers / emoji stickers). */
     const val DEFAULT_IMAGE_DURATION_MS = 3_000L
+
+    /** How long a picture added to the main track occupies the timeline by default (8 s, as in the web editor). */
+    const val DEFAULT_PICTURE_DURATION_MS = 8_000L
 
     /** Default duration for a freshly added text clip. */
     const val DEFAULT_TEXT_DURATION_MS = 2_000L
@@ -26,7 +29,7 @@ object ClipFactory {
         }
         val hasSource = media.type == MediaType.VIDEO || media.type == MediaType.AUDIO
         val duration = if (media.type == MediaType.IMAGE) {
-            DEFAULT_IMAGE_DURATION_MS
+            DEFAULT_PICTURE_DURATION_MS
         } else {
             media.durationMs.coerceAtLeast(TimelineEditor.MIN_CLIP_DURATION_MS)
         }
