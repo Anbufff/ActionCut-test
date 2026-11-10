@@ -24,16 +24,12 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import kotlin.math.abs
 
 class PlayerController @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
     val player: ExoPlayer = ExoPlayer.Builder(context).build().apply {
-        playWhenReady = false
-        repeatMode = Player.REPEAT_MODE_OFF
-    }
-
-    private val audioPlayer: ExoPlayer = ExoPlayer.Builder(context).build().apply {
         playWhenReady = false
         repeatMode = Player.REPEAT_MODE_OFF
     }
@@ -52,18 +48,24 @@ class PlayerController @Inject constructor(
     private var lastPreviewSignature: String? = null
 
     private var videoStartsMs: List<Long> = emptyList()
-    private var audioStartsMs: List<Long> = emptyList()
     private var pipStartsMs: List<Long> = emptyList()
 
     var totalTimelineMs: Long = 0L
     var totalVideoMs: Long = 0L
     var totalAudioMs: Long = 0L
 
-    // HTML Video Editor பாணியிலான மாஸ்டர் டைம்லைன் கடிகாரம் (Master Timeline Clock)
+    // HTML Video Editor மாஸ்டர் டைம்லைன் கடிகாரம்
     private var masterPlayheadMs: Long = 0L
     private var isTimelinePlaying: Boolean = false
     private var clockJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Main)
+
+    // HTML எடிட்டரின் audioClipsData.forEach(a => a.el) போன்று ஒவ்வொரு ஆடியோ கிளிப்பிற்கும் தனித்தனி பிளேயர் ஸ்டேட்
+    private data class AudioTrackState(
+        val clip: Clip,
+        val player: ExoPlayer
+    )
+    private val audioTrackStates = mutableListOf<AudioTrackState>()
 
     private val listener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -77,6 +79,10 @@ class PlayerController @Inject constructor(
     }
 
     fun setTimeline(timeline: Timeline) {
+        // பழைய ஆடியோ பிளேயர்களை விடுவித்தல்
+        audioTrackStates.forEach { it.player.release() }
+        audioTrackStates.clear()
+
         val clips = previewClips(timeline)
         previewClips = clips
         clipVolumes = clips.map { it.volume }
@@ -105,18 +111,27 @@ class PlayerController @Inject constructor(
         applyCurrentVolume()
         applyPreviewEffects(force = true)
 
+        // HTML எடிட்டர் வடிவில் ஒவ்வொரு ஆடியோ கிளிப்பிற்கும் ExoPlayer தயார் செய்தல்
         val audioClips = audioClipsOf(timeline)
-        audioStartsMs = cumulativeStarts(audioClips.map { previewDurationMs(it) })
-        totalAudioMs = (audioStartsMs.lastOrNull() ?: 0L) + (audioClips.lastOrNull()?.let { previewDurationMs(it) } ?: 0L)
-        audioPlayer.setMediaItems(audioClips.map { it.toClippedMediaItem() })
-        audioPlayer.prepare()
+        totalAudioMs = audioClips.maxOfOrNull { it.timelineEndMs } ?: 0L
+
+        audioClips.forEach { aClip ->
+            val aPlayer = ExoPlayer.Builder(context).build().apply {
+                playWhenReady = false
+                repeatMode = Player.REPEAT_MODE_OFF
+                volume = aClip.volume.coerceIn(0f, 1f)
+                val mItem = MediaItem.Builder().setUri(aClip.mediaUri).build()
+                setMediaItem(mItem)
+                prepare()
+            }
+            audioTrackStates.add(AudioTrackState(aClip, aPlayer))
+        }
 
         val pipClips = pipClipsOf(timeline)
         pipStartsMs = cumulativeStarts(pipClips.map { previewDurationMs(it) })
         pipPlayer.setMediaItems(pipClips.map { it.toClippedMediaItem() })
         pipPlayer.prepare()
 
-        // ஆடியோ, வீடியோ மற்றும் டைம்லைன் நீளங்களில் எது அதிகமோ அதுவே முழு கால அளவு (06:12 வரை)
         totalTimelineMs = maxOf(totalVideoMs, totalAudioMs, timeline.durationMs)
         masterPlayheadMs = 0L
 
@@ -169,6 +184,14 @@ class PlayerController @Inject constructor(
     fun updateVolumes(timeline: Timeline) {
         clipVolumes = previewClips(timeline).map { it.volume }
         applyCurrentVolume()
+
+        val activeAudioClips = audioClipsOf(timeline)
+        audioTrackStates.forEach { state ->
+            val match = activeAudioClips.find { it.id == state.clip.id }
+            if (match != null) {
+                state.player.volume = match.volume.coerceIn(0f, 1f)
+            }
+        }
     }
 
     fun refreshPreviewEffects(timeline: Timeline) {
@@ -206,14 +229,14 @@ class PlayerController @Inject constructor(
         player.volume = clipVolumes.getOrElse(index) { 1f }.coerceIn(0f, 1f)
     }
 
-    /**
-     * HTML எடிட்டர் பாணியில் ஆடியோ முடியும் வரை தொடர்ந்து பிளே செய்யும் செயல்பாடு
-     */
     fun play() {
         if (masterPlayheadMs >= totalTimelineMs) {
             seekTo(0)
         }
         isTimelinePlaying = true
+        syncVideoState(forceSeek = true)
+        syncAudioState(forceSeek = true)
+        syncPipState(forceSeek = true)
         startTimelineClock()
         pushState()
     }
@@ -222,7 +245,7 @@ class PlayerController @Inject constructor(
         isTimelinePlaying = false
         clockJob?.cancel()
         player.pause()
-        audioPlayer.pause()
+        audioTrackStates.forEach { it.player.pause() }
         pipPlayer.pause()
         pushState()
     }
@@ -237,14 +260,17 @@ class PlayerController @Inject constructor(
 
     fun seekTo(positionMs: Long) {
         masterPlayheadMs = positionMs.coerceIn(0, totalTimelineMs)
-        syncMediaPlayersWithTime(masterPlayheadMs)
+        syncVideoState(forceSeek = true)
+        syncAudioState(forceSeek = true)
+        syncPipState(forceSeek = true)
         pushState()
     }
 
-    private fun syncMediaPlayersWithTime(posMs: Long) {
-        // வீடியோ உள்ள பகுதியில் வீடியோ இயங்கும்; வீடியோ முடிந்த பகுதியில் கடைசி பிரேம் நிலைத்து நிற்கும்
-        if (posMs < totalVideoMs) {
-            seekAbsolute(player, videoStartsMs, posMs)
+    private fun syncVideoState(forceSeek: Boolean) {
+        if (masterPlayheadMs < totalVideoMs) {
+            if (forceSeek) {
+                seekAbsolute(player, videoStartsMs, masterPlayheadMs)
+            }
             if (isTimelinePlaying && !player.isPlaying) {
                 player.play()
             }
@@ -257,19 +283,43 @@ class PlayerController @Inject constructor(
                 player.pause()
             }
         }
+    }
 
-        // ஆடியோ எப்போதுமே தனது இடத்திற்கு ஏற்ப சரியாக ஒலிக்கச் செய்தல்
-        if (posMs < totalAudioMs) {
-            seekAbsolute(audioPlayer, audioStartsMs, posMs)
-            if (isTimelinePlaying && !audioPlayer.isPlaying) {
-                audioPlayer.play()
+    /**
+     * HTML Video Editor-ல் உள்ள syncAudioState() முறையை அப்படியே Android-ல் பின்பற்றுதல்.
+     * தேவையில்லாமல் Seek செய்யாமல், சத்தம் தெளிவாக தொடர்ந்து ஒலிக்கும்.
+     */
+    private fun syncAudioState(forceSeek: Boolean) {
+        audioTrackStates.forEach { state ->
+            val aClip = state.clip
+            val aPlayer = state.player
+            val isInsideClip = masterPlayheadMs >= aClip.timelineStartMs && masterPlayheadMs < aClip.timelineEndMs
+
+            if (isInsideClip) {
+                val offsetInClipMs = masterPlayheadMs - aClip.timelineStartMs
+                val targetMediaMs = aClip.sourceInMs + (offsetInClipMs * aClip.speed).toLong()
+
+                // சத்தம் துண்டிக்கப்படாமல் இருக்க 400ms-க்கு மேல் வேறுபாடு இருந்தால் மட்டுமே Seek செய்யப்படும்
+                if (forceSeek || abs(aPlayer.currentPosition - targetMediaMs) > 400L) {
+                    aPlayer.seekTo(targetMediaMs.coerceAtLeast(0L))
+                }
+                aPlayer.volume = aClip.volume.coerceIn(0f, 1f)
+                if (isTimelinePlaying && !aPlayer.isPlaying) {
+                    aPlayer.play()
+                }
+            } else {
+                if (aPlayer.isPlaying) {
+                    aPlayer.pause()
+                }
             }
-        } else {
-            audioPlayer.pause()
         }
+    }
 
+    private fun syncPipState(forceSeek: Boolean) {
         if (pipPlayer.mediaItemCount > 0) {
-            seekAbsolute(pipPlayer, pipStartsMs, posMs)
+            if (forceSeek) {
+                seekAbsolute(pipPlayer, pipStartsMs, masterPlayheadMs)
+            }
             if (isTimelinePlaying && !pipPlayer.isPlaying) {
                 pipPlayer.play()
             }
@@ -286,14 +336,17 @@ class PlayerController @Inject constructor(
                 lastRealTime = now
 
                 masterPlayheadMs = (masterPlayheadMs + delta).coerceAtMost(totalTimelineMs)
-                syncMediaPlayersWithTime(masterPlayheadMs)
+                // லூப்பில் forceSeek = false ஆக இருப்பதால் ஆடியோ தடையின்றி இயங்கும்
+                syncVideoState(forceSeek = false)
+                syncAudioState(forceSeek = false)
+                syncPipState(forceSeek = false)
                 pushState()
 
                 if (masterPlayheadMs >= totalTimelineMs) {
                     pause()
                     break
                 }
-                delay(30L) // 30 FPS வேகத்தில் டைம்லைன் முன்னோக்கி ஓடும்
+                delay(30L)
             }
         }
     }
@@ -301,7 +354,7 @@ class PlayerController @Inject constructor(
     fun setSpeed(speed: Float) {
         val params = PlaybackParameters(speed.coerceIn(0.1f, 10f))
         player.playbackParameters = params
-        audioPlayer.playbackParameters = params
+        audioTrackStates.forEach { it.player.playbackParameters = params }
         pipPlayer.playbackParameters = params
     }
 
@@ -316,14 +369,15 @@ class PlayerController @Inject constructor(
         clockJob?.cancel()
         player.removeListener(listener)
         player.release()
-        audioPlayer.release()
+        audioTrackStates.forEach { it.player.release() }
+        audioTrackStates.clear()
         pipPlayer.release()
     }
 
     private fun pushState() {
         _state.value = PlaybackState(
             isPlaying = isTimelinePlaying,
-            isBuffering = player.playbackState == Player.STATE_BUFFERING || audioPlayer.playbackState == Player.STATE_BUFFERING,
+            isBuffering = player.playbackState == Player.STATE_BUFFERING,
             positionMs = masterPlayheadMs,
             durationMs = totalTimelineMs,
             isEnded = masterPlayheadMs >= totalTimelineMs && !isTimelinePlaying,
