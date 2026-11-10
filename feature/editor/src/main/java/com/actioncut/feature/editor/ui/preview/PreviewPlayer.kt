@@ -19,6 +19,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -114,7 +116,7 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // ==================== Dynamic Scorecard Preview & Tap Layer ====================
+            // ==================== Dynamic Scorecard Preview & 100% Smooth Tap Layer ====================
             val activeScoreClip = allClips.firstOrNull { 
                 it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs 
             }
@@ -122,6 +124,7 @@ fun PreviewPlayer(
             if (activeScoreClip != null) {
                 val sc = activeScoreClip.scorecard
                 if (sc != null) {
+                    val currentPlayheadMs by rememberUpdatedState(playheadMs)
                     val timeInClip = (playheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
                     val activeBmp = ScorecardManager.getActiveBitmap(activeScoreClip.id, sc, timeInClip)
 
@@ -132,10 +135,19 @@ fun PreviewPlayer(
                             contentScale = ContentScale.FillBounds,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .pointerInput(activeScoreClip.id, playheadMs) {
+                                // pointerInput-ல் playheadMs தவிர்க்கப்பட்டதால் தொடுதல்கள் கேன்சல் ஆகாமல் அதியுயர் Smooth-ஆக இயங்கும்
+                                .pointerInput(activeScoreClip.id) {
                                     detectTapGestures { offset ->
+                                        val curTimeInClip = (currentPlayheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
                                         val touchYFraction = offset.y / size.height
-                                        val hitRow = ScorecardManager.hitTestRow(activeScoreClip.id, touchYFraction)
+                                        val touchXFraction = offset.x / size.width
+                                        val hitRow = ScorecardManager.hitTestRow(
+                                            activeScoreClip.id,
+                                            sc,
+                                            curTimeInClip,
+                                            touchYFraction,
+                                            touchXFraction
+                                        )
                                         if (hitRow >= 0) {
                                             onScorecardRowTapped(activeScoreClip.id, hitRow)
                                         }
