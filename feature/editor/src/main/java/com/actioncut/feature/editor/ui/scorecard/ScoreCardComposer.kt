@@ -30,6 +30,7 @@ object ScoreCardComposer {
         selected: Int,
         player: Player?,
         photo: Bitmap?,
+        fallbackName: String? = null,
     ): ComposedCard {
         val cw = card.bitmap.width.toFloat()
         val ch = card.bitmap.height.toFloat()
@@ -65,7 +66,8 @@ object ScoreCardComposer {
             val r = rects[selected]
             p.style = Paint.Style.STROKE
             p.strokeWidth = lw / 500f
-            p.color = type.accent
+            p.color = 0xFFFF1744.toInt()
+            p.strokeWidth = lw / 380f
             c.drawRoundRect(r, lw / 200f, lw / 200f, p)
             p.style = Paint.Style.FILL
         }
@@ -108,22 +110,27 @@ object ScoreCardComposer {
         p.shader = LinearGradient(0f, barTop, 0f, pb, 0x00000000, 0xE6000000.toInt(), Shader.TileMode.CLAMP)
         c.drawRect(pl, barTop, pr, pb, p)
         p.shader = null
-        if (player != null) {
-            p.color = 0xFFFFFFFF.toInt()
+        val shownName = player?.name ?: fallbackName
+        if (!shownName.isNullOrBlank()) {
             p.typeface = Typeface.DEFAULT_BOLD
-            p.textAlign = Paint.Align.CENTER
-            p.textSize = ph * 0.07f
-            val nm = player.name.uppercase()
+            p.textAlign = Paint.Align.LEFT
+            // "KEY BATSMAN" / "KEY BOWLER" label (as in the web editor)
+            p.color = type.accent
+            p.textSize = ph * 0.034f
+            p.letterSpacing = 0.18f
+            c.drawText(if (type == ScoreCardType.BOWLING) "KEY BOWLER" else "KEY BATSMAN", pl + pw * 0.05f, pb - ph * 0.125f, p)
+            p.letterSpacing = 0.04f
+            p.color = 0xFFFFFFFF.toInt()
+            p.textSize = ph * 0.065f
+            val nm = shownName.uppercase()
             while (p.measureText(nm) > pw * 0.9f && p.textSize > 8f) p.textSize -= 2f
-            c.drawText(nm, pl + pw / 2f, pb - ph * 0.085f, p)
-            if (player.country.isNotBlank()) {
-                p.color = type.accent
-                p.textSize = ph * 0.036f
-                c.drawText(player.country.uppercase(), pl + pw / 2f, pb - ph * 0.04f, p)
-            }
+            c.drawText(nm, pl + pw * 0.05f, pb - ph * 0.06f, p)
+            p.letterSpacing = 0f
         }
-        p.color = 0xFFFFC107.toInt()
-        c.drawRect(pl + pw * 0.35f, pb - ph * 0.018f, pl + pw * 0.65f, pb - ph * 0.01f, p)
+        p.color = 0xFFFF6D00.toInt()
+        c.drawRect(pl + pw * 0.05f, pb - ph * 0.032f, pl + pw * 0.30f, pb - ph * 0.022f, p)
+        p.color = type.accent
+        c.drawRect(pl + pw * 0.32f, pb - ph * 0.032f, pl + pw * 0.95f, pb - ph * 0.022f, p)
 
         // "IN FOCUS" badge
         val bw = pw * 0.2f
@@ -136,7 +143,7 @@ object ScoreCardComposer {
         p.typeface = Typeface.DEFAULT_BOLD
         p.textAlign = Paint.Align.CENTER
         p.textSize = bh * 0.55f
-        c.drawText("IN FOCUS", bx + bw / 2f, by + bh * 0.7f, p)
+        c.drawText("NEWS CRICK", bx + bw / 2f, by + bh * 0.7f, p)
         c.restore()
 
         // Panel border
@@ -146,30 +153,30 @@ object ScoreCardComposer {
         c.drawRoundRect(panel, corner, corner, p)
         p.style = Paint.Style.FILL
 
-        // Arrow: selected row -> photo (topmost layer)
+        // Arrow: from the photo, pointing LEFT at the selected row (as in the web editor)
         if (selected in rects.indices) {
             val r = rects[selected]
             val cy = r.centerY()
-            val ah = min(r.height() * 0.9f, lh * 0.14f)
-            val x0 = r.right - lw * 0.004f
-            val tip = pl + lw * 0.04f
-            val headLen = ah * 0.9f
+            val ah = min(r.height() * 0.95f, lh * 0.15f)
+            val tipX = r.right + lw * 0.003f
+            val tailX = pl + lw * 0.075f
+            val headLen = ah * 0.85f
             val half = ah * 0.2f
             val arrow = Path().apply {
-                moveTo(x0, cy - half)
-                lineTo(tip - headLen, cy - half)
-                lineTo(tip - headLen, cy - ah / 2f)
-                lineTo(tip, cy)
-                lineTo(tip - headLen, cy + ah / 2f)
-                lineTo(tip - headLen, cy + half)
-                lineTo(x0, cy + half)
+                moveTo(tipX, cy)
+                lineTo(tipX + headLen, cy - ah / 2f)
+                lineTo(tipX + headLen, cy - half)
+                lineTo(tailX, cy - half)
+                lineTo(tailX, cy + half)
+                lineTo(tipX + headLen, cy + half)
+                lineTo(tipX + headLen, cy + ah / 2f)
                 close()
             }
             p.color = 0xFFFF1744.toInt()
             c.drawPath(arrow, p)
             p.style = Paint.Style.STROKE
-            p.strokeWidth = ah * 0.06f
-            p.color = 0xFFFFFFFF.toInt()
+            p.strokeWidth = ah * 0.07f
+            p.color = 0xFF111111.toInt()
             c.drawPath(arrow, p)
             p.style = Paint.Style.FILL
         }
