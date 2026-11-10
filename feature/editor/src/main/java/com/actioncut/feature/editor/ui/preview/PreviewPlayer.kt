@@ -129,7 +129,7 @@ fun PreviewPlayer(
                         Image(
                             bitmap = activeBmp.asImageBitmap(),
                             contentDescription = "Scorecard",
-                            contentScale = ContentScale.Fit,
+                            contentScale = ContentScale.FillBounds,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .pointerInput(activeScoreClip.id, playheadMs) {
