@@ -283,6 +283,12 @@ private fun ClipBlock(
     val density = LocalDensity.current
     val widthDp = with(density) { (clip.timelineDurationMs / 1000f * pxPerSecond).toDp() }
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent
+
+    val currentClipStartMs by rememberUpdatedState(clip.timelineStartMs)
+    val currentPxPerSecond by rememberUpdatedState(pxPerSecond)
+    val currentOnMoveClip by rememberUpdatedState(onMoveClip)
+    val currentOnMoveCommit by rememberUpdatedState(onMoveCommit)
+
     var moveAnchor by remember(clip.id) { mutableLongStateOf(clip.timelineStartMs) }
     var moveAcc by remember(clip.id) { mutableFloatStateOf(0f) }
 
@@ -294,18 +300,20 @@ private fun ClipBlock(
             .background(laneColor(clip.type))
             .border(2.dp, borderColor, RoundedCornerShape(6.dp))
             .clickableNoRipple { onSelect() }
-            .pointerInput(clip.id, pxPerSecond) {
+            .pointerInput(clip.id) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = {
                         onSelect()
-                        moveAnchor = clip.timelineStartMs
+                        moveAnchor = currentClipStartMs
                         moveAcc = 0f
                     },
                     onDrag = { _, drag ->
                         moveAcc += drag.x
-                        onMoveClip(clip.id, moveAnchor + (moveAcc / pxPerSecond * 1000f).toLong())
+                        val deltaMs = (moveAcc / currentPxPerSecond * 1000f).toLong()
+                        currentOnMoveClip(clip.id, moveAnchor + deltaMs)
                     },
-                    onDragEnd = { onMoveCommit() },
+                    onDragEnd = { currentOnMoveCommit() },
+                    onDragCancel = { currentOnMoveCommit() },
                 )
             },
         contentAlignment = Alignment.CenterStart,
@@ -356,7 +364,6 @@ private fun ClipBlock(
             }
         }
 
-        // தேர்ந்தெடுக்கப்பட்ட கிளிப்பிற்கு மென்மையாக இழுக்கக்கூடிய Trimming Handles
         if (selected) {
             ClipTrimHandles(
                 clip = clip,
@@ -398,9 +405,6 @@ private fun AudioWaveform(
     }
 }
 
-/**
- * கிளிப்பின் முனைகளில் விரலால் எளிதாகப் பிடித்து மென்மையாக இழுக்கும் Trimming Handles
- */
 @Composable
 private fun ClipTrimHandles(
     clip: Clip,
@@ -451,10 +455,9 @@ private fun DragHandle(
 
     Box(
         modifier = modifier
-            // விரல் எளிதாகப் பிடிப்பதற்காக 36.dp அகலமுள்ள தாராளமான தொடு பரப்பு (HTML 36px போன்றது)
             .width(36.dp)
             .fillMaxHeight()
-            .pointerInput(clipId) { // clipId மட்டுமே Key-யாக உள்ளதால் இழுக்கும் போது பாதியில் கேன்சல் ஆகாது
+            .pointerInput(clipId) {
                 detectHorizontalDragGestures(
                     onDragStart = {
                         anchorMs = currentGetInitialMs()
@@ -465,17 +468,12 @@ private fun DragHandle(
                         val deltaMs = (accPx / currentPxPerSecond * 1000f).toLong()
                         currentOnValue(anchorMs + deltaMs)
                     },
-                    onDragEnd = {
-                        currentOnCommit()
-                    },
-                    onDragCancel = {
-                        currentOnCommit()
-                    }
+                    onDragEnd = { currentOnCommit() },
+                    onDragCancel = { currentOnCommit() },
                 )
             },
         contentAlignment = if (isLeft) Alignment.CenterStart else Alignment.CenterEnd,
     ) {
-        // காட்சிக்குத் தெரியும் Handle பட்டை
         Box(
             modifier = Modifier
                 .width(16.dp)
@@ -487,7 +485,6 @@ private fun DragHandle(
                 .background(MaterialTheme.colorScheme.primary),
             contentAlignment = Alignment.Center,
         ) {
-            // வெள்ளை நிற பிடிமானக் கோடு (Handle Grip Line)
             Box(
                 modifier = Modifier
                     .size(width = 3.dp, height = 22.dp)
