@@ -3,6 +3,8 @@ package com.actioncut.core.data.mediastore
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.database.ContentObserver
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import com.actioncut.core.domain.repository.MediaFilter
@@ -12,17 +14,10 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Reads device media through [MediaStore] (scoped-storage friendly — no direct file
- * paths). Exposes a cold [Flow] that re-queries whenever the underlying collections
- * change, so the picker stays live as the user shoots new footage.
- *
- * The caller is responsible for holding the relevant `READ_MEDIA_*` runtime permission;
- * without it the query simply yields an empty list rather than crashing.
- */
 @Singleton
 class MediaStoreDataSource @Inject constructor(
     @ApplicationContext private val context: android.content.Context,
@@ -35,14 +30,13 @@ class MediaStoreDataSource @Inject constructor(
                 trySend(query(filter))
             }
         }
-        // Watch every collection we might read.
         listOf(
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
         ).forEach { resolver.registerContentObserver(it, true, observer) }
 
-        trySend(query(filter)) // initial load
+        trySend(query(filter))
 
         awaitClose { resolver.unregisterContentObserver(observer) }
     }
@@ -139,14 +133,37 @@ class MediaStoreDataSource @Inject constructor(
     fun getByUri(uri: String): MediaItem? = query(MediaFilter.ALL).firstOrNull { it.uri == uri }
 
     /**
-     * Probes an arbitrary content URI (e.g. SAF audio/video pick) for its duration, type
-     * and dimensions. Unlike [getByUri] this works for URIs that aren't in the MediaStore
-     * collections (document URIs from the system picker).
+     * வீடியோக்கள், புகைப்படங்கள் (Images) மற்றும் ஆடியோக்கள் மூன்றையும் சரியாகப் பகுப்பாய்வு செய்யும் மெத்தட்
      */
     fun resolveMedia(uri: String): MediaItem? {
+        val parsedUri = Uri.parse(uri)
+        val mimeType = runCatching { context.contentResolver.getType(parsedUri) }.getOrNull()
+        val isImage = mimeType?.startsWith("image/") == true ||
+            uri.endsWith(".jpg", true) || uri.endsWith(".jpeg", true) ||
+            uri.endsWith(".png", true) || uri.endsWith(".webp", true)
+
+        if (isImage) {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            runCatching {
+                context.contentResolver.openInputStream(parsedUri)?.use {
+                    BitmapFactory.decodeStream(it, null, bounds)
+                }
+            }
+            val title = parsedUri.lastPathSegment?.substringAfterLast('/')?.substringBefore('?') ?: "Image"
+            return MediaItem(
+                id = uri.hashCode().toString(),
+                uri = uri,
+                type = MediaType.IMAGE,
+                displayName = title,
+                durationMs = 8_000L,
+                width = bounds.outWidth.coerceAtLeast(0),
+                height = bounds.outHeight.coerceAtLeast(0),
+            )
+        }
+
         val retriever = android.media.MediaMetadataRetriever()
         val item = runCatching {
-            retriever.setDataSource(context, android.net.Uri.parse(uri))
+            retriever.setDataSource(context, parsedUri)
             fun meta(key: Int) = retriever.extractMetadata(key)
             val durationMs = meta(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
             val hasVideo = meta(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO) == "yes"
@@ -168,26 +185,17 @@ class MediaStoreDataSource @Inject constructor(
         return item
     }
 
-    /**
-     * Copies a bundled `res/raw/<rawResName>` audio asset (the built-in music/SFX library)
-     * into the app cache and returns a `file://` URI for it. Resolved by name via
-     * [android.content.res.Resources.getIdentifier] so `:core:data` needs no compile-time
-     * dependency on the app module's `R`. Returns null if the resource is missing.
-     */
     fun resolveLibraryTrack(rawResName: String): String? {
         val resId = context.resources.getIdentifier(rawResName, "raw", context.packageName)
         if (resId == 0) return null
         return runCatching {
-            val outFile = java.io.File(context.cacheDir, "library_$rawResName.wav")
+            val outFile = File(context.cacheDir, "library_$rawResName.wav")
             if (!outFile.exists() || outFile.length() == 0L) {
                 context.resources.openRawResource(resId).use { input ->
                     outFile.outputStream().use { output -> input.copyTo(output) }
                 }
             }
-            android.net.Uri.fromFile(outFile).toString()
+            Uri.fromFile(outFile).toString()
         }.getOrNull()
     }
-
-    @Suppress("unused")
-    private val sdkInt = Build.VERSION.SDK_INT
 }
