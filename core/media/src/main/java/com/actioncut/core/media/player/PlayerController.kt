@@ -12,25 +12,14 @@ import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.Timeline
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.delay
 import javax.inject.Inject
 
-/**
- * Thin wrapper around an [ExoPlayer] for the editor preview. Builds a sequential preview
- * playlist from the main video lane (each clip trimmed to its source window) and exposes
- * playback as observable [PlaybackState].
- *
- * Not a singleton: one instance per editor screen, released in the ViewModel's onCleared.
- *
- * Preview fidelity note: ExoPlayer applies playback speed globally, so per-clip speed and
- * GPU effects are approximated in preview; the authoritative render happens at export time
- * via [com.actioncut.core.media.export.Media3VideoExporter].
- */
 class PlayerController @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
@@ -39,18 +28,11 @@ class PlayerController @Inject constructor(
         repeatMode = Player.REPEAT_MODE_OFF
     }
 
-    /**
-     * Secondary player for the AUDIO lane (music / extracted audio), mixed alongside the
-     * video preview. Kept time-aligned to [player] (best-effort: assumes audio clips run
-     * from the start of the timeline; arbitrary mid-timeline offsets are approximate).
-     */
     private val audioPlayer: ExoPlayer = ExoPlayer.Builder(context).build().apply {
         playWhenReady = false
         repeatMode = Player.REPEAT_MODE_OFF
     }
 
-    /** Player for picture-in-picture overlay video clips; its surface is rendered by the
-     *  preview. Muted in preview (PiP audio is mixed at export). */
     val pipPlayer: ExoPlayer = ExoPlayer.Builder(context).build().apply {
         playWhenReady = false
         repeatMode = Player.REPEAT_MODE_OFF
@@ -60,41 +42,47 @@ class PlayerController @Inject constructor(
     private val _state = MutableStateFlow(PlaybackState())
     val state: StateFlow<PlaybackState> = _state.asStateFlow()
 
-    /** Per-playlist-item volume (0..1 for ExoPlayer), kept in sync with the timeline. */
     private var clipVolumes: List<Float> = emptyList()
-
-    /** The video-lane clips currently loaded in [player], parallel to its media items. Used to
-     *  compute each clip's live preview effect chain (colour/filter/adjust/crop/rotate). */
     private var previewClips: List<Clip> = emptyList()
-
-    /** Fingerprint of the last-applied preview effect chain, to skip redundant `setVideoEffects`. */
     private var lastPreviewSignature: String? = null
 
-    // Cumulative *timeline* start offset (ms) of each preview item per lane, so we can map
-    // ExoPlayer's per-item position to an absolute timeline position (and back). Without
-    // this the playhead snaps to 0 at every clip boundary (the "jumps back to first" bug).
     private var videoStartsMs: List<Long> = emptyList()
     private var audioStartsMs: List<Long> = emptyList()
     private var pipStartsMs: List<Long> = emptyList()
-    private var totalPreviewMs: Long = 0L
+
+    var totalTimelineMs: Long = 0L
+    var totalVideoMs: Long = 0L
+    var totalAudioMs: Long = 0L
+    private var isPlayingAudioOnly: Boolean = false
 
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             mirrorSecondaryPlayers(isPlaying)
             pushState()
         }
+
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
-                audioPlayer.pause()
-                pipPlayer.pause()
+                // வீடியோ முடிந்தாலும் ஆடியோ நேரம் மீதமிருந்தால் ஆடியோவை நிறுத்தாமல் பிளே செய்ய அனுமதித்தல்
+                if (masterPositionMs() < totalTimelineMs && (audioPlayer.isPlaying || audioPlayer.playbackState == Player.STATE_READY)) {
+                    isPlayingAudioOnly = true
+                    pushState()
+                    return
+                } else {
+                    audioPlayer.pause()
+                    pipPlayer.pause()
+                    isPlayingAudioOnly = false
+                }
             }
             pushState()
         }
+
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             applyCurrentVolume()
             applyPreviewEffects()
             pushState()
         }
+
         override fun onPositionDiscontinuity(
             oldPosition: Player.PositionInfo,
             newPosition: Player.PositionInfo,
@@ -102,17 +90,30 @@ class PlayerController @Inject constructor(
         ) = pushState()
     }
 
-    init {
-        player.addListener(listener)
+    private val audioListener = object : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) {
+                if (masterPositionMs() >= totalTimelineMs) {
+                    isPlayingAudioOnly = false
+                    player.pause()
+                    pushState()
+                }
+            }
+        }
     }
 
-    /** Rebuilds the preview playlist from [timeline]'s main video lane. */
+    init {
+        player.addListener(listener)
+        audioPlayer.addListener(audioListener)
+    }
+
     fun setTimeline(timeline: Timeline) {
         val clips = previewClips(timeline)
         previewClips = clips
         clipVolumes = clips.map { it.volume }
         videoStartsMs = cumulativeStarts(clips.map { previewDurationMs(it) })
-        totalPreviewMs = (videoStartsMs.lastOrNull() ?: 0L) + (clips.lastOrNull()?.let { previewDurationMs(it) } ?: 0L)
+        totalVideoMs = (videoStartsMs.lastOrNull() ?: 0L) + (clips.lastOrNull()?.let { previewDurationMs(it) } ?: 0L)
+
         val items = clips.map { clip ->
             val builder = MediaItem.Builder().setUri(clip.mediaUri)
             if (clip.type == ClipType.IMAGE) {
@@ -135,22 +136,24 @@ class PlayerController @Inject constructor(
         applyCurrentVolume()
         applyPreviewEffects(force = true)
 
-        // Build the audio-lane playlist for the secondary player.
         val audioClips = audioClipsOf(timeline)
         audioStartsMs = cumulativeStarts(audioClips.map { previewDurationMs(it) })
+        totalAudioMs = (audioStartsMs.lastOrNull() ?: 0L) + (audioClips.lastOrNull()?.let { previewDurationMs(it) } ?: 0L)
         audioPlayer.setMediaItems(audioClips.map { it.toClippedMediaItem() })
         audioPlayer.prepare()
 
-        // Build the PiP playlist (overlay video clips).
         val pipClips = pipClipsOf(timeline)
         pipStartsMs = cumulativeStarts(pipClips.map { previewDurationMs(it) })
         pipPlayer.setMediaItems(pipClips.map { it.toClippedMediaItem() })
         pipPlayer.prepare()
 
+        // வீடியோ மற்றும் ஆடியோ இரண்டில் எது அதிக நேரமோ அதுவே முழு கால அளவு
+        totalTimelineMs = maxOf(totalVideoMs, totalAudioMs, timeline.durationMs)
+        isPlayingAudioOnly = false
+
         pushState()
     }
 
-    /** Preview footprint (ms) of a clip on the timeline — used to map per-item positions. */
     private fun previewDurationMs(clip: Clip): Long = clip.timelineDurationMs.coerceAtLeast(1L)
 
     private fun cumulativeStarts(durations: List<Long>): List<Long> {
@@ -158,14 +161,26 @@ class PlayerController @Inject constructor(
         return durations.map { val start = acc; acc += it; start }
     }
 
-    /** Absolute timeline position (ms) of the master video player across the whole playlist. */
     fun masterPositionMs(): Long {
-        if (player.mediaItemCount == 0) return 0L
+        // வீடியோ முடிந்த பிறகு ஆடியோவின் நேரத்தைக் கணக்கிட்டு பிளேஹெட்டை முன்னோக்கி நகர்த்துதல்
+        if (isPlayingAudioOnly || (player.mediaItemCount > 0 && player.playbackState == Player.STATE_ENDED)) {
+            if (audioPlayer.mediaItemCount > 0) {
+                val audioBase = audioStartsMs.getOrElse(audioPlayer.currentMediaItemIndex) { 0L }
+                val audioPos = (audioBase + audioPlayer.currentPosition.coerceAtLeast(0L)).coerceAtLeast(0L)
+                return audioPos.coerceAtMost(totalTimelineMs)
+            }
+        }
+        if (player.mediaItemCount == 0) {
+            if (audioPlayer.mediaItemCount > 0) {
+                val audioBase = audioStartsMs.getOrElse(audioPlayer.currentMediaItemIndex) { 0L }
+                return (audioBase + audioPlayer.currentPosition.coerceAtLeast(0L)).coerceAtLeast(0L)
+            }
+            return 0L
+        }
         val base = videoStartsMs.getOrElse(player.currentMediaItemIndex) { 0L }
         return (base + player.currentPosition.coerceAtLeast(0L)).coerceAtLeast(0L)
     }
 
-    /** Seeks [p] to an absolute timeline position, resolving the right playlist item. */
     private fun seekAbsolute(p: ExoPlayer, starts: List<Long>, absMs: Long) {
         if (p.mediaItemCount == 0) return
         var idx = 0
@@ -203,49 +218,41 @@ class PlayerController @Inject constructor(
     private fun mirrorSecondaryPlayers(isPlaying: Boolean) {
         val master = masterPositionMs()
         if (audioPlayer.mediaItemCount > 0) {
-            if (isPlaying) { seekAbsolute(audioPlayer, audioStartsMs, master); audioPlayer.play() } else audioPlayer.pause()
+            if (isPlaying) {
+                seekAbsolute(audioPlayer, audioStartsMs, master)
+                audioPlayer.play()
+            } else {
+                audioPlayer.pause()
+            }
         }
         if (pipPlayer.mediaItemCount > 0) {
-            if (isPlaying) { seekAbsolute(pipPlayer, pipStartsMs, master); pipPlayer.play() } else pipPlayer.pause()
+            if (isPlaying) {
+                seekAbsolute(pipPlayer, pipStartsMs, master)
+                pipPlayer.play()
+            } else {
+                pipPlayer.pause()
+            }
         }
     }
 
-    /**
-     * Updates preview volume/mute without rebuilding the playlist (used for non-structural
-     * volume edits), so muting a clip is reflected live in the preview.
-     */
     fun updateVolumes(timeline: Timeline) {
         clipVolumes = previewClips(timeline).map { it.volume }
         applyCurrentVolume()
     }
 
-    /**
-     * Refreshes the LIVE preview effect chain (colour / LUT filter / adjustments / stylized GL
-     * effects / crop / rotate) without rebuilding the playlist, so tapping a filter, dragging an
-     * adjustment slider, or toggling an effect is visible in the preview immediately (WYSIWYG).
-     */
     fun refreshPreviewEffects(timeline: Timeline) {
         previewClips = previewClips(timeline)
         applyPreviewEffects()
     }
 
-    /** Applies the current video clip's preview effects to [player] via `setVideoEffects`. */
     private fun applyPreviewEffects(force: Boolean = false) {
         val clip = previewClips.getOrNull(player.currentMediaItemIndex)
         val signature = previewEffectSignature(clip)
-        // Skip when the visual effect chain is unchanged (e.g. a volume-only edit), so dragging
-        // the volume slider doesn't trigger a needless GL rebuild + seek nudge on every update.
         if (!force && signature == lastPreviewSignature) return
         lastPreviewSignature = signature
         val effects: List<Effect> = clip?.let { EffectMapper.previewVideoEffects(it) } ?: emptyList()
-        // Guard: GL effect setup can throw on some devices/surfaces; never let it crash preview.
         runCatching {
             player.setVideoEffects(effects)
-            // A paused frame is NOT reprocessed when the effect chain changes, and a seek to the
-            // SAME position is a no-op (consecutive seeks also get coalesced). So do a SINGLE seek
-            // one millisecond away — the same displayed frame, but re-rendered through the new
-            // effect pipeline — making the filter/adjustment visible immediately (WYSIWYG). The
-            // sub-frame playhead drift is imperceptible.
             if (!player.isPlaying && player.playbackState == Player.STATE_READY) {
                 val pos = player.currentPosition.coerceAtLeast(0L)
                 val dur = player.duration.takeIf { it > 0L } ?: (pos + 100L)
@@ -255,7 +262,6 @@ class PlayerController @Inject constructor(
         }
     }
 
-    /** Stable fingerprint of the fields that affect a clip's preview effect chain. */
     private fun previewEffectSignature(clip: Clip?): String = if (clip == null) "" else
         "${clip.id}|${clip.rotationDegrees}|${clip.transform.rotationDegrees}|" +
             "${clip.crop}|${clip.adjustments}|${clip.filter}|${clip.effects}"
@@ -266,33 +272,58 @@ class PlayerController @Inject constructor(
 
     private fun applyCurrentVolume() {
         val index = player.currentMediaItemIndex
-        // ExoPlayer volume is 0..1; clamp (the model allows boost up to 2 for export only).
         player.volume = clipVolumes.getOrElse(index) { 1f }.coerceIn(0f, 1f)
     }
 
     fun play() {
-        if (player.playbackState == Player.STATE_ENDED) seekTo(0)
-        player.play()
+        val pos = masterPositionMs()
+        if (pos >= totalTimelineMs) {
+            seekTo(0)
+        }
+        if (pos < totalVideoMs) {
+            isPlayingAudioOnly = false
+            player.play()
+        } else {
+            isPlayingAudioOnly = true
+        }
+        if (audioPlayer.mediaItemCount > 0) {
+            audioPlayer.play()
+        }
+        pushState()
     }
 
     fun pause() {
+        isPlayingAudioOnly = false
         player.pause()
+        audioPlayer.pause()
+        pipPlayer.pause()
+        pushState()
     }
 
     fun togglePlayPause() {
-        if (player.isPlaying) {
-            player.pause()
+        val isAnyPlaying = player.isPlaying || audioPlayer.isPlaying || isPlayingAudioOnly
+        if (isAnyPlaying) {
+            pause()
         } else {
-            // ExoPlayer's play() does not auto-restart from a finished playlist, so a tap
-            // on play after the preview reaches the end would do nothing — rewind first.
-            if (player.playbackState == Player.STATE_ENDED) seekTo(0)
-            player.play()
+            play()
         }
     }
 
     fun seekTo(positionMs: Long) {
-        val pos = positionMs.coerceAtLeast(0)
-        seekAbsolute(player, videoStartsMs, pos)
+        val pos = positionMs.coerceIn(0, totalTimelineMs)
+        if (pos <= totalVideoMs) {
+            isPlayingAudioOnly = false
+            seekAbsolute(player, videoStartsMs, pos)
+        } else {
+            isPlayingAudioOnly = true
+            // வீடியோ முடிந்த பகுதிக்கு அப்பால் நகர்த்தினால் கடைசி ஸ்கோர்கார்டு பிரேமை திரையில் வைத்திருத்தல்
+            if (player.mediaItemCount > 0) {
+                val lastIdx = player.mediaItemCount - 1
+                val lastStart = videoStartsMs.getOrElse(lastIdx) { 0L }
+                val lastItemDur = (totalVideoMs - lastStart).coerceAtLeast(1L)
+                player.seekTo(lastIdx, (lastItemDur - 10L).coerceAtLeast(0L))
+            }
+        }
         seekAbsolute(audioPlayer, audioStartsMs, pos)
         seekAbsolute(pipPlayer, pipStartsMs, pos)
         pushState()
@@ -305,19 +336,14 @@ class PlayerController @Inject constructor(
         pipPlayer.playbackParameters = params
     }
 
-    /** Emits the live *absolute* playhead position while playing (collected on the main thread). */
     fun positionFlow(intervalMs: Long = 33L): Flow<Long> = flow {
         while (true) {
             val master = masterPositionMs()
-            // Keep the secondary lanes time-aligned with the master, comparing *absolute*
-            // positions so a video clip boundary doesn't yank the audio back to its start.
-            if (audioPlayer.isPlaying) {
+            if (!isPlayingAudioOnly && audioPlayer.isPlaying) {
                 val audioAbs = audioStartsMs.getOrElse(audioPlayer.currentMediaItemIndex) { 0L } + audioPlayer.currentPosition
-                if (kotlin.math.abs(audioAbs - master) > 300) seekAbsolute(audioPlayer, audioStartsMs, master)
-            }
-            if (pipPlayer.isPlaying) {
-                val pipAbs = pipStartsMs.getOrElse(pipPlayer.currentMediaItemIndex) { 0L } + pipPlayer.currentPosition
-                if (kotlin.math.abs(pipAbs - master) > 300) seekAbsolute(pipPlayer, pipStartsMs, master)
+                if (kotlin.math.abs(audioAbs - master) > 300) {
+                    seekAbsolute(audioPlayer, audioStartsMs, master)
+                }
             }
             emit(master)
             delay(intervalMs)
@@ -326,20 +352,21 @@ class PlayerController @Inject constructor(
 
     fun release() {
         player.removeListener(listener)
+        audioPlayer.removeListener(audioListener)
         player.release()
         audioPlayer.release()
         pipPlayer.release()
     }
 
     private fun pushState() {
+        val isAnyPlaying = player.isPlaying || audioPlayer.isPlaying || isPlayingAudioOnly
+        val isEnded = masterPositionMs() >= totalTimelineMs && !isAnyPlaying
         _state.value = PlaybackState(
-            isPlaying = player.isPlaying,
-            isBuffering = player.playbackState == Player.STATE_BUFFERING,
+            isPlaying = isAnyPlaying,
+            isBuffering = player.playbackState == Player.STATE_BUFFERING || audioPlayer.playbackState == Player.STATE_BUFFERING,
             positionMs = masterPositionMs(),
-            durationMs = if (totalPreviewMs > 0L) totalPreviewMs else {
-                player.duration.let { if (it == C.TIME_UNSET) 0L else it.coerceAtLeast(0) }
-            },
-            isEnded = player.playbackState == Player.STATE_ENDED,
+            durationMs = totalTimelineMs,
+            isEnded = isEnded,
         )
     }
 }
