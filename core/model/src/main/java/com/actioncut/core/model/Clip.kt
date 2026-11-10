@@ -36,6 +36,7 @@ enum class ClipType {
  * @property text Text payload when [type] == TEXT.
  * @property audioFade Fade-in/out envelope.
  * @property transitionToNext Transition blended into the following clip.
+ * @property scorecard Optional dynamic cricket scorecard metadata & keyframes.
  */
 @Serializable
 data class Clip(
@@ -61,6 +62,7 @@ data class Clip(
     val transitionToNext: Transition? = null,
     val keyframes: List<Keyframe> = emptyList(),
     val speedRamp: SpeedRamp = SpeedRamp.NONE,
+    val scorecard: ScorecardClipData? = null,
 ) {
     /** Length occupied on the timeline. */
     val timelineDurationMs: Long get() = (timelineEndMs - timelineStartMs).coerceAtLeast(0L)
