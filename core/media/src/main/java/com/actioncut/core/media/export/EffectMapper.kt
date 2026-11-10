@@ -1,18 +1,20 @@
 package com.actioncut.core.media.export
 
-import androidx.media3.common.Effect
-import androidx.media3.common.C
-import androidx.media3.common.audio.AudioProcessor
-import androidx.media3.common.audio.ChannelMixingAudioProcessor
-import androidx.media3.common.audio.ChannelMixingMatrix
-import androidx.media3.common.audio.SonicAudioProcessor
-import androidx.media3.common.audio.SpeedProvider
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.AbsoluteSizeSpan
 import android.text.style.ForegroundColorSpan
+import androidx.media3.common.C
+import androidx.media3.common.Effect
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.ChannelMixingAudioProcessor
+import androidx.media3.common.audio.ChannelMixingMatrix
+import androidx.media3.common.audio.SonicAudioProcessor
+import androidx.media3.common.audio.SpeedProvider
+import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.Brightness
 import androidx.media3.effect.Contrast
 import androidx.media3.effect.Crop
@@ -27,39 +29,24 @@ import androidx.media3.effect.SingleColorLut
 import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.effect.TextOverlay
 import androidx.media3.effect.TextureOverlay
-import com.google.common.collect.ImmutableList
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.CropRect
+import com.actioncut.core.model.ScorecardClipData
 import com.actioncut.core.model.SpeedRamp
 import com.actioncut.core.model.SpeedRamps
 import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.VisualEffectType
+import com.google.common.collect.ImmutableList
 
-/**
- * Translates a [Clip]'s editing properties into a Media3 GPU [Effect] chain (and audio
- * processors) applied at export. This is the bridge between the editor's data model and
- * the hardware-accelerated render pipeline.
- *
- * Effect order is deliberate: geometry (rotate → crop) → colour (brightness → contrast →
- * saturation → warmth → LUT) → stylistic (blur) → speed → output [Presentation] last so
- * every clip is normalized to the same export dimensions for concatenation.
- */
 object EffectMapper {
 
     fun videoEffects(clip: Clip, targetWidth: Int, targetHeight: Int): List<Effect> =
         videoEffects(clip, targetWidth, targetHeight, emptyList())
 
-    /**
-     * Effects for the LIVE editor preview (colour, LUT filter, adjustments, stylized GL
-     * effects, crop, rotate). Excludes the export-only output [Presentation] scaling,
-     * Compose-rendered overlays, and speed (previewed via PlaybackParameters). Applied to the
-     * ExoPlayer via `setVideoEffects` so edits are visible immediately.
-     */
     fun previewVideoEffects(clip: Clip): List<Effect> {
         val effects = mutableListOf<Effect>()
 
-        // --- Geometry ---
         val rotation = clip.rotationDegrees + clip.transform.rotationDegrees
         if (rotation % 360f != 0f) {
             effects += ScaleAndRotateTransformation.Builder()
@@ -68,7 +55,6 @@ object EffectMapper {
         }
         clip.crop?.takeUnless { it.isFull }?.let { effects += cropEffect(it) }
 
-        // --- Colour adjustments ---
         val adj = clip.adjustments
         if (adj.brightness != 0f) effects += Brightness(adj.brightness.coerceIn(-1f, 1f))
         if (adj.contrast != 0f) effects += Contrast(adj.contrast.coerceIn(-1f, 1f))
@@ -85,14 +71,12 @@ object EffectMapper {
                 .build()
         }
 
-        // --- Filter (real 3D LUT) ---
         clip.filter?.let { filter ->
             FilterLuts.cubeFor(filter.id, filter.intensity)?.let { cube ->
                 effects += SingleColorLut.createFromCube(cube)
             }
         }
 
-        // --- Stylistic visual effects ---
         clip.effects.forEach { ve -> visualEffect(ve)?.let { effects += it } }
 
         return effects
@@ -107,7 +91,6 @@ object EffectMapper {
     ): List<Effect> {
         val effects = previewVideoEffects(clip).toMutableList()
 
-        // --- Speed (video): constant or a variable ramp curve ---
         if (clip.type == ClipType.VIDEO) {
             if (clip.speedRamp != SpeedRamp.NONE) {
                 val durUs = (clip.sourceDurationMs.takeIf { it > 0L } ?: clip.timelineDurationMs) * 1000L
@@ -117,25 +100,27 @@ object EffectMapper {
             }
         }
 
-        // --- Output scaling ---
         effects += Presentation.createForWidthAndHeight(
             targetWidth,
             targetHeight,
             presentationLayout,
         )
 
-        // --- Sticker / text overlays (applied last, on the framed output) ---
+        // டைனமிக் ஸ்கோர்கார்டு Keyframe Overlay-ஐ Export விளைவில் இணைத்தல்
+        if (clip.scorecard != null) {
+            val scOverlay = DynamicScorecardOverlay(clip.id, clip.scorecard!!)
+            effects += OverlayEffect(ImmutableList.of(scOverlay))
+        }
+
         overlayEffect(clip, overlays, targetWidth)?.let { effects += it }
         return effects
     }
 
-    /** Builds a Media3 [OverlayEffect] for sticker/text clips overlapping [clip]'s span. */
     private fun overlayEffect(clip: Clip, overlays: List<Clip>, targetWidth: Int): Effect? {
         val overlapping = overlays.filter { ov ->
             ov.timelineStartMs < clip.timelineEndMs && ov.timelineEndMs > clip.timelineStartMs
         }
         val active = overlapping.filter { !it.text?.text.isNullOrEmpty() }
-        // Image stickers (e.g. the cricket score card): a media URI and no text.
         val images = overlapping.filter { it.mediaUri != null && it.text?.text.isNullOrEmpty() }
         if (active.isEmpty() && images.isEmpty()) return null
 
@@ -160,12 +145,6 @@ object EffectMapper {
         return OverlayEffect(ImmutableList.copyOf(textureOverlays))
     }
 
-    /**
-     * A timed bitmap overlay for an image sticker. The sticker's [Clip.transform] scale is the
-     * fraction of the output frame WIDTH it covers (same meaning as in the editor preview); Media3
-     * draws a bitmap overlay at 1:1 output pixels, so scale = (frame width * fraction) / bitmap width.
-     * Only `file:` URIs written by the app (e.g. score cards) are supported.
-     */
     private fun imageOverlay(ov: Clip, clip: Clip, targetWidth: Int): TextureOverlay? {
         val path = ov.mediaUri?.let { Uri.parse(it).path } ?: return null
         val bitmap = BitmapFactory.decodeFile(path) ?: return null
@@ -184,11 +163,6 @@ object EffectMapper {
         return TimedBitmapOverlay(bitmap, visible, hidden, startUs, endUs)
     }
 
-    /**
-     * Per-clip audio processors. Keeps audio in sync when a clip's speed changes and
-     * applies per-clip volume/gain. A muted clip (volume == 0) is handled by the exporter
-     * via `EditedMediaItem.setRemoveAudio(true)` instead, so it's skipped here.
-     */
     fun audioProcessors(clip: Clip): List<AudioProcessor> {
         val processors = mutableListOf<AudioProcessor>()
         if (clip.speed != 1f && (clip.type == ClipType.VIDEO || clip.type == ClipType.AUDIO)) {
@@ -197,7 +171,6 @@ object EffectMapper {
         val volume = clip.volume
         if (volume != 1f && volume != 0f) {
             processors += ChannelMixingAudioProcessor().apply {
-                // Cover both mono and stereo inputs; the processor picks by channel count.
                 putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(volume))
                 putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(volume))
             }
@@ -206,7 +179,6 @@ object EffectMapper {
     }
 
     private fun cropEffect(crop: CropRect): Crop {
-        // Normalized crop (0..1, origin top-left) -> Media3 NDC (-1..1, origin centre, y-up).
         val left = crop.left * 2f - 1f
         val right = crop.right * 2f - 1f
         val top = 1f - crop.top * 2f
@@ -216,11 +188,8 @@ object EffectMapper {
 
     private fun visualEffect(effect: VisualEffect): Effect? = when (effect.type) {
         VisualEffectType.GAUSSIAN_BLUR,
-        VisualEffectType.BOKEH,
-        -> GaussianBlur(1f + effect.intensity * 8f)
+        VisualEffectType.BOKEH -> GaussianBlur(1f + effect.intensity * 8f)
         VisualEffectType.RADIAL_BLUR -> GaussianBlur(1f + effect.intensity * 6f)
-        // Stylized/retro looks (glitch, RGB split, grain, VHS, pixelate, light leak,
-        // shake, zoom pulse) render through a custom GL fragment shader.
         else -> Shaders.fragmentFor(effect.type)?.let { frag ->
             ShaderEffect(frag, effect.intensity.coerceIn(0f, 1f))
         }
@@ -228,11 +197,27 @@ object EffectMapper {
 }
 
 /**
- * A [SpeedProvider] that samples a [SpeedRamp] curve into piecewise-constant 100ms steps,
- * giving Media3 a variable speed across the clip's source duration. Speed is held constant
- * within each step (matching [getNextSpeedChangeTimeUs] boundaries) so the GL pipeline can
- * resample frames cleanly.
+ * எக்ஸ்போர்ட் செய்யப்படும் வீடியோவின் ஒவ்வொரு நொடிக் கணக்கிலும்
+ * Keyframe-க்கு ஏற்ப அம்பு மற்றும் பிளேயர் விவரங்களை துல்லியமாக மாற்றும் Overlay
  */
+private class DynamicScorecardOverlay(
+    private val clipId: String,
+    private val data: ScorecardClipData
+) : BitmapOverlay() {
+
+    private val defaultSettings = OverlaySettings.Builder().build()
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        val timeInClipMs = presentationTimeUs / 1000L
+        return ScorecardBridge.getActiveBitmap(clipId, data, timeInClipMs)
+            ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+    }
+
+    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
+        return defaultSettings
+    }
+}
+
 private class RampSpeedProvider(
     private val ramp: SpeedRamp,
     private val base: Float,
