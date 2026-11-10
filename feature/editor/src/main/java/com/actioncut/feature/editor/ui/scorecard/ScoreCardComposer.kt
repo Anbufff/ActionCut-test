@@ -2,6 +2,7 @@ package com.actioncut.feature.editor.ui.scorecard
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
@@ -12,6 +13,7 @@ import android.graphics.Shader
 import android.graphics.Typeface
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 
 data class ComposedCard(val bitmap: Bitmap, val rowRects: List<RectF>)
 
@@ -26,13 +28,14 @@ object ScoreCardComposer {
         player: Player?,
         photo: Bitmap?,
         fallbackName: String? = null,
+        timeInClipMs: Long = 0L,
     ): ComposedCard {
         val out = Bitmap.createBitmap(CANVAS_W.toInt(), CANVAS_H.toInt(), Bitmap.Config.ARGB_8888)
         val c = Canvas(out)
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
-        // 1. மைதானப் புல்வெளி பின்னணி
+        // 1. கிரிக்கெட் மைதானப் புல்வெளி பின்னணி
         p.shader = LinearGradient(0f, 0f, 0f, CANVAS_H, 0xFF0E2E11.toInt(), 0xFF050F06.toInt(), Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, CANVAS_W, CANVAS_H, p)
         p.shader = null
@@ -45,17 +48,18 @@ object ScoreCardComposer {
             sx += 70f
         }
 
-        // 2. இடதுபுறம்: ஸ்கோர்கார்டு வரிகள்
-        val listLeft = 32f
-        val listWidth = 835f
+        // 2. இடதுபுறம்: ஸ்கோர்கார்டு வரிகள் (சரியான அகலம் மற்றும் இடைவெளி)
+        val listLeft = 24f
+        val listWidth = 820f
         val listTop = 32f
         val listBottom = CANVAS_H - 32f
         val listHeight = listBottom - listTop
 
-        val cardW = card.bitmap.width.toFloat()
+        // துல்லியமான உயரக் கணக்கீடு (Coordinate drift முற்றிலுமாக தவிர்க்கப்பட்டுள்ளது)
         val rowHeights = card.rows.map { r ->
-            val rh = (r.srcBottom - r.srcTop).toFloat()
-            listWidth * (rh / cardW)
+            val srcW = r.rect.width().coerceAtLeast(1f)
+            val srcH = r.rect.height().coerceAtLeast(1f)
+            listWidth * (srcH / srcW)
         }
         val gap = 6f
         val totalH = rowHeights.sum() + gap * (card.rows.size - 1)
@@ -94,11 +98,11 @@ object ScoreCardComposer {
 
             c.drawBitmap(card.bitmap, srcRect, dstRect, bmpPaint)
 
-            // தேர்ந்தெடுக்கப்பட்ட வரியின் சிவப்புக் கோடு
+            // தேர்ந்தெடுக்கப்பட்ட வரிக்கு துல்லியமான சிவப்புக் கோடு
             if (i == selected) {
                 p.style = Paint.Style.STROKE
-                p.strokeWidth = 5f
-                p.color = 0xFFFF1744.toInt()
+                p.strokeWidth = 4.5f
+                p.color = 0xFFFF0000.toInt()
                 c.drawRoundRect(rowRect, 10f, 10f, p)
                 p.style = Paint.Style.FILL
             }
@@ -107,11 +111,11 @@ object ScoreCardComposer {
         }
         c.restore()
 
-        // 3. வலதுபுற பிளேயர் பேனல்
-        val pl = 902f
-        val pr = CANVAS_W - 32f
-        val pt = 32f
-        val pb = CANVAS_H - 32f
+        // 3. வலதுபுறம்: பிளேயர் பேனல்
+        val pl = 930f // அம்பு கார்டுக்குள் நுழையாமல் இருக்க இடைவெளி சீரமைக்கப்பட்டது
+        val pr = CANVAS_W - 28f
+        val pt = 28f
+        val pb = CANVAS_H - 28f
         val pw = pr - pl
         val ph = pb - pt
         val panelRect = RectF(pl, pt, pr, pb)
@@ -143,6 +147,7 @@ object ScoreCardComposer {
             c.drawBitmap(playerBmp, null, RectF(dl, pt, dl + dw, pt + dh), bmpPaint)
         }
 
+        // கீழ்புற இருண்ட நிழல்
         val barTop = pb - ph * 0.32f
         p.shader = LinearGradient(0f, barTop, 0f, pb, 0x00000000, 0xFA02060F.toInt(), Shader.TileMode.CLAMP)
         c.drawRect(pl, barTop, pr, pb, p)
@@ -194,36 +199,43 @@ object ScoreCardComposer {
         c.drawRoundRect(panelRect, corner, corner, p)
         p.style = Paint.Style.FILL
 
-        // 4. HTML எடிட்டரில் உள்ள அசல் 3D Red Arrow Mark டிசைன்
+        // 4. HTML எடிட்டரில் உள்ள அசல் சிவப்பு அம்பு (அனிமேஷன் துடிப்புடன்)
         if (selected in renderedRowRects.indices) {
             val targetRow = renderedRowRects[selected]
             val cy = targetRow.centerY()
-            val tipX = targetRow.right + 4f
-            val tailX = pl + pw * 0.12f // வலது பேனலுக்குள் நுழையும் வால் பகுதி
-            val arrowH = min(targetRow.height() * 0.95f, 75f)
-            val headLen = arrowH * 0.82f
-            val stemH = arrowH * 0.36f
+
+            // வீடியோ ஓடும்போது அம்பு இயல்பாக துடிக்கும் அனிமேஷன் (Bounce Effect)
+            val bounce = (sin(timeInClipMs / 180.0) * 6.0).toFloat()
+            val tipX = targetRow.right + 4f + bounce
+
+            // அம்பு அளவுகள் (கார்டுக்கு வெளியே அழகாக அமையும்)
+            val arrowW = 54f
+            val arrowH = 36f
+            val headLen = 24f
+            val halfHeadH = arrowH / 2f
+            val halfStemH = 7.5f
+            val tailX = tipX + arrowW
 
             val arrowPath = Path().apply {
                 moveTo(tipX, cy)
-                lineTo(tipX + headLen, cy - arrowH / 2f)
-                lineTo(tipX + headLen, cy - stemH / 2f)
-                lineTo(tailX, cy - stemH / 2f)
-                lineTo(tailX, cy + stemH / 2f)
-                lineTo(tipX + headLen, cy + stemH / 2f)
-                lineTo(tipX + headLen, cy + arrowH / 2f)
+                lineTo(tipX + headLen, cy - halfHeadH)
+                lineTo(tipX + headLen, cy - halfStemH)
+                lineTo(tailX, cy - halfStemH)
+                lineTo(tailX, cy + halfStemH)
+                lineTo(tipX + headLen, cy + halfStemH)
+                lineTo(tipX + headLen, cy + halfHeadH)
                 close()
             }
 
-            // கருப்பு நிழல் மற்றும் அவுட்லைன் (3D Border)
+            // 3D கருப்பு அவுட்லைன்
             p.style = Paint.Style.STROKE
-            p.strokeWidth = 6f
+            p.strokeWidth = 3f
             p.color = 0xFF000000.toInt()
             c.drawPath(arrowPath, p)
 
-            // அசல் வைப்ரண்ட் சிவப்பு நிற நிரப்பல் (Pure Red Fill)
+            // அசல் பிரகாசமான சிவப்பு நிறம் (Pure Red #FF0000)
             p.style = Paint.Style.FILL
-            p.color = 0xFFFF1744.toInt()
+            p.color = 0xFFFF0000.toInt()
             c.drawPath(arrowPath, p)
         }
 
