@@ -119,28 +119,30 @@ fun PreviewPlayer(
                 it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs 
             }
 
-            if (activeScoreClip != null && activeScoreClip.scorecard != null) {
-                val sc = activeScoreClip.scorecard!!
-                val timeInClip = (playheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
-                val activeBmp = ScorecardManager.getActiveBitmap(activeScoreClip.id, sc, timeInClip)
+            if (activeScoreClip != null) {
+                val sc = activeScoreClip.scorecard
+                if (sc != null) {
+                    val timeInClip = (playheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
+                    val activeBmp = ScorecardManager.getActiveBitmap(activeScoreClip.id, sc, timeInClip)
 
-                if (activeBmp != null) {
-                    Image(
-                        bitmap = activeBmp.asImageBitmap(),
-                        contentDescription = "Scorecard",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pointerInput(activeScoreClip.id, playheadMs) {
-                                detectTapGestures { offset ->
-                                    val touchYFraction = offset.y / size.height
-                                    val hitRow = ScorecardManager.hitTestRow(activeScoreClip.id, touchYFraction)
-                                    if (hitRow >= 0) {
-                                        onScorecardRowTapped(activeScoreClip.id, hitRow)
+                    if (activeBmp != null) {
+                        Image(
+                            bitmap = activeBmp.asImageBitmap(),
+                            contentDescription = "Scorecard",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(activeScoreClip.id, playheadMs) {
+                                    detectTapGestures { offset ->
+                                        val touchYFraction = offset.y / size.height
+                                        val hitRow = ScorecardManager.hitTestRow(activeScoreClip.id, touchYFraction)
+                                        if (hitRow >= 0) {
+                                            onScorecardRowTapped(activeScoreClip.id, hitRow)
+                                        }
                                     }
                                 }
-                            }
-                    )
+                        )
+                    }
                 }
             }
 
