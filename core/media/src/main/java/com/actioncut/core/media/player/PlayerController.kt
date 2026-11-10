@@ -12,12 +12,17 @@ import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.Timeline
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 class PlayerController @Inject constructor(
@@ -53,58 +58,22 @@ class PlayerController @Inject constructor(
     var totalTimelineMs: Long = 0L
     var totalVideoMs: Long = 0L
     var totalAudioMs: Long = 0L
-    private var isPlayingAudioOnly: Boolean = false
+
+    // HTML Video Editor பாணியிலான மாஸ்டர் டைம்லைன் கடிகாரம் (Master Timeline Clock)
+    private var masterPlayheadMs: Long = 0L
+    private var isTimelinePlaying: Boolean = false
+    private var clockJob: Job? = null
+    private val scope = CoroutineScope(Dispatchers.Main)
 
     private val listener = object : Player.Listener {
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            mirrorSecondaryPlayers(isPlaying)
-            pushState()
-        }
-
-        override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_ENDED) {
-                // வீடியோ முடிந்தாலும் ஆடியோ நேரம் மீதமிருந்தால் ஆடியோவை நிறுத்தாமல் பிளே செய்ய அனுமதித்தல்
-                if (masterPositionMs() < totalTimelineMs && (audioPlayer.isPlaying || audioPlayer.playbackState == Player.STATE_READY)) {
-                    isPlayingAudioOnly = true
-                    pushState()
-                    return
-                } else {
-                    audioPlayer.pause()
-                    pipPlayer.pause()
-                    isPlayingAudioOnly = false
-                }
-            }
-            pushState()
-        }
-
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             applyCurrentVolume()
             applyPreviewEffects()
-            pushState()
-        }
-
-        override fun onPositionDiscontinuity(
-            oldPosition: Player.PositionInfo,
-            newPosition: Player.PositionInfo,
-            reason: Int,
-        ) = pushState()
-    }
-
-    private val audioListener = object : Player.Listener {
-        override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_ENDED) {
-                if (masterPositionMs() >= totalTimelineMs) {
-                    isPlayingAudioOnly = false
-                    player.pause()
-                    pushState()
-                }
-            }
         }
     }
 
     init {
         player.addListener(listener)
-        audioPlayer.addListener(audioListener)
     }
 
     fun setTimeline(timeline: Timeline) {
@@ -147,9 +116,9 @@ class PlayerController @Inject constructor(
         pipPlayer.setMediaItems(pipClips.map { it.toClippedMediaItem() })
         pipPlayer.prepare()
 
-        // வீடியோ மற்றும் ஆடியோ இரண்டில் எது அதிக நேரமோ அதுவே முழு கால அளவு
+        // ஆடியோ, வீடியோ மற்றும் டைம்லைன் நீளங்களில் எது அதிகமோ அதுவே முழு கால அளவு (06:12 வரை)
         totalTimelineMs = maxOf(totalVideoMs, totalAudioMs, timeline.durationMs)
-        isPlayingAudioOnly = false
+        masterPlayheadMs = 0L
 
         pushState()
     }
@@ -161,25 +130,7 @@ class PlayerController @Inject constructor(
         return durations.map { val start = acc; acc += it; start }
     }
 
-    fun masterPositionMs(): Long {
-        // வீடியோ முடிந்த பிறகு ஆடியோவின் நேரத்தைக் கணக்கிட்டு பிளேஹெட்டை முன்னோக்கி நகர்த்துதல்
-        if (isPlayingAudioOnly || (player.mediaItemCount > 0 && player.playbackState == Player.STATE_ENDED)) {
-            if (audioPlayer.mediaItemCount > 0) {
-                val audioBase = audioStartsMs.getOrElse(audioPlayer.currentMediaItemIndex) { 0L }
-                val audioPos = (audioBase + audioPlayer.currentPosition.coerceAtLeast(0L)).coerceAtLeast(0L)
-                return audioPos.coerceAtMost(totalTimelineMs)
-            }
-        }
-        if (player.mediaItemCount == 0) {
-            if (audioPlayer.mediaItemCount > 0) {
-                val audioBase = audioStartsMs.getOrElse(audioPlayer.currentMediaItemIndex) { 0L }
-                return (audioBase + audioPlayer.currentPosition.coerceAtLeast(0L)).coerceAtLeast(0L)
-            }
-            return 0L
-        }
-        val base = videoStartsMs.getOrElse(player.currentMediaItemIndex) { 0L }
-        return (base + player.currentPosition.coerceAtLeast(0L)).coerceAtLeast(0L)
-    }
+    fun masterPositionMs(): Long = masterPlayheadMs
 
     private fun seekAbsolute(p: ExoPlayer, starts: List<Long>, absMs: Long) {
         if (p.mediaItemCount == 0) return
@@ -214,26 +165,6 @@ class PlayerController @Inject constructor(
             .flatMap { it.clips }
             .filter { it.mediaUri != null && it.type == ClipType.VIDEO }
             .sortedBy { it.timelineStartMs }
-
-    private fun mirrorSecondaryPlayers(isPlaying: Boolean) {
-        val master = masterPositionMs()
-        if (audioPlayer.mediaItemCount > 0) {
-            if (isPlaying) {
-                seekAbsolute(audioPlayer, audioStartsMs, master)
-                audioPlayer.play()
-            } else {
-                audioPlayer.pause()
-            }
-        }
-        if (pipPlayer.mediaItemCount > 0) {
-            if (isPlaying) {
-                seekAbsolute(pipPlayer, pipStartsMs, master)
-                pipPlayer.play()
-            } else {
-                pipPlayer.pause()
-            }
-        }
-    }
 
     fun updateVolumes(timeline: Timeline) {
         clipVolumes = previewClips(timeline).map { it.volume }
@@ -275,25 +206,21 @@ class PlayerController @Inject constructor(
         player.volume = clipVolumes.getOrElse(index) { 1f }.coerceIn(0f, 1f)
     }
 
+    /**
+     * HTML எடிட்டர் பாணியில் ஆடியோ முடியும் வரை தொடர்ந்து பிளே செய்யும் செயல்பாடு
+     */
     fun play() {
-        val pos = masterPositionMs()
-        if (pos >= totalTimelineMs) {
+        if (masterPlayheadMs >= totalTimelineMs) {
             seekTo(0)
         }
-        if (pos < totalVideoMs) {
-            isPlayingAudioOnly = false
-            player.play()
-        } else {
-            isPlayingAudioOnly = true
-        }
-        if (audioPlayer.mediaItemCount > 0) {
-            audioPlayer.play()
-        }
+        isTimelinePlaying = true
+        startTimelineClock()
         pushState()
     }
 
     fun pause() {
-        isPlayingAudioOnly = false
+        isTimelinePlaying = false
+        clockJob?.cancel()
         player.pause()
         audioPlayer.pause()
         pipPlayer.pause()
@@ -301,8 +228,7 @@ class PlayerController @Inject constructor(
     }
 
     fun togglePlayPause() {
-        val isAnyPlaying = player.isPlaying || audioPlayer.isPlaying || isPlayingAudioOnly
-        if (isAnyPlaying) {
+        if (isTimelinePlaying) {
             pause()
         } else {
             play()
@@ -310,23 +236,66 @@ class PlayerController @Inject constructor(
     }
 
     fun seekTo(positionMs: Long) {
-        val pos = positionMs.coerceIn(0, totalTimelineMs)
-        if (pos <= totalVideoMs) {
-            isPlayingAudioOnly = false
-            seekAbsolute(player, videoStartsMs, pos)
+        masterPlayheadMs = positionMs.coerceIn(0, totalTimelineMs)
+        syncMediaPlayersWithTime(masterPlayheadMs)
+        pushState()
+    }
+
+    private fun syncMediaPlayersWithTime(posMs: Long) {
+        // வீடியோ உள்ள பகுதியில் வீடியோ இயங்கும்; வீடியோ முடிந்த பகுதியில் கடைசி பிரேம் நிலைத்து நிற்கும்
+        if (posMs < totalVideoMs) {
+            seekAbsolute(player, videoStartsMs, posMs)
+            if (isTimelinePlaying && !player.isPlaying) {
+                player.play()
+            }
         } else {
-            isPlayingAudioOnly = true
-            // வீடியோ முடிந்த பகுதிக்கு அப்பால் நகர்த்தினால் கடைசி ஸ்கோர்கார்டு பிரேமை திரையில் வைத்திருத்தல்
             if (player.mediaItemCount > 0) {
                 val lastIdx = player.mediaItemCount - 1
                 val lastStart = videoStartsMs.getOrElse(lastIdx) { 0L }
                 val lastItemDur = (totalVideoMs - lastStart).coerceAtLeast(1L)
-                player.seekTo(lastIdx, (lastItemDur - 10L).coerceAtLeast(0L))
+                player.seekTo(lastIdx, (lastItemDur - 5L).coerceAtLeast(0L))
+                player.pause()
             }
         }
-        seekAbsolute(audioPlayer, audioStartsMs, pos)
-        seekAbsolute(pipPlayer, pipStartsMs, pos)
-        pushState()
+
+        // ஆடியோ எப்போதுமே தனது இடத்திற்கு ஏற்ப சரியாக ஒலிக்கச் செய்தல்
+        if (posMs < totalAudioMs) {
+            seekAbsolute(audioPlayer, audioStartsMs, posMs)
+            if (isTimelinePlaying && !audioPlayer.isPlaying) {
+                audioPlayer.play()
+            }
+        } else {
+            audioPlayer.pause()
+        }
+
+        if (pipPlayer.mediaItemCount > 0) {
+            seekAbsolute(pipPlayer, pipStartsMs, posMs)
+            if (isTimelinePlaying && !pipPlayer.isPlaying) {
+                pipPlayer.play()
+            }
+        }
+    }
+
+    private fun startTimelineClock() {
+        clockJob?.cancel()
+        clockJob = scope.launch {
+            var lastRealTime = System.currentTimeMillis()
+            while (isActive && isTimelinePlaying) {
+                val now = System.currentTimeMillis()
+                val delta = now - lastRealTime
+                lastRealTime = now
+
+                masterPlayheadMs = (masterPlayheadMs + delta).coerceAtMost(totalTimelineMs)
+                syncMediaPlayersWithTime(masterPlayheadMs)
+                pushState()
+
+                if (masterPlayheadMs >= totalTimelineMs) {
+                    pause()
+                    break
+                }
+                delay(30L) // 30 FPS வேகத்தில் டைம்லைன் முன்னோக்கி ஓடும்
+            }
+        }
     }
 
     fun setSpeed(speed: Float) {
@@ -338,35 +307,26 @@ class PlayerController @Inject constructor(
 
     fun positionFlow(intervalMs: Long = 33L): Flow<Long> = flow {
         while (true) {
-            val master = masterPositionMs()
-            if (!isPlayingAudioOnly && audioPlayer.isPlaying) {
-                val audioAbs = audioStartsMs.getOrElse(audioPlayer.currentMediaItemIndex) { 0L } + audioPlayer.currentPosition
-                if (kotlin.math.abs(audioAbs - master) > 300) {
-                    seekAbsolute(audioPlayer, audioStartsMs, master)
-                }
-            }
-            emit(master)
+            emit(masterPlayheadMs)
             delay(intervalMs)
         }
     }
 
     fun release() {
+        clockJob?.cancel()
         player.removeListener(listener)
-        audioPlayer.removeListener(audioListener)
         player.release()
         audioPlayer.release()
         pipPlayer.release()
     }
 
     private fun pushState() {
-        val isAnyPlaying = player.isPlaying || audioPlayer.isPlaying || isPlayingAudioOnly
-        val isEnded = masterPositionMs() >= totalTimelineMs && !isAnyPlaying
         _state.value = PlaybackState(
-            isPlaying = isAnyPlaying,
+            isPlaying = isTimelinePlaying,
             isBuffering = player.playbackState == Player.STATE_BUFFERING || audioPlayer.playbackState == Player.STATE_BUFFERING,
-            positionMs = masterPositionMs(),
+            positionMs = masterPlayheadMs,
             durationMs = totalTimelineMs,
-            isEnded = isEnded,
+            isEnded = masterPlayheadMs >= totalTimelineMs && !isTimelinePlaying,
         )
     }
 }
