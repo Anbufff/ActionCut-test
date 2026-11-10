@@ -3,6 +3,7 @@ package com.actioncut.feature.editor.ui.scorecard
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.RectF
 import android.net.Uri
 import com.actioncut.core.media.export.ScorecardBridge
@@ -16,7 +17,12 @@ import kotlinx.coroutines.withContext
 object ScorecardManager {
 
     private val cardCache = mutableMapOf<String, MutableMap<Int, Bitmap>>()
-    private val rowRectsCache = mutableMapOf<String, List<RectF>>()
+    private val rowRectsCache = mutableMapOf<String, MutableMap<Int, List<RectF>>>()
+
+    // லேக் இல்லாமல் அதியுயர் வேகத்தில் அனிமேஷன் பிரேம்களை உருவாக்க உதவும் ரீயூசபிள் கேன்வாஸ்
+    private val dynamicFrameLock = Any()
+    private var dynamicFrameBitmap: Bitmap? = null
+    private var dynamicFrameCanvas: Canvas? = null
 
     init {
         ScorecardBridge.bitmapProvider = { clipId, data, timeInClipMs ->
@@ -38,6 +44,7 @@ object ScorecardManager {
         val rendered = ScoreCardRenderer.renderWithRows(srcBmp, data.cropStartF, data.cropEndF, scoreType)
 
         val rowMap = mutableMapOf<Int, Bitmap>()
+        val rectsMap = mutableMapOf<Int, List<RectF>>()
         val allPlayers = library.all()
 
         for (i in data.rows.indices) {
@@ -51,22 +58,27 @@ object ScorecardManager {
                 selected = i,
                 player = player,
                 photo = photoBmp,
-                fallbackName = row.fallbackName,
-                timeInClipMs = 0L
+                fallbackName = row.fallbackName
             )
             rowMap[i] = composed.bitmap
-            if (i == 0 || !rowRectsCache.containsKey(data.id)) {
-                rowRectsCache[data.id] = composed.rowRects
-            }
+            rectsMap[i] = composed.rowRects
         }
         cardCache[data.id] = rowMap
+        rowRectsCache[data.id] = rectsMap
 
         val initialRow = data.keyframes.firstOrNull()?.rowIndex ?: 0
         val baseBmp = rowMap[initialRow] ?: rowMap[0]
         val outFile = File(context.cacheDir, "card_${data.id}.png")
         if (baseBmp != null) {
+            val previewOut = Bitmap.createBitmap(baseBmp.width, baseBmp.height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(previewOut)
+            canvas.drawBitmap(baseBmp, 0f, 0f, null)
+            val initialRect = rectsMap[initialRow]?.getOrNull(initialRow)
+            if (initialRect != null) {
+                ScoreCardComposer.drawBouncingArrow(canvas, initialRect, 0L)
+            }
             FileOutputStream(outFile).use { fos ->
-                baseBmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                previewOut.compress(Bitmap.CompressFormat.PNG, 100, fos)
             }
         }
         Uri.fromFile(outFile).toString()
@@ -79,16 +91,51 @@ object ScorecardManager {
         return activeKf.rowIndex
     }
 
+    /**
+     * Preview மற்றும் Video Export இரண்டிற்கும் அம்பு முன்னும் பின்னும் துடிக்கும் அனிமேஷனை வழங்கும்
+     */
     fun getActiveBitmap(clipId: String, data: ScorecardClipData, timeInClipMs: Long): Bitmap? {
         val activeRow = getActiveRowIndex(data, timeInClipMs)
-        return cardCache[clipId]?.get(activeRow) ?: cardCache[clipId]?.values?.firstOrNull()
+        val baseBmp = cardCache[clipId]?.get(activeRow) ?: return null
+        val targetRect = rowRectsCache[clipId]?.get(activeRow)?.getOrNull(activeRow)
+
+        synchronized(dynamicFrameLock) {
+            if (dynamicFrameBitmap == null || dynamicFrameBitmap?.isRecycled == true) {
+                dynamicFrameBitmap = Bitmap.createBitmap(
+                    ScoreCardComposer.CANVAS_W.toInt(),
+                    ScoreCardComposer.CANVAS_H.toInt(),
+                    Bitmap.Config.ARGB_8888
+                )
+                dynamicFrameCanvas = Canvas(dynamicFrameBitmap!!)
+            }
+            val canvas = dynamicFrameCanvas ?: return baseBmp
+            canvas.drawBitmap(baseBmp, 0f, 0f, null)
+            if (targetRect != null) {
+                ScoreCardComposer.drawBouncingArrow(canvas, targetRect, timeInClipMs)
+            }
+            return dynamicFrameBitmap
+        }
     }
 
-    fun hitTestRow(clipId: String, touchYFraction: Float): Int {
-        val rects = rowRectsCache[clipId] ?: return -1
+    /**
+     * விரலால் தொடும்போது துல்லியமாகவும் மென்மையாகவும் பெயரைத் தேர்ந்தெடுக்கும் செயல்பாடு
+     */
+    fun hitTestRow(
+        clipId: String,
+        data: ScorecardClipData,
+        timeInClipMs: Long,
+        touchYFraction: Float,
+        touchXFraction: Float
+    ): Int {
+        // இடதுபுறம் பெயர்கள் உள்ள பகுதியில் தொடும்போது மட்டுமே இயங்கும்
+        if (touchXFraction > 0.52f) return -1
+        val activeRow = getActiveRowIndex(data, timeInClipMs)
+        val rects = rowRectsCache[clipId]?.get(activeRow) ?: return -1
         val yInCanvas = touchYFraction * ScoreCardComposer.CANVAS_H
+
+        // வரிகளுக்கு இடையே விரல் பட்டாலும் விடுபடாமல் இருக்க 5px இடைவெளி சலுகை
         return rects.indexOfFirst { rect ->
-            yInCanvas >= rect.top && yInCanvas <= rect.bottom
+            yInCanvas >= (rect.top - 5f) && yInCanvas <= (rect.bottom + 5f)
         }
     }
 
