@@ -5,7 +5,9 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,6 +43,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
@@ -61,9 +65,11 @@ import kotlinx.coroutines.withContext
 private const val MIN_SPAN = 0.03f
 
 /**
- * Full-screen "Cricket Score Card" sheet: shows the picked scoreboard screenshot with a
- * green START line and a red END line you drag to keep only the rows you need, then renders
- * the broadcast-style card (see [ScoreCardRenderer]) to a PNG in app storage.
+ * Full-screen "Cricket Score Card" sheet.
+ * Step 1: drag the green START / red END lines to keep only the rows you need.
+ * Step 2: the broadcast card is shown (rows left, player photo right). Tap a row to select it:
+ * the red arrow points at it and the player's name is read from the row (OCR) and matched to the
+ * Player register; use "Players" to add players or pick one by hand.
  *
  * [onDone] receives a `file://` URI of the PNG and the card's width/height aspect ratio.
  */
@@ -75,20 +81,56 @@ fun ScoreCardCropDialog(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val library = remember { PlayerLibrary(context) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var failed by remember { mutableStateOf(false) }
     var type by remember { mutableStateOf(ScoreCardType.BATTING) }
     var startF by remember { mutableFloatStateOf(0.05f) }
     var endF by remember { mutableFloatStateOf(0.95f) }
     var busy by remember { mutableStateOf(false) }
+    var stage by remember { mutableIntStateOf(0) }
+    var card by remember { mutableStateOf<RenderedCard?>(null) }
+    var selected by remember { mutableIntStateOf(-1) }
+    var player by remember { mutableStateOf<Player?>(null) }
+    var composed by remember { mutableStateOf<ComposedCard?>(null) }
+    var status by remember { mutableStateOf("") }
+    var showLibrary by remember { mutableStateOf(false) }
 
     LaunchedEffect(sourceUri) {
         val bmp = withContext(Dispatchers.IO) { decodeBitmap(context, Uri.parse(sourceUri)) }
         if (bmp == null) failed = true else bitmap = bmp
     }
 
+    LaunchedEffect(card, selected, player, type) {
+        val c = card ?: return@LaunchedEffect
+        composed = withContext(Dispatchers.Default) {
+            val photo = player?.let { library.photo(it) }
+            ScoreCardComposer.compose(c, type, selected, player, photo)
+        }
+    }
+
     val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val bottomSpace = if (navInset > 0.dp) navInset else 48.dp
+
+    val onRowTap: (Int) -> Unit = { index ->
+        selected = index
+        val c = card
+        val src = bitmap
+        if (c != null && src != null && index in c.rows.indices) {
+            scope.launch {
+                status = "Reading name..."
+                val text = ScoreNameOcr.readName(src, c.rows[index])
+                val role = if (type == ScoreCardType.BOWLING) "bowl" else "bat"
+                val matched = withContext(Dispatchers.Default) { library.match(text, role) }
+                player = matched
+                status = if (matched != null) {
+                    "Matched: ${matched.name}"
+                } else {
+                    "No registered player found for this row - tap Players to add or pick one."
+                }
+            }
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -104,58 +146,133 @@ fun ScoreCardCropDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("Cricket Score Card", color = Color.White)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ScoreCardType.values().forEach { t ->
-                        SelectableChip(label = t.label, selected = type == t, onClick = { type = t })
+                if (stage == 0) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ScoreCardType.values().forEach { t ->
+                            SelectableChip(label = t.label, selected = type == t, onClick = { type = t })
+                        }
                     }
+                    Text(
+                        "Drag the green START line and red END line to keep only the rows you need.",
+                        color = Color(0xFFBBBBBB),
+                    )
+                } else {
+                    Text(
+                        if (status.isEmpty()) "Tap a row: the arrow points at it and its player photo appears." else status,
+                        color = Color(0xFFBBBBBB),
+                    )
                 }
-                Text(
-                    "Drag the green START line and red END line to keep only the rows you need.",
-                    color = Color(0xFFBBBBBB),
-                )
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     val bmp = bitmap
+                    val shown = composed
                     when {
                         failed -> Text("Could not open that image.", color = Color.White, modifier = Modifier.align(Alignment.Center))
                         bmp == null -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                        else -> CropCanvas(
+                        stage == 0 -> CropCanvas(
                             bitmap = bmp,
                             startF = startF,
                             endF = endF,
                             onChange = { s, e -> startF = s; endF = e },
                         )
+                        shown == null -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                        else -> CardPreview(composed = shown, onRowTap = onRowTap)
                     }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
-                    Spacer(modifier = Modifier.weight(1f))
-                    Button(
-                        enabled = bitmap != null && !busy,
-                        onClick = {
-                            val src = bitmap ?: return@Button
-                            busy = true
-                            scope.launch {
-                                val result = withContext(Dispatchers.Default) {
-                                    runCatching {
-                                        val card = ScoreCardRenderer.render(src, startF, endF, type)
-                                        val dir = File(context.filesDir, "scorecards").apply { mkdirs() }
-                                        val file = File(dir, "scorecard_${System.currentTimeMillis()}.png")
-                                        FileOutputStream(file).use { card.compress(Bitmap.CompressFormat.PNG, 100, it) }
-                                        Pair(Uri.fromFile(file).toString(), card.width.toFloat() / card.height.toFloat())
+                    if (stage == 0) {
+                        TextButton(onClick = onDismiss) { Text("Cancel") }
+                        Spacer(modifier = Modifier.weight(1f))
+                        Button(
+                            enabled = bitmap != null && !busy,
+                            onClick = {
+                                val src = bitmap ?: return@Button
+                                busy = true
+                                scope.launch {
+                                    val result = withContext(Dispatchers.Default) {
+                                        runCatching { ScoreCardRenderer.renderWithRows(src, startF, endF, type) }
+                                    }
+                                    busy = false
+                                    result.onSuccess { rendered ->
+                                        composed = null
+                                        selected = -1
+                                        player = null
+                                        status = ""
+                                        card = rendered
+                                        stage = 1
+                                    }
+                                    result.onFailure {
+                                        Toast.makeText(context, "Score card failed: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
                                     }
                                 }
-                                busy = false
-                                result.onSuccess { (uri, aspect) -> onDone(uri, aspect) }
-                                result.onFailure {
-                                    Toast.makeText(context, "Score card failed: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
+                            },
+                        ) { Text(if (busy) "Working..." else "Next") }
+                    } else {
+                        TextButton(onClick = { stage = 0 }) { Text("Back") }
+                        TextButton(onClick = { showLibrary = true }) { Text("Players") }
+                        Spacer(modifier = Modifier.weight(1f))
+                        Button(
+                            enabled = composed != null && !busy,
+                            onClick = {
+                                val final = composed?.bitmap ?: return@Button
+                                busy = true
+                                scope.launch {
+                                    val result = withContext(Dispatchers.Default) {
+                                        runCatching {
+                                            val dir = File(context.filesDir, "scorecards").apply { mkdirs() }
+                                            val file = File(dir, "scorecard_${System.currentTimeMillis()}.png")
+                                            FileOutputStream(file).use { final.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                                            Pair(Uri.fromFile(file).toString(), final.width.toFloat() / final.height.toFloat())
+                                        }
+                                    }
+                                    busy = false
+                                    result.onSuccess { (uri, aspect) -> onDone(uri, aspect) }
+                                    result.onFailure {
+                                        Toast.makeText(context, "Score card failed: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
+                                    }
                                 }
-                            }
-                        },
-                    ) { Text(if (busy) "Working..." else "Add to video") }
+                            },
+                        ) { Text(if (busy) "Working..." else "Add to video") }
+                    }
                 }
             }
         }
     }
+
+    if (showLibrary) {
+        PlayerLibraryDialog(
+            library = library,
+            onDismiss = { showLibrary = false },
+            onPick = {
+                player = it
+                status = "Player: ${it.name}"
+                showLibrary = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun CardPreview(composed: ComposedCard, onRowTap: (Int) -> Unit) {
+    val image = remember(composed) { composed.bitmap.asImageBitmap() }
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    Image(
+        bitmap = image,
+        contentDescription = null,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged { size = it }
+            .pointerInput(composed) {
+                detectTapGestures { off ->
+                    val r = fitRect(size, composed.bitmap)
+                    if (r.height > 0f) {
+                        val y = (off.y - r.top) / r.height * composed.bitmap.height
+                        val index = composed.rowRects.indexOfFirst { y >= it.top && y <= it.bottom }
+                        if (index >= 0) onRowTap(index)
+                    }
+                }
+            },
+    )
 }
 
 @Composable
