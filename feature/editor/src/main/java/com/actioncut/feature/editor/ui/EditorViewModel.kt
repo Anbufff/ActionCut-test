@@ -169,6 +169,45 @@ class EditorViewModel @Inject constructor(
         )
     }
 
+    // ------------------------------------------------------------------ Add More Media (+)
+    /**
+     * டைம்லைனில் (+) பட்டனை அழுத்தி வீடியோக்கள் அல்லது புகைப்படங்களை வரிசையாக Main Track-ல் சேர்க்கும் முறை
+     */
+    fun appendMediaList(uris: List<String>) {
+        viewModelScope.launch {
+            val mediaItems = uris.mapNotNull { resolveMedia(it) }
+            if (mediaItems.isEmpty()) return@launch
+
+            val videoTrack = _uiState.value.timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
+            var currentEnd = videoTrack?.durationMs ?: 0L
+            val newClips = mediaItems.map { item ->
+                val clip = ClipFactory.fromMedia(item, currentEnd)
+                currentEnd = clip.timelineEndMs
+                clip
+            }
+
+            mutate(structural = true) { timeline ->
+                if (videoTrack != null) {
+                    var updated = timeline
+                    newClips.forEach { c ->
+                        updated = TimelineEditor.appendClip(updated, videoTrack.id, c)
+                    }
+                    updated
+                } else {
+                    val (withTrack, trackId) = TimelineEditor.addTrack(timeline, TrackType.VIDEO)
+                    var updated = withTrack
+                    newClips.forEach { c ->
+                        updated = TimelineEditor.appendClip(updated, trackId, c)
+                    }
+                    updated
+                }
+            }
+            if (newClips.isNotEmpty()) {
+                _uiState.update { it.copy(selectedClipId = newClips.last().id) }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ Dynamic Scorecard
     fun addScorecardClip(data: ScorecardClipData) {
         val durationMs = 120_000L
