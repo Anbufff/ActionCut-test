@@ -52,8 +52,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.actioncut.core.designsystem.component.SelectableChip
-import java.io.File
-import java.io.FileOutputStream
+import com.actioncut.core.model.ScorecardClipData
+import com.actioncut.core.model.ScorecardKeyframe
+import com.actioncut.core.model.ScorecardRowItem
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -64,20 +65,11 @@ import kotlinx.coroutines.withContext
 
 private const val MIN_SPAN = 0.03f
 
-/**
- * Full-screen "Cricket Score Card" sheet.
- * Step 1: drag the green START / red END lines to keep only the rows you need.
- * Step 2: the broadcast card is shown (rows left, player photo right). Tap a row to select it:
- * the red arrow points at it and the player's name is read from the row (OCR) and matched to the
- * Player register; use "Players" to add players or pick one by hand.
- *
- * [onDone] receives a `file://` URI of the PNG and the card's width/height aspect ratio.
- */
 @Composable
 fun ScoreCardCropDialog(
     sourceUri: String,
     onDismiss: () -> Unit,
-    onDone: (uri: String, aspect: Float) -> Unit,
+    onDone: (data: ScorecardClipData) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -228,22 +220,38 @@ fun ScoreCardCropDialog(
                         Button(
                             enabled = composed != null && !busy,
                             onClick = {
-                                val final = composed?.bitmap ?: return@Button
+                                val c = card ?: return@Button
                                 busy = true
                                 scope.launch {
-                                    val result = withContext(Dispatchers.Default) {
-                                        runCatching {
-                                            val dir = File(context.filesDir, "scorecards").apply { mkdirs() }
-                                            val file = File(dir, "scorecard_${System.currentTimeMillis()}.png")
-                                            FileOutputStream(file).use { final.compress(Bitmap.CompressFormat.PNG, 100, it) }
-                                            Pair(Uri.fromFile(file).toString(), final.width.toFloat() / final.height.toFloat())
-                                        }
+                                    val clipId = "sc_${System.currentTimeMillis()}"
+                                    val rowItems = c.rows.mapIndexed { idx, rInfo ->
+                                        val res = rowResults.getOrNull(idx)
+                                        ScorecardRowItem(
+                                            rowIndex = idx,
+                                            srcTop = rInfo.srcTop,
+                                            srcBottom = rInfo.srcBottom,
+                                            matchedPlayerName = res?.player?.name,
+                                            fallbackName = res?.rawName
+                                        )
                                     }
+
+                                    // முழுமையான டைனமிக் டேட்டா உருவாக்கம்
+                                    val scorecardData = ScorecardClipData(
+                                        id = clipId,
+                                        sourceImageUri = sourceUri,
+                                        cropStartF = startF,
+                                        cropEndF = endF,
+                                        type = type.name,
+                                        themeIdx = 0,
+                                        rows = rowItems,
+                                        keyframes = listOf(ScorecardKeyframe(0L, selected.coerceAtLeast(0)))
+                                    )
+
+                                    // பின்னணியில் அனைத்து வரி படங்களையும் Cache செய்கிறது
+                                    ScorecardManager.prepareCard(context, scorecardData, library)
+
                                     busy = false
-                                    result.onSuccess { (uri, aspect) -> onDone(uri, aspect) }
-                                    result.onFailure {
-                                        Toast.makeText(context, "Score card failed: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
-                                    }
+                                    onDone(scorecardData)
                                 }
                             },
                         ) { Text(if (busy) "Working..." else "Add to video") }
@@ -309,7 +317,7 @@ private fun CropCanvas(
             .fillMaxSize()
             .onSizeChanged { canvasSize = it }
             .pointerInput(canvasSize, bitmap) {
-                var dragging = 0 // 1 = start line, 2 = end line
+                var dragging = 0
                 detectDragGestures(
                     onDragStart = { offset ->
                         val r = fitRect(canvasSize, bitmap)
@@ -355,7 +363,6 @@ private fun CropCanvas(
     }
 }
 
-/** The rectangle the bitmap occupies when fitted (contain) inside [size]. */
 private fun fitRect(size: IntSize, bitmap: Bitmap): Rect {
     if (size.width <= 0 || size.height <= 0) return Rect.Zero
     val scale = min(size.width.toFloat() / bitmap.width, size.height.toFloat() / bitmap.height)
