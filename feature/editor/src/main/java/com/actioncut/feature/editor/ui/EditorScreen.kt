@@ -64,6 +64,24 @@ fun EditorScreen(
     var showRename by remember { mutableStateOf(false) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    // (+) பட்டன் மூலம் Main Track-ல் புதிய வீடியோக்கள் / போட்டோக்களைச் சேர்க்கும் Picker
+    val addMediaPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (!uris.isNullOrEmpty()) {
+            uris.forEach { uri ->
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    )
+                }
+            }
+            viewModel.appendMediaList(uris.map { it.toString() })
+        }
+    }
+
     val audioPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -178,6 +196,7 @@ fun EditorScreen(
             onMoveClip = viewModel::moveClip,
             onMoveCommit = viewModel::commitArrangement,
             onLoadWaveform = viewModel::loadWaveform,
+            onAddMedia = { addMediaPicker.launch(arrayOf("video/*", "image/*")) },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(120.dp),
