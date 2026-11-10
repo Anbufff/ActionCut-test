@@ -1,5 +1,8 @@
 package com.actioncut.feature.editor.ui
 
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.webkit.MimeTypeMap
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -19,6 +22,7 @@ import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.ColorAdjustments
 import com.actioncut.core.model.Filter
 import com.actioncut.core.model.FitMode
+import com.actioncut.core.model.MediaItem
 import com.actioncut.core.model.MediaType
 import com.actioncut.core.model.Project
 import com.actioncut.core.model.ScorecardClipData
@@ -171,11 +175,70 @@ class EditorViewModel @Inject constructor(
 
     // ------------------------------------------------------------------ Add More Media (+)
     /**
-     * டைம்லைனில் (+) பட்டனை அழுத்தி வீடியோக்கள் அல்லது புகைப்படங்களை வரிசையாக Main Track-ல் சேர்க்கும் முறை
+     * வீடியோக்கள் மற்றும் புகைப்படங்கள் (Images) இரண்டையும் துல்லியமாகப் பிரித்தறிந்து Main Track-ல் சேர்க்கும் செயல்பாடு
      */
+    private suspend fun resolveAnyMedia(uriStr: String): MediaItem? {
+        val parsedUri = Uri.parse(uriStr)
+        val mimeType = runCatching { context.contentResolver.getType(parsedUri) }.getOrNull()
+            ?: MimeTypeMap.getFileExtensionFromUrl(uriStr)?.let { ext ->
+                MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.lowercase())
+            }
+
+        val isImage = mimeType?.startsWith("image/") == true ||
+            uriStr.endsWith(".jpg", true) || uriStr.endsWith(".jpeg", true) ||
+            uriStr.endsWith(".png", true) || uriStr.endsWith(".webp", true)
+
+        if (isImage) {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            runCatching {
+                context.contentResolver.openInputStream(parsedUri)?.use {
+                    BitmapFactory.decodeStream(it, null, bounds)
+                }
+            }
+            val title = parsedUri.lastPathSegment?.substringAfterLast('/')?.substringBefore('?') ?: "Image"
+            return MediaItem(
+                id = uriStr.hashCode().toString(),
+                uri = uriStr,
+                type = MediaType.IMAGE,
+                displayName = title,
+                durationMs = 8_000L, // HTML எடிட்டரில் உள்ளது போல் 8 நொடிகள்
+                width = bounds.outWidth.coerceAtLeast(0),
+                height = bounds.outHeight.coerceAtLeast(0),
+            )
+        }
+
+        // வீடியோவாக இருந்தால் வழக்கமான resolveMedia மூலம் பெறப்படும்
+        val videoItem = resolveMedia(uriStr)
+        if (videoItem != null) return videoItem
+
+        // Fallback: ஒருவேளை MimeType இல்லாத இமேஜாக இருந்தால்
+        val fallbackBounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val isDecodable = runCatching {
+            context.contentResolver.openInputStream(parsedUri)?.use {
+                BitmapFactory.decodeStream(it, null, fallbackBounds)
+            }
+            fallbackBounds.outWidth > 0 && fallbackBounds.outHeight > 0
+        }.getOrDefault(false)
+
+        if (isDecodable) {
+            val title = parsedUri.lastPathSegment?.substringAfterLast('/')?.substringBefore('?') ?: "Image"
+            return MediaItem(
+                id = uriStr.hashCode().toString(),
+                uri = uriStr,
+                type = MediaType.IMAGE,
+                displayName = title,
+                durationMs = 8_000L,
+                width = fallbackBounds.outWidth,
+                height = fallbackBounds.outHeight,
+            )
+        }
+
+        return null
+    }
+
     fun appendMediaList(uris: List<String>) {
         viewModelScope.launch {
-            val mediaItems = uris.mapNotNull { resolveMedia(it) }
+            val mediaItems = uris.mapNotNull { resolveAnyMedia(it) }
             if (mediaItems.isEmpty()) return@launch
 
             val videoTrack = _uiState.value.timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
@@ -373,7 +436,7 @@ class EditorViewModel @Inject constructor(
 
     fun addAudioAtPlayhead(uri: String) {
         viewModelScope.launch {
-            val media = resolveMedia(uri) ?: return@launch
+            val media = resolveAnyMedia(uri) ?: return@launch
             val audioMedia = media.copy(type = MediaType.AUDIO)
             val clip = ClipFactory.fromMedia(audioMedia, _uiState.value.playheadMs)
             val track = _uiState.value.timeline.tracks
@@ -497,7 +560,7 @@ class EditorViewModel @Inject constructor(
 
     fun addPipAtPlayhead(uri: String) {
         viewModelScope.launch {
-            val media = resolveMedia(uri) ?: return@launch
+            val media = resolveAnyMedia(uri) ?: return@launch
             val base = ClipFactory.fromMedia(
                 media.copy(type = MediaType.VIDEO),
                 _uiState.value.playheadMs,
