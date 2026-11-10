@@ -83,6 +83,9 @@ fun EditorScreen(
         }
     }
     var cricSource by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    var showPlayers by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    var showRegister by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val playerLibrary = androidx.compose.runtime.remember { com.actioncut.feature.editor.ui.scorecard.PlayerLibrary(context) }
     val cricPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
     ) { uri -> if (uri != null) cricSource = uri.toString() }
@@ -212,6 +215,8 @@ fun EditorScreen(
                                 EditorTool.AUDIO -> audioPicker.launch(arrayOf("audio/*"))
                                 EditorTool.PIP -> videoPicker.launch(arrayOf("video/*"))
                                 EditorTool.CRIC -> cricPicker.launch(arrayOf("image/*"))
+                                EditorTool.CARD_ADD -> showRegister = true
+                                EditorTool.PLAYER -> showPlayers = true
                                 else -> viewModel.setActiveTool(tool)
                             }
                         },
@@ -220,6 +225,19 @@ fun EditorScreen(
                 }
             }
         }
+    }
+
+    if (showRegister) {
+        com.actioncut.feature.editor.ui.scorecard.PlayerRegisterDialog(
+            library = playerLibrary,
+            onDismiss = { showRegister = false },
+        )
+    }
+    if (showPlayers) {
+        com.actioncut.feature.editor.ui.scorecard.PlayerLibraryDialog(
+            library = playerLibrary,
+            onDismiss = { showPlayers = false },
+        )
     }
 
     cricSource?.let { source ->
