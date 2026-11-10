@@ -63,6 +63,9 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.video)
 
+    // On-device OCR for reading player names off the scoreboard rows (Cricket Score Card)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 
