@@ -93,6 +93,8 @@ fun ScoreCardCropDialog(
     var selected by remember { mutableIntStateOf(-1) }
     var player by remember { mutableStateOf<Player?>(null) }
     var composed by remember { mutableStateOf<ComposedCard?>(null) }
+    var rowResults by remember { mutableStateOf<List<ScoreNameOcr.RowResult?>>(emptyList()) }
+    var fallbackName by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf("") }
     var showLibrary by remember { mutableStateOf(false) }
 
@@ -101,11 +103,11 @@ fun ScoreCardCropDialog(
         if (bmp == null) failed = true else bitmap = bmp
     }
 
-    LaunchedEffect(card, selected, player, type) {
+    LaunchedEffect(card, selected, player, type, fallbackName) {
         val c = card ?: return@LaunchedEffect
         composed = withContext(Dispatchers.Default) {
             val photo = player?.let { library.photo(it) }
-            ScoreCardComposer.compose(c, type, selected, player, photo)
+            ScoreCardComposer.compose(c, type, selected, player, photo, fallbackName)
         }
     }
 
@@ -117,16 +119,20 @@ fun ScoreCardCropDialog(
         val c = card
         val src = bitmap
         if (c != null && src != null && index in c.rows.indices) {
-            scope.launch {
-                status = "Reading name..."
-                val text = ScoreNameOcr.readName(src, c.rows[index])
-                val role = if (type == ScoreCardType.BOWLING) "bowl" else "bat"
-                val matched = withContext(Dispatchers.Default) { library.match(text, role) }
-                player = matched
-                status = if (matched != null) {
-                    "Matched: ${matched.name}"
-                } else {
-                    "No registered player found for this row - tap Players to add or pick one."
+            val ready = rowResults.getOrNull(index)
+            if (ready != null) {
+                player = ready.player
+                fallbackName = if (ready.player == null) ready.rawName.ifBlank { null } else null
+                status = if (ready.player != null) "Matched: ${ready.player.name}" else
+                    "No registered player for this row - tap Players to pick one."
+            } else {
+                scope.launch {
+                    status = "Reading name..."
+                    val res = ScoreNameOcr.matchRow(src, c.rows[index], library.all())
+                    player = res.player
+                    fallbackName = if (res.player == null) res.rawName.ifBlank { null } else null
+                    status = if (res.player != null) "Matched: ${res.player.name}" else
+                        "No registered player for this row - tap Players to pick one."
                 }
             }
         }
@@ -198,7 +204,16 @@ fun ScoreCardCropDialog(
                                         player = null
                                         status = ""
                                         card = rendered
+                                        rowResults = emptyList()
+                                        fallbackName = null
                                         stage = 1
+                                        scope.launch {
+                                            status = "Reading player names..."
+                                            val all = ScoreNameOcr.matchAllRows(src, rendered.rows, library.all())
+                                            rowResults = all
+                                            val n = all.count { it?.player != null }
+                                            status = "Players matched: $n. Tap a row to show its photo."
+                                        }
                                     }
                                     result.onFailure {
                                         Toast.makeText(context, "Score card failed: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
@@ -244,6 +259,7 @@ fun ScoreCardCropDialog(
             onDismiss = { showLibrary = false },
             onPick = {
                 player = it
+                fallbackName = null
                 status = "Player: ${it.name}"
                 showLibrary = false
             },
