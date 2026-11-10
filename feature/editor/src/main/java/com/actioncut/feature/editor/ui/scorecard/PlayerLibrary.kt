@@ -68,7 +68,7 @@ class PlayerLibrary(private val context: Context) {
         val fileName = "$id.jpg"
         FileOutputStream(File(dir, fileName)).use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
         val player = Player(id, name.trim(), role, country.trim(), fileName)
-        save(all() + player)
+        save(listOf(player) + all()) // newest player first, like the web editor
         return player
     }
 
@@ -150,6 +150,41 @@ class PlayerLibrary(private val context: Context) {
         save(list.filterNot { it.id == id })
     }
 
+
+    fun deleteAll() {
+        all().forEach { File(dir, it.photoFile).delete() }
+        save(emptyList())
+    }
+
+    /** Writes a backup compatible with the web editor's "Players Backup" import. Returns count. */
+    fun exportBackup(uri: Uri): Int {
+        val list = all()
+        context.contentResolver.openOutputStream(uri)?.use { out ->
+            android.util.JsonWriter(java.io.OutputStreamWriter(out, Charsets.UTF_8)).use { w ->
+                w.beginObject()
+                w.name("type").value("fkb-players-backup")
+                w.name("version").value(1)
+                w.name("exportedAt").value(System.currentTimeMillis())
+                w.name("players").beginArray()
+                list.forEach { p ->
+                    val bytes = runCatching { File(dir, p.photoFile).readBytes() }.getOrNull()
+                    val photo = if (bytes != null) "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP) else ""
+                    w.beginObject()
+                    w.name("id").value(p.id)
+                    w.name("name").value(p.name)
+                    w.name("role").value(p.role)
+                    w.name("country").value(p.country)
+                    w.name("createdAt").value(System.currentTimeMillis())
+                    w.name("photoBase64").value(photo)
+                    w.endObject()
+                }
+                w.endArray()
+                w.endObject()
+            }
+        }
+        return list.size
+    }
+
     fun photo(player: Player, sample: Int = 1): Bitmap? = runCatching {
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
         BitmapFactory.decodeFile(File(dir, player.photoFile).path, opts)
@@ -165,45 +200,4 @@ class PlayerLibrary(private val context: Context) {
         context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
     }.getOrNull()
 
-    /**
-     * Matches OCR text (the name line of a scoreboard row) against registered players.
-     * A player matches when most of their name words (3+ letters) appear in the text, allowing
-     * one wrong letter in long words. Returns null when nothing is close enough.
-     */
-    fun match(ocrText: String, role: String): Player? {
-        val firstLine = ocrText.lines().firstOrNull { it.isNotBlank() } ?: return null
-        val tokens = firstLine.lowercase().split(Regex("[^a-z]+")).filter { it.length >= 2 }
-        if (tokens.isEmpty()) return null
-        var best: Player? = null
-        var bestScore = 0f
-        for (p in all()) {
-            val words = p.name.lowercase().split(Regex("[^a-z]+")).filter { it.length >= 3 }
-            if (words.isEmpty()) continue
-            val hits = words.count { w ->
-                tokens.any { t -> t == w || (w.length >= 5 && t.length >= 5 && editDistance(t, w) <= 1) }
-            }
-            if (hits == 0) continue
-            var score = hits.toFloat() / words.size
-            if (p.role == role) score += 0.05f
-            if (score > bestScore) {
-                bestScore = score
-                best = p
-            }
-        }
-        return if (bestScore >= 0.5f) best else null
-    }
-
-    private fun editDistance(a: String, b: String): Int {
-        val dp = IntArray(b.length + 1) { it }
-        for (i in 1..a.length) {
-            var prev = dp[0]
-            dp[0] = i
-            for (j in 1..b.length) {
-                val tmp = dp[j]
-                dp[j] = minOf(dp[j] + 1, dp[j - 1] + 1, prev + if (a[i - 1] == b[j - 1]) 0 else 1)
-                prev = tmp
-            }
-        }
-        return dp[b.length]
-    }
 }
