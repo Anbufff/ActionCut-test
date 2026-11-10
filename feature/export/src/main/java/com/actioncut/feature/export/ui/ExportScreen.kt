@@ -99,7 +99,6 @@ fun ExportScreen(
                     settings = uiState.settings,
                     selectedPreset = uiState.selectedPreset,
                     onPreset = viewModel::setPreset,
-                    onResolution = viewModel::setResolution,
                     onFrameRate = viewModel::setFrameRate,
                     onFormat = viewModel::setFormat,
                     onExport = viewModel::startExport,
@@ -114,17 +113,19 @@ private fun SettingsContent(
     settings: ExportSettings,
     selectedPreset: ExportPreset?,
     onPreset: (ExportPreset) -> Unit,
-    onResolution: (Resolution) -> Unit,
     onFrameRate: (FrameRate) -> Unit,
     onFormat: (VideoFormat) -> Unit,
     onExport: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         SectionHeader("Platform")
-        ChipRow(ExportPreset.entries.toList(), selectedPreset, { it.displayName }, onPreset)
-
-        SectionHeader("Resolution")
-        ChipRow(Resolution.entries.toList(), settings.resolution, { it.shortLabel }, onResolution)
+        // Only the two web-editor sizes: YouTube 16:9 (1920x1080) and Facebook 4:5 (1080x1350).
+        ChipRow(
+            listOf(ExportPreset.YOUTUBE, ExportPreset.FACEBOOK_4_5),
+            selectedPreset,
+            { it.displayName },
+            onPreset,
+        )
 
         SectionHeader("Frame rate")
         ChipRow(FrameRate.entries.toList(), settings.frameRate, { "${it.fps} fps" }, onFrameRate)
