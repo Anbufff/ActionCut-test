@@ -170,11 +170,8 @@ class EditorViewModel @Inject constructor(
 
     // ------------------------------------------------------------------ Dynamic Scorecard (Step 4)
 
-    /**
-     * ஸ்கோர்கார்டை மெயின் டிராக்கில் 120 வினாடிகள் ஓடும் கிளிப்பாகச் சேர்த்தல்
-     */
     fun addScorecardClip(data: ScorecardClipData) {
-        val durationMs = 120_000L // வெப் எடிட்டரைப் போல 120 வினாடிகள்
+        val durationMs = 120_000L
         val clip = Clip(
             id = data.id,
             type = ClipType.IMAGE,
@@ -195,9 +192,6 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(selectedClipId = clip.id) }
     }
 
-    /**
-     * ப்ளேஹெட் நகரும்போது அல்லது ஸ்கிரீனில் குறிப்பிட்ட வரியைத் தொடும்போது Keyframe சேர்த்தல் / மாற்றுதல்
-     */
     fun onScorecardRowTapped(clipId: String, rowIndex: Int) {
         val clip = currentClip(clipId) ?: return
         val sc = clip.scorecard ?: return
@@ -219,9 +213,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Toolbar-ல் உள்ள KF +/- பட்டன் செயல்பாடு
-     */
     fun toggleScorecardKeyframe() = withSelected { clipId ->
         val clip = currentClip(clipId) ?: return@withSelected
         val sc = clip.scorecard ?: return@withSelected
@@ -244,9 +235,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Scorecard Theme-ஐ மாற்றுவது (4 Broadcast Themes)
-     */
     fun cycleScorecardTheme() = withSelected { clipId ->
         val clip = currentClip(clipId) ?: return@withSelected
         val sc = clip.scorecard ?: return@withSelected
@@ -258,9 +246,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Scorecard கால அளவை மாற்றுவது (0.5s - 180s)
-     */
     fun setScorecardDuration(durationMs: Long) = withSelected { clipId ->
         val clip = currentClip(clipId) ?: return@withSelected
         val clamped = durationMs.coerceIn(500L, 180_000L)
@@ -573,7 +558,7 @@ class EditorViewModel @Inject constructor(
             it.copy(
                 timeline = timeline,
                 canUndo = undoStack.isNotEmpty(),
-                canRedo = redoStack.isNotEmpty>,
+                canRedo = redoStack.isNotEmpty(),
                 playheadMs = it.playheadMs.coerceIn(0, timeline.durationMs),
             )
         }
