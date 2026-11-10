@@ -288,9 +288,10 @@ private fun ClipBlock(
             )
         }
 
-        // ==================== Scorecard Keyframe Diamonds ====================
-        if (clip.scorecard != null) {
-            val kfs = clip.scorecard.keyframes
+        // ==================== Scorecard Keyframe Diamonds (Smart Cast Fix) ====================
+        val sc = clip.scorecard
+        if (sc != null) {
+            val kfs = sc.keyframes
             kfs.forEach { kf ->
                 val kfOffsetDp = with(density) { (kf.timeMs / 1000f * pxPerSecond).toDp() }
                 val isCurrent = abs(playheadMs - (clip.timelineStartMs + kf.timeMs)) <= 200L
