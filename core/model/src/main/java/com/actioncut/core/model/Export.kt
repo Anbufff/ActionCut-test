@@ -8,7 +8,9 @@ enum class Resolution(val shortLabel: String, val width: Int, val height: Int) {
     P480("480p", 854, 480),
     P720("720p", 1280, 720),
     P1080("1080p", 1920, 1080),
-    P2160("4K", 3840, 2160);
+    P2160("4K", 3840, 2160),
+    /** 4:5 Facebook export: 1080x1350 (long edge 1350). */
+    P1350("1080x1350", 1080, 1350);
 
     /** Long edge in pixels — used to scale to the project aspect ratio. */
     val longEdge: Int get() = maxOf(width, height)
@@ -74,10 +76,12 @@ enum class ExportPreset(
     INSTAGRAM_POST("Instagram Post", "Instagram", AspectRatio.RATIO_1_1, Resolution.P1080),
     INSTAGRAM_PORTRAIT("Instagram 4:5", "Instagram", AspectRatio.RATIO_4_5, Resolution.P1080),
     TIKTOK("TikTok", "TikTok", AspectRatio.RATIO_9_16, Resolution.P1080),
-    YOUTUBE("YouTube", "YouTube", AspectRatio.RATIO_16_9, Resolution.P1080),
+    YOUTUBE("YouTube 16:9", "YouTube", AspectRatio.RATIO_16_9, Resolution.P1080),
     YOUTUBE_4K("YouTube 4K", "YouTube", AspectRatio.RATIO_16_9, Resolution.P2160),
     YOUTUBE_SHORTS("YT Shorts", "YouTube", AspectRatio.RATIO_9_16, Resolution.P1080),
-    MOBILE_HD("Mobile HD", "Web", AspectRatio.RATIO_16_9, Resolution.P720);
+    MOBILE_HD("Mobile HD", "Web", AspectRatio.RATIO_16_9, Resolution.P720),
+    /** Web editor "Facebook Only (4:5)": 1080x1350. */
+    FACEBOOK_4_5("Facebook 4:5", "Facebook", AspectRatio.RATIO_4_5, Resolution.P1350);
 
     fun applyTo(settings: ExportSettings): ExportSettings =
         settings.copy(resolution = resolution, aspectRatio = aspectRatio)
