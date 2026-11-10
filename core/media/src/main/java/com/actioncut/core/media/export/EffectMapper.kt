@@ -39,6 +39,15 @@ import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.VisualEffectType
 import com.google.common.collect.ImmutableList
 
+// Core மற்றும் Feature மாட்யூல்களுக்கு இடையே Live Bitmap பரிமாறும் பாலம்
+object ScorecardBridge {
+    var bitmapProvider: ((clipId: String, data: ScorecardClipData, timeInClipMs: Long) -> Bitmap?)? = null
+
+    fun getActiveBitmap(clipId: String, data: ScorecardClipData, timeInClipMs: Long): Bitmap? {
+        return bitmapProvider?.invoke(clipId, data, timeInClipMs)
+    }
+}
+
 object EffectMapper {
 
     fun videoEffects(clip: Clip, targetWidth: Int, targetHeight: Int): List<Effect> =
@@ -106,7 +115,7 @@ object EffectMapper {
             presentationLayout,
         )
 
-        // டைனமிக் ஸ்கோர்கார்டு Keyframe Overlay-ஐ Export விளைவில் இணைத்தல்
+        // எக்ஸ்போர்ட் வீடியோவின் Keyframe-க்கு ஏற்ப அம்பு மற்றும் பிளேயர் விவரங்களை மாற்றும் Overlay
         if (clip.scorecard != null) {
             val scOverlay = DynamicScorecardOverlay(clip.id, clip.scorecard!!)
             effects += OverlayEffect(ImmutableList.of(scOverlay))
@@ -196,10 +205,6 @@ object EffectMapper {
     }
 }
 
-/**
- * எக்ஸ்போர்ட் செய்யப்படும் வீடியோவின் ஒவ்வொரு நொடிக் கணக்கிலும்
- * Keyframe-க்கு ஏற்ப அம்பு மற்றும் பிளேயர் விவரங்களை துல்லியமாக மாற்றும் Overlay
- */
 private class DynamicScorecardOverlay(
     private val clipId: String,
     private val data: ScorecardClipData
