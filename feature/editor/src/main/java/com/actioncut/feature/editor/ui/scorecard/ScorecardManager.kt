@@ -53,7 +53,6 @@ object ScorecardManager {
         }
         cardCache[data.id] = rowMap
 
-        // 16:9 பின்னணி இமேஜை ஃபைலாக சேமித்தல்
         val initialRow = data.keyframes.firstOrNull()?.rowIndex ?: 0
         val baseBmp = rowMap[initialRow] ?: rowMap[0]
         val outFile = File(context.cacheDir, "card_${data.id}.png")
