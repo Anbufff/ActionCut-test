@@ -280,7 +280,7 @@ class EditorViewModel @Inject constructor(
             mediaUri = cardUri,
             timelineStartMs = _uiState.value.playheadMs,
             timelineEndMs = _uiState.value.playheadMs + durationMs,
-            scorecard = data
+            scorecard = data,
         )
         val track = _uiState.value.timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
         mutate(structural = true) { timeline ->
@@ -352,8 +352,8 @@ class EditorViewModel @Inject constructor(
         val clip = currentClip(clipId) ?: return@withSelected
         val clamped = durationMs.coerceIn(500L, 180_000L)
         mutate(structural = true) { timeline ->
-            TimelineEditor.updateClip(timeline, clipId) { 
-                it.copy(timelineEndMs = it.timelineStartMs + clamped) 
+            TimelineEditor.updateClip(timeline, clipId) {
+                it.copy(timelineEndMs = it.timelineStartMs + clamped)
             }
         }
     }
@@ -382,19 +382,19 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(selectedClipId = copy.id) }
     }
 
-    // இழுக்கும் போது லேக் இல்லாமல் அதியுயர் Smooth-ஆக Trim ஆவதற்கு structural = false பயன்படுத்தப்படுகிறது
+    // Trimming Handles இழுக்கப்படும் போது
     fun trimStart(clipId: String, newStartMs: Long) =
         mutate(structural = false) { TimelineEditor.trimClipStart(it, clipId, newStartMs) }
 
     fun trimEnd(clipId: String, newEndMs: Long) =
         mutate(structural = false) { TimelineEditor.trimClipEnd(it, clipId, newEndMs) }
 
-    // விரலை எடுத்து விட்டதும் பிளேயரை அப்டேட் செய்யும் ஃபங்ஷன்
     fun commitTrim() {
         playerController.setTimeline(_uiState.value.timeline)
         playerController.seekTo(_uiState.value.playheadMs)
     }
 
+    // ஒரு படத்தை நகர்த்தும்போது (Drag) அடுத்தடுத்த படங்களும் நகரும்
     fun moveClip(clipId: String, newStartMs: Long) {
         val track = TimelineEditor.findClip(_uiState.value.timeline, clipId)?.first ?: return
         mutate(structural = false) {
