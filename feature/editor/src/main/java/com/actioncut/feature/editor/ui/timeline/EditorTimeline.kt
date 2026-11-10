@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -36,6 +37,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -67,7 +69,6 @@ import kotlin.math.roundToInt
 
 private const val TRACK_HEIGHT = 52
 private const val RULER_HEIGHT = 22
-private const val HANDLE_WIDTH = 14
 
 @Composable
 fun EditorTimeline(
@@ -81,6 +82,7 @@ fun EditorTimeline(
     onSelectClip: (String?) -> Unit,
     onTrimStart: (String, Long) -> Unit,
     onTrimEnd: (String, Long) -> Unit,
+    onTrimCommit: () -> Unit = {},
     onMoveClip: (String, Long) -> Unit = { _, _ -> },
     onMoveCommit: () -> Unit = {},
     onLoadWaveform: (suspend (String) -> FloatArray)? = null,
@@ -90,7 +92,6 @@ fun EditorTimeline(
     val density = LocalDensity.current
     val scrollState = rememberScrollState()
 
-    // (+) பட்டன் தெரிவதற்குத் தேவையான கூடுதல் இடத்தை டைம்லைனில் ஒதுக்குதல்
     val extraPaddingMs = with(density) { (90.dp.toPx() / pxPerSecond * 1000f).toLong() }
     val layoutDurationMs = (durationMs + extraPaddingMs).coerceAtLeast(3_000L)
 
@@ -135,6 +136,7 @@ fun EditorTimeline(
                         onSelectClip = onSelectClip,
                         onTrimStart = onTrimStart,
                         onTrimEnd = onTrimEnd,
+                        onTrimCommit = onTrimCommit,
                         onMoveClip = onMoveClip,
                         onMoveCommit = onMoveCommit,
                         onLoadWaveform = onLoadWaveform,
@@ -198,6 +200,7 @@ private fun TrackLane(
     onSelectClip: (String?) -> Unit,
     onTrimStart: (String, Long) -> Unit,
     onTrimEnd: (String, Long) -> Unit,
+    onTrimCommit: () -> Unit,
     onMoveClip: (String, Long) -> Unit,
     onMoveCommit: () -> Unit,
     onLoadWaveform: (suspend (String) -> FloatArray)?,
@@ -221,6 +224,7 @@ private fun TrackLane(
                     onSelect = { onSelectClip(clip.id) },
                     onTrimStart = onTrimStart,
                     onTrimEnd = onTrimEnd,
+                    onTrimCommit = onTrimCommit,
                     onMoveClip = onMoveClip,
                     onMoveCommit = onMoveCommit,
                     onLoadWaveform = onLoadWaveform,
@@ -229,7 +233,6 @@ private fun TrackLane(
             }
         }
 
-        // HTML எடிட்டரில் உள்ளது போலவே Main Track முடிவில் மஞ்சள் நிற புள்ளிக்கோடு (+) பட்டன்
         if (track.type == TrackType.VIDEO) {
             val addBtnOffsetDp = with(density) { (track.durationMs / 1000f * pxPerSecond).toDp() + 14.dp }
             Box(
@@ -271,6 +274,7 @@ private fun ClipBlock(
     onSelect: () -> Unit,
     onTrimStart: (String, Long) -> Unit,
     onTrimEnd: (String, Long) -> Unit,
+    onTrimCommit: () -> Unit,
     onMoveClip: (String, Long) -> Unit = { _, _ -> },
     onMoveCommit: () -> Unit = {},
     onLoadWaveform: (suspend (String) -> FloatArray)? = null,
@@ -352,12 +356,14 @@ private fun ClipBlock(
             }
         }
 
+        // தேர்ந்தெடுக்கப்பட்ட கிளிப்பிற்கு மென்மையாக இழுக்கக்கூடிய Trimming Handles
         if (selected) {
             ClipTrimHandles(
                 clip = clip,
                 pxPerSecond = pxPerSecond,
                 onTrimStart = onTrimStart,
                 onTrimEnd = onTrimEnd,
+                onTrimCommit = onTrimCommit,
             )
         }
     }
@@ -392,25 +398,35 @@ private fun AudioWaveform(
     }
 }
 
+/**
+ * கிளிப்பின் முனைகளில் விரலால் எளிதாகப் பிடித்து மென்மையாக இழுக்கும் Trimming Handles
+ */
 @Composable
 private fun ClipTrimHandles(
     clip: Clip,
     pxPerSecond: Float,
     onTrimStart: (String, Long) -> Unit,
     onTrimEnd: (String, Long) -> Unit,
+    onTrimCommit: () -> Unit,
 ) {
-    Box(Modifier.fillMaxWidth().fillMaxHeight()) {
+    Box(Modifier.fillMaxSize()) {
         DragHandle(
             modifier = Modifier.align(Alignment.CenterStart),
-            initialValue = clip.timelineStartMs,
+            isLeft = true,
+            clipId = clip.id,
+            getInitialMs = { clip.timelineStartMs },
             pxPerSecond = pxPerSecond,
             onValue = { onTrimStart(clip.id, it) },
+            onCommit = onTrimCommit,
         )
         DragHandle(
             modifier = Modifier.align(Alignment.CenterEnd),
-            initialValue = clip.timelineEndMs,
+            isLeft = false,
+            clipId = clip.id,
+            getInitialMs = { clip.timelineEndMs },
             pxPerSecond = pxPerSecond,
             onValue = { onTrimEnd(clip.id, it) },
+            onCommit = onTrimCommit,
         )
     }
 }
@@ -418,37 +434,66 @@ private fun ClipTrimHandles(
 @Composable
 private fun DragHandle(
     modifier: Modifier,
-    initialValue: Long,
+    isLeft: Boolean,
+    clipId: String,
+    getInitialMs: () -> Long,
     pxPerSecond: Float,
     onValue: (Long) -> Unit,
+    onCommit: () -> Unit,
 ) {
-    var anchor by remember { mutableLongStateOf(initialValue) }
-    var acc by remember { mutableFloatStateOf(0f) }
+    val currentGetInitialMs by rememberUpdatedState(getInitialMs)
+    val currentOnValue by rememberUpdatedState(onValue)
+    val currentOnCommit by rememberUpdatedState(onCommit)
+    val currentPxPerSecond by rememberUpdatedState(pxPerSecond)
+
+    var anchorMs by remember(clipId) { mutableLongStateOf(0L) }
+    var accPx by remember(clipId) { mutableFloatStateOf(0f) }
+
     Box(
         modifier = modifier
-            .width(HANDLE_WIDTH.dp)
+            // விரல் எளிதாகப் பிடிப்பதற்காக 36.dp அகலமுள்ள தாராளமான தொடு பரப்பு (HTML 36px போன்றது)
+            .width(36.dp)
             .fillMaxHeight()
-            .clip(RoundedCornerShape(4.dp))
-            .background(MaterialTheme.colorScheme.primary)
-            .pointerInput(initialValue, pxPerSecond) {
+            .pointerInput(clipId) { // clipId மட்டுமே Key-யாக உள்ளதால் இழுக்கும் போது பாதியில் கேன்சல் ஆகாது
                 detectHorizontalDragGestures(
                     onDragStart = {
-                        anchor = initialValue
-                        acc = 0f
+                        anchorMs = currentGetInitialMs()
+                        accPx = 0f
                     },
                     onHorizontalDrag = { _, delta ->
-                        acc += delta
-                        onValue(anchor + (acc / pxPerSecond * 1000f).toLong())
+                        accPx += delta
+                        val deltaMs = (accPx / currentPxPerSecond * 1000f).toLong()
+                        currentOnValue(anchorMs + deltaMs)
                     },
+                    onDragEnd = {
+                        currentOnCommit()
+                    },
+                    onDragCancel = {
+                        currentOnCommit()
+                    }
                 )
             },
-        contentAlignment = Alignment.Center,
+        contentAlignment = if (isLeft) Alignment.CenterStart else Alignment.CenterEnd,
     ) {
+        // காட்சிக்குத் தெரியும் Handle பட்டை
         Box(
             modifier = Modifier
-                .size(width = 3.dp, height = 18.dp)
-                .background(Color.White, RoundedCornerShape(2.dp)),
-        )
+                .width(16.dp)
+                .fillMaxHeight()
+                .clip(
+                    if (isLeft) RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp)
+                    else RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp)
+                )
+                .background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center,
+        ) {
+            // வெள்ளை நிற பிடிமானக் கோடு (Handle Grip Line)
+            Box(
+                modifier = Modifier
+                    .size(width = 3.dp, height = 22.dp)
+                    .background(Color.White, RoundedCornerShape(2.dp)),
+            )
+        }
     }
 }
 
