@@ -102,12 +102,10 @@ class EditorViewModel @Inject constructor(
         viewModelScope.launch {
             playerController.state.collect { playback ->
                 _uiState.update { state ->
-                    val following = if (playback.isPlaying) {
-                        playback.positionMs.coerceIn(0, state.durationMs)
-                    } else {
-                        state.playheadMs
-                    }
-                    state.copy(isPlaying = playback.isPlaying, playheadMs = following)
+                    state.copy(
+                        isPlaying = playback.isPlaying,
+                        playheadMs = playback.positionMs.coerceIn(0, state.durationMs),
+                    )
                 }
             }
         }
