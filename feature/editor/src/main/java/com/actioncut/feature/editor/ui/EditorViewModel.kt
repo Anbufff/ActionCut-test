@@ -307,19 +307,26 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Fty News Alert Banner
     /**
-     * Fty Video Editor வடிவில் Flash News Text-ஐ சாய்வான சிகப்பு நிற பேனராக Overlay டிராக்கில் சேர்த்தல்
+     * NEWS ALERT: Full video length-க்கு default ஆக set ஆதல்!
+     * தேவையான இடத்தில் Playhead வைத்து Trim R மூலம் எளிதாக வெட்டிக் கொள்ளலாம்.
      */
     fun addNewsBannerOverlay(text: String) {
+        if (text.isBlank()) return
         viewModelScope.launch {
             val bannerUri = NewsBannerRenderer.createBannerBitmap(context, text)
+            val currentPlayhead = _uiState.value.playheadMs
+            val totalTimelineMs = _uiState.value.timeline.durationMs
+
+            // Full Video End வரை நீட்டி அமைத்தல்
+            val bannerEndMs = if (totalTimelineMs > currentPlayhead) totalTimelineMs else currentPlayhead + 30_000L
+
             val clip = Clip(
                 id = "banner_${System.currentTimeMillis()}",
                 type = ClipType.STICKER,
                 mediaUri = bannerUri,
-                timelineStartMs = _uiState.value.playheadMs,
-                timelineEndMs = _uiState.value.playheadMs + 8_000L,
+                timelineStartMs = currentPlayhead,
+                timelineEndMs = bannerEndMs,
                 transform = Transform(offsetX = 0f, offsetY = 0f, scale = 1.0f),
             )
             val track = _uiState.value.timeline.tracks
@@ -336,7 +343,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Dynamic Scorecard
     fun addScorecardClip(data: ScorecardClipData) {
         val durationMs = 120_000L
         val cardFile = java.io.File(context.cacheDir, "card_${data.id}.png")
@@ -692,7 +698,6 @@ class EditorViewModel @Inject constructor(
         mutate(structural = false) { TimelineEditor.updateClip(it, id) { clip -> clip.copy(text = text) } }
     }
 
-    // ------------------------------------------------------------------ Transitions
     fun setTransition(transition: Transition?) = withSelected { id ->
         mutate(structural = true) { TimelineEditor.setTransition(it, id, transition) }
     }
