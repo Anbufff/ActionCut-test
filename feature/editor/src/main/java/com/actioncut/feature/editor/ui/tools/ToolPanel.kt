@@ -8,20 +8,33 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -35,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.actioncut.core.designsystem.component.AdjustmentSlider
@@ -54,12 +68,12 @@ import com.actioncut.core.model.FitMode
 import com.actioncut.core.model.SpeedPresets
 import com.actioncut.core.model.SpeedRamp
 import com.actioncut.core.model.Transition
+import com.actioncut.core.model.TransitionCategory
 import com.actioncut.core.model.TransitionType
 import com.actioncut.core.model.VisualEffectType
 import com.actioncut.feature.editor.ui.EditorTool
 import kotlin.math.roundToInt
 
-/** Bottom parameter panel that swaps content based on the active [EditorTool]. */
 @Composable
 fun ToolPanel(
     tool: EditorTool,
@@ -84,6 +98,8 @@ fun ToolPanel(
     onStopVoiceover: () -> Unit,
     onAddKeyframe: () -> Unit,
     onClearKeyframes: () -> Unit,
+    onApplyTransitionToAll: (Transition) -> Unit = {},
+    onApplyRandomTransitions: (TransitionCategory) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -93,25 +109,28 @@ fun ToolPanel(
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = 10.dp)
                 .heightIn(min = 120.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = tool.label,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = onClose) { Text("Done") }
+            if (tool != EditorTool.TRANSITIONS) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = tool.label,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onClose) { Text("Done") }
+                }
             }
 
             if (selectedClip == null && tool != EditorTool.TEXT &&
                 tool != EditorTool.STICKER && tool != EditorTool.CANVAS &&
-                tool != EditorTool.MUSIC && tool != EditorTool.VOICEOVER
+                tool != EditorTool.MUSIC && tool != EditorTool.VOICEOVER &&
+                tool != EditorTool.TRANSITIONS
             ) {
                 Text(
                     "Select a clip on the timeline first.",
@@ -122,6 +141,13 @@ fun ToolPanel(
             }
 
             when (tool) {
+                EditorTool.TRANSITIONS -> TransitionPanel(
+                    current = selectedClip?.transitionToNext,
+                    onClose = onClose,
+                    onTransition = onTransition,
+                    onApplyAll = onApplyTransitionToAll,
+                    onRandomAll = onApplyRandomTransitions,
+                )
                 EditorTool.SPEED -> SpeedPanel(
                     selectedClip?.speed ?: 1f,
                     selectedClip?.speedRamp ?: SpeedRamp.NONE,
@@ -141,13 +167,227 @@ fun ToolPanel(
                 EditorTool.VOICEOVER -> VoiceoverPanel(isRecordingVoiceover, onStartVoiceover, onStopVoiceover)
                 EditorTool.CANVAS -> CanvasPanel(canvas, onFitMode, onBackgroundColor)
                 EditorTool.CROP -> CropPanel(selectedClip, onCrop)
-                EditorTool.TRANSITIONS -> TransitionPanel(selectedClip?.transitionToNext, onTransition)
                 EditorTool.EFFECTS -> EffectsPanel(
                     selectedClip?.effects?.map { it.type }?.toSet() ?: emptySet(),
                     onToggleEffect,
                 )
                 EditorTool.KEYFRAME -> KeyframePanel(selectedClip, onAddKeyframe, onClearKeyframes)
                 else -> Unit
+            }
+        }
+    }
+}
+
+/**
+ * ஸ்கிரீன்ஷாட்டில் உள்ளபடியே துல்லியமாக வடிவமைக்கப்பட்ட Transitions பாட்டம் ஷீட்
+ */
+@Composable
+private fun TransitionPanel(
+    current: Transition?,
+    onClose: () -> Unit,
+    onTransition: (Transition?) -> Unit,
+    onApplyAll: (Transition) -> Unit,
+    onRandomAll: (TransitionCategory) -> Unit,
+) {
+    var selectedCategory by remember { mutableStateOf(TransitionCategory.ALL) }
+    var selectedType by remember(current) { mutableStateOf(current?.type ?: TransitionType.SEAMLESS_MERGE) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+    ) {
+        // தலைப்பு மற்றும் Close பட்டன்
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Transitions",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onClose) {
+                Icon(Icons.Filled.Close, contentDescription = "Close", tint = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+
+        // Category Filter Chips (All, Slide, Move, Wipe, Mix)
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(vertical = 6.dp),
+        ) {
+            val categories = listOf(
+                TransitionCategory.ALL,
+                TransitionCategory.SLIDE,
+                TransitionCategory.MOVE,
+                TransitionCategory.WIPE,
+                TransitionCategory.MIX,
+            )
+            items(categories) { cat ->
+                val isSelected = selectedCategory == cat
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (isSelected) Color(0xFF007A87) else Color(0xFF262626))
+                        .clickable { selectedCategory = cat }
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        text = cat.displayName,
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = Color.White,
+                    )
+                }
+            }
+        }
+
+        // தமிழ் வழிகாட்டுதல் உரை
+        Text(
+            text = "மேலே ஒரு Group-ஐ தேர்ந்தெடுத்து \"Random All\" அழுத்தினால், அந்த Group-ல் உள்ள effects மட்டும் Random ஆக Timeline முழுவதும் Apply ஆகும்.",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, lineHeight = 16.sp),
+            color = Color(0xFF9E9E9E),
+            modifier = Modifier.padding(vertical = 6.dp),
+        )
+
+        // SEAMLESS MERGE கார்டு (படத்தில் உள்ளபடி)
+        if (selectedCategory == TransitionCategory.ALL || selectedCategory == TransitionCategory.SEAMLESS) {
+            Text(
+                text = "SEAMLESS",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = Color(0xFF9E9E9E),
+                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+            )
+            val isSeamlessSelected = selectedType == TransitionType.SEAMLESS_MERGE
+            Box(
+                modifier = Modifier
+                    .size(width = 86.dp, height = 72.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF161616))
+                    .border(
+                        width = 2.dp,
+                        color = if (isSeamlessSelected) Color(0xFF00E5FF) else Color(0xFF333333),
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                    .clickable { selectedType = TransitionType.SEAMLESS_MERGE },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Link,
+                    contentDescription = "Seamless",
+                    tint = Color(0xFF00E5FF),
+                    modifier = Modifier.size(32.dp),
+                )
+            }
+            Text(
+                text = "Seamless Merge",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = Color.White,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            Text(
+                text = "இரண்டு Image/Video Clips-ம் எந்த Visual Effect-மும் இல்லாமல், ஒரே Image போல் 100% Invisible ஆக இணையும் (Play & Export இரண்டிலும்).",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 15.sp),
+                color = Color(0xFF888888),
+                modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
+            )
+        }
+
+        // இதர எஃபெக்ட்களின் பட்டியல்
+        val otherTypes = TransitionType.entries.filter {
+            it != TransitionType.NONE && it != TransitionType.SEAMLESS_MERGE &&
+                (selectedCategory == TransitionCategory.ALL || it.category == selectedCategory)
+        }
+
+        if (otherTypes.isNotEmpty()) {
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = 12.dp),
+            ) {
+                items(otherTypes) { type ->
+                    val isChosen = selectedType == type
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable { selectedType = type },
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(width = 86.dp, height = 72.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF202020))
+                                .border(
+                                    width = 2.dp,
+                                    color = if (isChosen) Color(0xFF00E5FF) else Color.Transparent,
+                                    shape = RoundedCornerShape(12.dp),
+                                ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = type.displayName.take(2).uppercase(),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White,
+                            )
+                        }
+                        Text(
+                            text = type.displayName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isChosen) Color(0xFF00E5FF) else Color(0xFFCCCCCC),
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // கீழே உள்ள 3 முக்கிய பட்டன்கள்: Random All, Apply All, Apply
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 🎲 Random All
+            OutlinedButton(
+                onClick = { onRandomAll(selectedCategory); onClose() },
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color(0xFF222222)),
+            ) {
+                Icon(Icons.Filled.Casino, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(4.dp))
+                Text("Random All", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            // ✔ Apply All
+            OutlinedButton(
+                onClick = {
+                    onApplyAll(Transition(selectedType, if (selectedType == TransitionType.SEAMLESS_MERGE) 0L else 500L))
+                    onClose()
+                },
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color(0xFF222222)),
+            ) {
+                Icon(Icons.Filled.DoneAll, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(4.dp))
+                Text("Apply All", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            // ✔ Apply
+            Button(
+                onClick = {
+                    onTransition(Transition(selectedType, if (selectedType == TransitionType.SEAMLESS_MERGE) 0L else 500L))
+                    onClose()
+                },
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+            ) {
+                Icon(Icons.Filled.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(4.dp))
+                Text("Apply", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -254,29 +494,6 @@ private fun TextPanel(initial: String, onAddText: (String) -> Unit) {
         PrimaryButton(
             text = "Add text",
             onClick = { if (text.isNotBlank()) onAddText(text) },
-        )
-    }
-}
-
-@Composable
-private fun TransitionPanel(current: Transition?, onTransition: (Transition?) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
-            items(TransitionType.entries.toList()) { type ->
-                val selected = (current?.type ?: TransitionType.NONE) == type
-                SelectableChip(
-                    label = type.displayName,
-                    selected = selected,
-                    onClick = {
-                        onTransition(if (type == TransitionType.NONE) null else Transition(type))
-                    },
-                )
-            }
-        }
-        Text(
-            "Applies to the cut into the next clip. Renders on export; Slide/Wipe fall back to a fade.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
