@@ -1,11 +1,13 @@
 package com.actioncut.feature.editor.ui.preview
 
+import android.os.Build
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
@@ -28,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -86,35 +89,75 @@ fun PreviewPlayer(
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
 
+        // 1. கேன்வாஸ் விண்டோ கண்டிப்பான 16:9 விகிதத்தில் clipToBounds செய்யப்பட்டு அமையும்
         Box(
             modifier = Modifier
                 .aspectRatio(aspectRatio.value)
+                .clipToBounds()
                 .background(Color(backgroundColorArgb)),
             contentAlignment = Alignment.Center,
         ) {
-            AndroidView(
-                factory = { context ->
-                    PlayerView(context).apply {
-                        useController = false
-                        this.player = player
-                        this.resizeMode = resizeMode
-                        setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    }
-                },
-                update = {
-                    it.player = player
-                    it.resizeMode = resizeMode
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
+            // 2. பின்னணியில் அதே படத்தின் மங்கலான Blur Effect
+            if (currentMainClip != null && currentMainClip.mediaUri != null) {
+                AsyncImage(
+                    model = currentMainClip.mediaUri,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                Modifier.graphicsLayer {
+                                    renderEffect = android.graphics.RenderEffect.createBlurEffect(
+                                        45f, 45f, android.graphics.Shader.TileMode.CLAMP
+                                    ).asComposeRenderEffect()
+                                    alpha = 0.65f
+                                }
+                            } else {
+                                Modifier.graphicsLayer { alpha = 0.45f }
+                            }
+                        ),
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.35f))
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                )
+            }
 
-            // Main Track Image: கேன்வாஸில் Player-ஐ விரலால் நகர்த்தி வைக்கும் வசதி (Preview & Export ஒத்திசைவு)
+            // வீடியோ கிளிப் இருந்தால் மட்டுமே ExoPlayer தெரியும் (இரட்டைப் படம் தெரிவதைத் தடுக்கும்)
+            if (currentMainClip?.type == ClipType.VIDEO) {
+                AndroidView(
+                    factory = { context ->
+                        PlayerView(context).apply {
+                            useController = false
+                            this.player = player
+                            this.resizeMode = resizeMode
+                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        }
+                    },
+                    update = {
+                        it.player = player
+                        it.resizeMode = resizeMode
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+
+            // 3. Main Track Image: இரண்டு விரல் Pinch Zoom In/Out + Drag to Move + Group 5 Zoom
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
                 val halfDuration = duration / 2f
 
-                val zoomScale = if (timeInClip <= halfDuration) {
+                // முதல் பாதி 1.0x -> 1.10x Zoom In, இரண்டாம் பாதி 1.10x -> 1.0x Zoom Out
+                val autoZoomScale = if (timeInClip <= halfDuration) {
                     val p = (timeInClip.toFloat() / halfDuration).coerceIn(0f, 1f)
                     1.0f + (0.10f * p)
                 } else {
@@ -137,23 +180,24 @@ fun PreviewPlayer(
                 val isMainSelected = currentMainClip.id == selectedClipId
                 val mainTransform = currentMainClip.transform
 
-                val mainDragModifier = Modifier.pointerInput(currentMainClip.id, w, h) {
-                    var ox = mainTransform.offsetX
-                    var oy = mainTransform.offsetY
-                    detectDragGestures(
-                        onDragStart = {
-                            onSelectOverlay(currentMainClip.id)
-                            ox = currentMainClip.transform.offsetX
-                            oy = currentMainClip.transform.offsetY
-                        },
-                        onDrag = { change, drag ->
-                            change.consume()
-                            ox = (ox + drag.x / (w / 2f)).coerceIn(-1.5f, 1.5f)
-                            oy = (oy + drag.y / (h / 2f)).coerceIn(-1.5f, 1.5f)
-                            onMoveOverlay(currentMainClip.id, ox, oy)
-                        }
-                    )
+                // இரண்டு விரலால் Pinch செய்து Zoom In/Out மற்றும் தொட்டு நகர்த்தும் GestureDetector
+                val pinchAndDragModifier = Modifier.pointerInput(currentMainClip.id, w, h) {
+                    var currentScale = mainTransform.scale
+                    var currentOx = mainTransform.offsetX
+                    var currentOy = mainTransform.offsetY
+
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        currentScale = (currentScale * zoom).coerceIn(0.5f, 3.5f)
+                        currentOx = (currentOx + pan.x / (w / 2f)).coerceIn(-2.0f, 2.0f)
+                        currentOy = (currentOy + pan.y / (h / 2f)).coerceIn(-2.0f, 2.0f)
+
+                        onSelectOverlay(currentMainClip.id)
+                        onScaleOverlay(currentMainClip.id, currentScale)
+                        onMoveOverlay(currentMainClip.id, currentOx, currentOy)
+                    }
                 }
+
+                val totalScale = autoZoomScale * mainTransform.scale
 
                 AsyncImage(
                     model = currentMainClip.mediaUri,
@@ -162,14 +206,14 @@ fun PreviewPlayer(
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
-                            scaleX = zoomScale
-                            scaleY = zoomScale
+                            scaleX = totalScale
+                            scaleY = totalScale
                             alpha = alphaVal
                             translationX = (mainTransform.offsetX / 2f) * w
                             translationY = (mainTransform.offsetY / 2f) * h
                             rotationZ = (currentMainClip.rotationDegrees + mainTransform.rotationDegrees).toFloat()
                         }
-                        .then(mainDragModifier)
+                        .then(pinchAndDragModifier)
                         .then(
                             if (isMainSelected) {
                                 Modifier.border(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.8f))
@@ -177,12 +221,6 @@ fun PreviewPlayer(
                                 Modifier
                             }
                         ),
-                )
-            } else if (currentMainClip == null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(backgroundColorArgb)),
                 )
             }
 
@@ -199,7 +237,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // Overlays Layer: Export-ல் உள்ளது போல முழு உயரத்தில் (Full Height) Preview-லும் ரெண்டர் ஆகுதல்
+            // Overlays Layer: News Alert பேனர் முழு உயரத்தில் ரெண்டர் ஆகுதல்
             OverlayLayer(
                 overlays = overlays,
                 playheadMs = playheadMs,
@@ -255,7 +293,8 @@ fun PreviewPlayer(
                     modifier = Modifier
                         .size(56.dp)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.45f)),
+                        .background(Color.Black.copy(alpha = 0.45f))
+                        .clickable { onTogglePlay() },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
@@ -393,7 +432,6 @@ private fun OverlayLayer(
                 val imageUri = clip.mediaUri
                 if (imageUri != null && clip.text == null) {
                     if (isNewsBanner) {
-                        // Export-ல் இருப்பது போன்றே Preview-லும் 100% Full Height-ல் காட்டும் முறை
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -406,11 +444,11 @@ private fun OverlayLayer(
                                     .fillMaxSize()
                                     .align(Alignment.Center),
                             )
-                            // இடதுபுற தொடுதலை மட்டும் எடுத்துக்கொள்ளும் மறைமுக கிளிக் பகுதி (Player நகர்வதற்கு இடையூறு இல்லாமல்)
+                            // இடதுபுற தொடுதல் பரப்பு: Player மீது கை வைத்தால் News Alert கிளிக் ஆகாது
                             Box(
                                 modifier = Modifier
                                     .fillMaxHeight()
-                                    .fillMaxWidth(0.50f)
+                                    .fillMaxWidth(0.48f)
                                     .align(Alignment.CenterStart)
                                     .clickable { onSelect(clip.id) }
                             )
