@@ -108,7 +108,7 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // Main Track Image: கேன்வாஸில் Player-ஐ விரலால் தொட்டவுடன் நகர்த்தும் வசதி
+            // Main Track Image: கேன்வாஸில் Player-ஐ விரலால் நகர்த்தி வைக்கும் வசதி (Preview & Export ஒத்திசைவு)
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
@@ -137,7 +137,6 @@ fun PreviewPlayer(
                 val isMainSelected = currentMainClip.id == selectedClipId
                 val mainTransform = currentMainClip.transform
 
-                // Player-ஐ நேரடியாகத் தொட்டு நகர்த்தும் GestureDetector
                 val mainDragModifier = Modifier.pointerInput(currentMainClip.id, w, h) {
                     var ox = mainTransform.offsetX
                     var oy = mainTransform.offsetY
@@ -200,7 +199,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // Overlays Layer (News Alert பேனர் உள்பட)
+            // Overlays Layer: Export-ல் உள்ளது போல முழு உயரத்தில் (Full Height) Preview-லும் ரெண்டர் ஆகுதல்
             OverlayLayer(
                 overlays = overlays,
                 playheadMs = playheadMs,
@@ -394,26 +393,26 @@ private fun OverlayLayer(
                 val imageUri = clip.mediaUri
                 if (imageUri != null && clip.text == null) {
                     if (isNewsBanner) {
-                        // News Alert தொடுதல் பரப்பு இடதுபுறம் 52% அளவுக்கு மட்டுமே கட்டுப்படுத்தப்படுகிறது.
-                        // இதனால் வலதுபுறம் உள்ள Player-ஐ தொடும்போது News Alert கிளிக் ஆகாது!
+                        // Export-ல் இருப்பது போன்றே Preview-லும் 100% Full Height-ல் காட்டும் முறை
                         Box(
                             modifier = Modifier
-                                .fillMaxHeight()
-                                .fillMaxWidth(0.52f)
-                                .align(Alignment.CenterStart)
-                                .clipToBounds()
+                                .fillMaxSize()
                                 .then(gestureModifier)
-                                .pointerInput(clip.id) {
-                                    detectTapGestures(onTap = { onSelect(clip.id) })
-                                }
                         ) {
                             StickerImage(
                                 uri = imageUri,
                                 widthPx = w,
                                 modifier = Modifier
+                                    .fillMaxSize()
+                                    .align(Alignment.Center),
+                            )
+                            // இடதுபுற தொடுதலை மட்டும் எடுத்துக்கொள்ளும் மறைமுக கிளிக் பகுதி (Player நகர்வதற்கு இடையூறு இல்லாமல்)
+                            Box(
+                                modifier = Modifier
                                     .fillMaxHeight()
-                                    .width(with(density) { w.toDp() })
-                                    .align(Alignment.CenterStart),
+                                    .fillMaxWidth(0.50f)
+                                    .align(Alignment.CenterStart)
+                                    .clickable { onSelect(clip.id) }
                             )
                         }
                     } else {
