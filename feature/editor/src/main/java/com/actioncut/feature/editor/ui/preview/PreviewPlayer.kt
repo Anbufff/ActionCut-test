@@ -24,8 +24,12 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,10 +37,12 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -44,6 +50,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -55,8 +63,11 @@ import coil.request.ImageRequest
 import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
+import com.actioncut.core.model.CropRect
 import com.actioncut.core.model.TransitionType
+import com.actioncut.feature.editor.ui.pip.AiCutoutManager
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
+import kotlin.math.roundToInt
 
 @Composable
 fun PreviewPlayer(
@@ -72,6 +83,8 @@ fun PreviewPlayer(
     pipPlayer: ExoPlayer? = null,
     pipClips: List<Clip> = emptyList(),
     onScaleOverlay: (String, Float) -> Unit = { _, _ -> },
+    onCropChange: (String, CropRect) -> Unit = { _, _ -> },
+    isCropModeActive: Boolean = false,
     fitMode: com.actioncut.core.model.FitMode = com.actioncut.core.model.FitMode.FILL,
     backgroundColorArgb: Int = 0xFF000000.toInt(),
     allClips: List<Clip> = emptyList(),
@@ -133,12 +146,6 @@ fun PreviewPlayer(
                         .fillMaxSize()
                         .background(Color.Black.copy(alpha = 0.35f)),
                 )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black),
-                )
             }
 
             if (currentMainClip?.type == ClipType.VIDEO) {
@@ -159,7 +166,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // 2. Main Track Image (Ken Burns Auto-Zoom)
+            // 2. Main Track Image Auto-Zoom
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
@@ -188,22 +195,6 @@ fun PreviewPlayer(
                 val isMainSelected = currentMainClip.id == selectedClipId
                 val mainTransform = currentMainClip.transform
 
-                val transformGestureModifier = Modifier.pointerInput(currentMainClip.id, w, h) {
-                    var currentScale = mainTransform.scale
-                    var currentOx = mainTransform.offsetX
-                    var currentOy = mainTransform.offsetY
-
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        currentScale = (currentScale * zoom).coerceIn(0.5f, 3.5f)
-                        currentOx = (currentOx + pan.x / (w / 2f)).coerceIn(-2.0f, 2.0f)
-                        currentOy = (currentOy + pan.y / (h / 2f)).coerceIn(-2.0f, 2.0f)
-
-                        onSelectOverlay(currentMainClip.id)
-                        onScaleOverlay(currentMainClip.id, currentScale)
-                        onMoveOverlay(currentMainClip.id, currentOx, currentOy)
-                    }
-                }
-
                 val totalScale = autoZoomScale * mainTransform.scale
 
                 AsyncImage(
@@ -220,7 +211,6 @@ fun PreviewPlayer(
                             translationY = (mainTransform.offsetY / 2f) * h
                             rotationZ = (currentMainClip.rotationDegrees + mainTransform.rotationDegrees).toFloat()
                         }
-                        .then(transformGestureModifier)
                         .then(
                             if (isMainSelected) {
                                 Modifier.border(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.8f))
@@ -231,16 +221,18 @@ fun PreviewPlayer(
                 )
             }
 
-            // 3. Fty-style PiP Layer (வீடியோ & போட்டோ இரண்டையுமே இயக்கும்படி இணைக்கப்பட்டது)
+            // 3. Fty HTML Video Editor பாணியில் PiP Layer (Free Crop + AI Cutout)
             if (pipPlayer != null) {
                 PipLayer(
                     pipPlayer = pipPlayer,
                     pipClips = pipClips,
                     playheadMs = playheadMs,
                     selectedClipId = selectedClipId,
+                    isCropModeActive = isCropModeActive,
                     onSelect = onSelectOverlay,
                     onMove = onMoveOverlay,
                     onScale = onScaleOverlay,
+                    onCropChange = onCropChange,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -318,7 +310,12 @@ fun PreviewPlayer(
 }
 
 /**
- * Fty Video Editor ஸ்கிரீன்ஷாட்டில் உள்ளபடியே PiP பாக்ஸ், சியான் டாஷ்ட் பார்டர், Cutout மற்றும் Free Crop
+ * Fty Video Editor ஸ்கிரீன்ஷாட்டில் உள்ளபடியே:
+ * 1. சியான் டாஷ்ட் பார்டர் (Cyan Dashed Border)
+ * 2. 4 மூலைகளில் L-வடிவ Corner Brackets
+ * 3. 4 பக்கங்களில் வட்ட வடிவ Edge Handles (Top, Bottom, Left, Right)
+ * 4. வலது கீழ் மூலையில் வெள்ளை நிற Resize Handle
+ * 5. Google ML Kit On-Device AI Human Cutout Display
  */
 @Composable
 private fun PipLayer(
@@ -326,31 +323,42 @@ private fun PipLayer(
     pipClips: List<Clip>,
     playheadMs: Long,
     selectedClipId: String?,
+    isCropModeActive: Boolean,
     onSelect: (String) -> Unit,
     onMove: (String, Float, Float) -> Unit,
     onScale: (String, Float) -> Unit,
+    onCropChange: (String, CropRect) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val active = pipClips.firstOrNull {
         playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
     } ?: return
 
+    val context = LocalContext.current
+    var cutoutUri by remember(active.id, active.filter?.id) { mutableStateOf<String?>(null) }
+    val isAiCutoutOn = active.filter?.id == "ai_cutout"
+
+    LaunchedEffect(active.id, active.mediaUri, isAiCutoutOn) {
+        if (isAiCutoutOn && active.mediaUri != null && active.type == ClipType.IMAGE) {
+            val res = AiCutoutManager.getOrCreateCutoutUri(context, active.mediaUri!!)
+            cutoutUri = res
+        } else {
+            cutoutUri = null
+        }
+    }
+
     BoxWithConstraints(modifier) {
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
+        val density = LocalDensity.current.density
         val props = com.actioncut.core.model.Keyframes.propsAt(active, playheadMs - active.timelineStartMs)
         val t = props.transform
-        val density = LocalContext.current.resources.displayMetrics.density
         val pipW = (w * t.scale) / density
         val pipH = (h * t.scale) / density
         val isSelected = active.id == selectedClipId
         val cyanColor = Color(0xFF00E5FF)
 
-        // சேஃப்-கால் மூலம் ஸ்மார்ட்-காஸ்ட் பிரச்சனை இன்றி Circle Cutout கண்டறிதல்
-        val activeCrop = active.crop
-        val isCircleCutout = active.filter?.id == "cutout_circle" ||
-            (activeCrop?.left == 0.12f && activeCrop?.top == 0.08f)
-        val cutoutShape = if (isCircleCutout) CircleShape else RectangleShape
+        val currentCrop = active.crop ?: CropRect(0f, 0f, 1f, 1f)
 
         Box(
             modifier = Modifier
@@ -362,27 +370,6 @@ private fun PipLayer(
                     rotationZ = t.rotationDegrees
                     alpha = props.opacity
                 }
-                .then(
-                    if (isSelected) {
-                        Modifier.drawBehind {
-                            val stroke = Stroke(
-                                width = 2.5f * density,
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f),
-                            )
-                            if (isCircleCutout) {
-                                drawCircle(color = cyanColor, style = stroke)
-                            } else {
-                                drawRoundRect(
-                                    color = cyanColor,
-                                    cornerRadius = CornerRadius(4f * density),
-                                    style = stroke,
-                                )
-                            }
-                        }
-                    } else {
-                        Modifier.border(1.dp, Color.White.copy(alpha = 0.4f), cutoutShape)
-                    }
-                )
                 .pointerInput(active.id, w, h) {
                     var ox = t.offsetX
                     var oy = t.offsetY
@@ -397,78 +384,295 @@ private fun PipLayer(
                     )
                 },
         ) {
-            // Free Crop & Cutout Shape Clamping
+            // 1. பிம்பம் - Crop Clip செய்யப்பட்டு வரையப்படுதல்
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .drawWithContent {
-                        val crop = activeCrop
-                        if (crop != null && !crop.isFull) {
-                            val cLeft = crop.left
-                            val cTop = crop.top
-                            val cRight = crop.right
-                            val cBottom = crop.bottom
-                            val clipRect = Rect(
-                                left = size.width * cLeft,
-                                top = size.height * cTop,
-                                right = size.width * cRight,
-                                bottom = size.height * cBottom,
-                            )
-                            drawContext.canvas.save()
-                            drawContext.canvas.clipRect(clipRect)
-                            drawContent()
-                            drawContext.canvas.restore()
-                        } else {
-                            drawContent()
-                        }
-                    }
-                    .clip(cutoutShape),
+                        val crop = currentCrop
+                        val clipRect = Rect(
+                            left = size.width * crop.left,
+                            top = size.height * crop.top,
+                            right = size.width * crop.right,
+                            bottom = size.height * crop.bottom,
+                        )
+                        drawContext.canvas.save()
+                        drawContext.canvas.clipRect(clipRect)
+                        drawContent()
+                        drawContext.canvas.restore()
+                    },
             ) {
+                val displayUri = if (isAiCutoutOn && cutoutUri != null) cutoutUri else active.mediaUri
                 if (active.type == ClipType.VIDEO) {
                     AndroidView(
-                        factory = { context ->
-                            PlayerView(context).apply {
+                        factory = { ctx ->
+                            PlayerView(ctx).apply {
                                 useController = false
                                 this.player = pipPlayer
                                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                                setBackgroundColor(android.graphics.Color.BLACK)
+                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
                             }
                         },
                         update = { it.player = pipPlayer },
-                        modifier = Modifier.fillMaxSize().clip(cutoutShape),
+                        modifier = Modifier.fillMaxSize(),
                     )
                 } else {
                     AsyncImage(
-                        model = active.mediaUri,
+                        model = displayUri,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize().clip(cutoutShape),
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
             }
 
-            // Fty ஸ்கிரீன்ஷாட்டில் உள்ளபடியே தேர்வு செய்யப்பட்டால் தோன்றும் 4 பக்க வட்டங்கள் & ஸ்கேலிங் கைப்பிடி
+            // 2. Fty HTML Video Editor பாணி Live On-Screen Free Crop Bounding Box & Handles
             if (isSelected) {
-                Box(modifier = Modifier.align(Alignment.TopCenter).size(12.dp).clip(CircleShape).background(cyanColor))
-                Box(modifier = Modifier.align(Alignment.BottomCenter).size(12.dp).clip(CircleShape).background(cyanColor))
-                Box(modifier = Modifier.align(Alignment.CenterStart).size(12.dp).clip(CircleShape).background(cyanColor))
-                Box(modifier = Modifier.align(Alignment.CenterEnd).size(12.dp).clip(CircleShape).background(cyanColor))
+                // Fty சியான் நிற டாஷ்ட் பார்டர் (Cyan Dashed Border) Crop அளவைச் சுற்றி துல்லியமாக வரைதல்
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .drawBehind {
+                            val cL = size.width * currentCrop.left
+                            val cT = size.height * currentCrop.top
+                            val cW = size.width * (currentCrop.right - currentCrop.left)
+                            val cH = size.height * (currentCrop.bottom - currentCrop.top)
 
+                            val dashStroke = Stroke(
+                                width = 2.5f * density,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f),
+                            )
+                            drawRoundRect(
+                                color = cyanColor,
+                                topLeft = Offset(cL, cT),
+                                size = Size(cW, cH),
+                                cornerRadius = CornerRadius(2f * density),
+                                style = dashStroke,
+                            )
+                        },
+                )
+
+                // Fty 4 பக்க வட்ட வடிவ கைப்பிடிகள் (Top, Bottom, Left, Right Edge Circles)
+                val pipPixelW = pipW * density
+                val pipPixelH = pipH * density
+
+                // Top Edge Handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (pipPixelW * ((currentCrop.left + currentCrop.right) / 2f) - 8 * density).roundToInt(),
+                                (pipPixelH * currentCrop.top - 8 * density).roundToInt(),
+                            )
+                        }
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .background(cyanColor)
+                        .border(1.5.dp, Color.White, CircleShape)
+                        .pointerInput(active.id) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                val dy = drag.y / pipPixelH
+                                val newTop = (currentCrop.top + dy).coerceIn(0f, currentCrop.bottom - 0.08f)
+                                onCropChange(active.id, currentCrop.copy(top = newTop))
+                            }
+                        },
+                )
+
+                // Bottom Edge Handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (pipPixelW * ((currentCrop.left + currentCrop.right) / 2f) - 8 * density).roundToInt(),
+                                (pipPixelH * currentCrop.bottom - 8 * density).roundToInt(),
+                            )
+                        }
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .background(cyanColor)
+                        .border(1.5.dp, Color.White, CircleShape)
+                        .pointerInput(active.id) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                val dy = drag.y / pipPixelH
+                                val newBottom = (currentCrop.bottom + dy).coerceIn(currentCrop.top + 0.08f, 1f)
+                                onCropChange(active.id, currentCrop.copy(bottom = newBottom))
+                            }
+                        },
+                )
+
+                // Left Edge Handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (pipPixelW * currentCrop.left - 8 * density).roundToInt(),
+                                (pipPixelH * ((currentCrop.top + currentCrop.bottom) / 2f) - 8 * density).roundToInt(),
+                            )
+                        }
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .background(cyanColor)
+                        .border(1.5.dp, Color.White, CircleShape)
+                        .pointerInput(active.id) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                val dx = drag.x / pipPixelW
+                                val newLeft = (currentCrop.left + dx).coerceIn(0f, currentCrop.right - 0.08f)
+                                onCropChange(active.id, currentCrop.copy(left = newLeft))
+                            }
+                        },
+                )
+
+                // Right Edge Handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (pipPixelW * currentCrop.right - 8 * density).roundToInt(),
+                                (pipPixelH * ((currentCrop.top + currentCrop.bottom) / 2f) - 8 * density).roundToInt(),
+                            )
+                        }
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .background(cyanColor)
+                        .border(1.5.dp, Color.White, CircleShape)
+                        .pointerInput(active.id) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                val dx = drag.x / pipPixelW
+                                val newRight = (currentCrop.right + dx).coerceIn(currentCrop.left + 0.08f, 1f)
+                                onCropChange(active.id, currentCrop.copy(right = newRight))
+                            }
+                        },
+                )
+
+                // Fty பாணி 4 மூலை L-வடிவ பிராக்கெட்டுகள் (4 Corner Brackets: TL, TR, BL, BR)
+                // Top-Left Corner
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (pipPixelW * currentCrop.left - 4 * density).roundToInt(),
+                                (pipPixelH * currentCrop.top - 4 * density).roundToInt(),
+                            )
+                        }
+                        .size(20.dp)
+                        .drawBehind {
+                            val strokeW = 3.5f * density
+                            drawLine(cyanColor, Offset(0f, 0f), Offset(size.width, 0f), strokeW)
+                            drawLine(cyanColor, Offset(0f, 0f), Offset(0f, size.height), strokeW)
+                        }
+                        .pointerInput(active.id) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                val dx = drag.x / pipPixelW
+                                val dy = drag.y / pipPixelH
+                                val newLeft = (currentCrop.left + dx).coerceIn(0f, currentCrop.right - 0.08f)
+                                val newTop = (currentCrop.top + dy).coerceIn(0f, currentCrop.bottom - 0.08f)
+                                onCropChange(active.id, currentCrop.copy(left = newLeft, top = newTop))
+                            }
+                        },
+                )
+
+                // Top-Right Corner
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (pipPixelW * currentCrop.right - 16 * density).roundToInt(),
+                                (pipPixelH * currentCrop.top - 4 * density).roundToInt(),
+                            )
+                        }
+                        .size(20.dp)
+                        .drawBehind {
+                            val strokeW = 3.5f * density
+                            drawLine(cyanColor, Offset(0f, 0f), Offset(size.width, 0f), strokeW)
+                            drawLine(cyanColor, Offset(size.width, 0f), Offset(size.width, size.height), strokeW)
+                        }
+                        .pointerInput(active.id) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                val dx = drag.x / pipPixelW
+                                val dy = drag.y / pipPixelH
+                                val newRight = (currentCrop.right + dx).coerceIn(currentCrop.left + 0.08f, 1f)
+                                val newTop = (currentCrop.top + dy).coerceIn(0f, currentCrop.bottom - 0.08f)
+                                onCropChange(active.id, currentCrop.copy(right = newRight, top = newTop))
+                            }
+                        },
+                )
+
+                // Bottom-Left Corner
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (pipPixelW * currentCrop.left - 4 * density).roundToInt(),
+                                (pipPixelH * currentCrop.bottom - 16 * density).roundToInt(),
+                            )
+                        }
+                        .size(20.dp)
+                        .drawBehind {
+                            val strokeW = 3.5f * density
+                            drawLine(cyanColor, Offset(0f, size.height), Offset(size.width, size.height), strokeW)
+                            drawLine(cyanColor, Offset(0f, 0f), Offset(0f, size.height), strokeW)
+                        }
+                        .pointerInput(active.id) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                val dx = drag.x / pipPixelW
+                                val dy = drag.y / pipPixelH
+                                val newLeft = (currentCrop.left + dx).coerceIn(0f, currentCrop.right - 0.08f)
+                                val newBottom = (currentCrop.bottom + dy).coerceIn(currentCrop.top + 0.08f, 1f)
+                                onCropChange(active.id, currentCrop.copy(left = newLeft, bottom = newBottom))
+                            }
+                        },
+                )
+
+                // Bottom-Right Corner
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (pipPixelW * currentCrop.right - 16 * density).roundToInt(),
+                                (pipPixelH * currentCrop.bottom - 16 * density).roundToInt(),
+                            )
+                        }
+                        .size(20.dp)
+                        .drawBehind {
+                            val strokeW = 3.5f * density
+                            drawLine(cyanColor, Offset(0f, size.height), Offset(size.width, size.height), strokeW)
+                            drawLine(cyanColor, Offset(size.width, 0f), Offset(size.width, size.height), strokeW)
+                        }
+                        .pointerInput(active.id) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                val dx = drag.x / pipPixelW
+                                val dy = drag.y / pipPixelH
+                                val newRight = (currentCrop.right + dx).coerceIn(currentCrop.left + 0.08f, 1f)
+                                val newBottom = (currentCrop.bottom + dy).coerceIn(currentCrop.top + 0.08f, 1f)
+                                onCropChange(active.id, currentCrop.copy(right = newRight, bottom = newBottom))
+                            }
+                        },
+                )
+
+                // 3. Fty வலது கீழ் மூலையில் உள்ள பெரிய வெள்ளை நிற Scaling Handle
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .offset(x = 6.dp, y = 6.dp)
-                        .size(22.dp)
+                        .size(24.dp)
                         .clip(CircleShape)
                         .background(Color.White)
-                        .border(2.dp, cyanColor, CircleShape)
+                        .border(2.5.dp, cyanColor, CircleShape)
                         .pointerInput(active.id, w) {
                             var s = t.scale
                             detectDragGestures(
                                 onDragStart = { onSelect(active.id); s = active.transform.scale },
                                 onDrag = { change, drag ->
                                     change.consume()
-                                    s = (s + drag.x / w).coerceIn(0.15f, 1.8f)
+                                    s = (s + drag.x / w).coerceIn(0.15f, 2.0f)
                                     onScale(active.id, s)
                                 },
                             )
