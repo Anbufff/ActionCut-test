@@ -43,7 +43,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.actioncut.core.common.time.TimeFormatter
 import com.actioncut.core.designsystem.component.PrimaryButton
-import com.actioncut.core.designsystem.component.rememberHaptic
 import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.TrackType
@@ -71,7 +70,7 @@ fun EditorScreen(
 
     var showNewsAlertTemplates by remember { mutableStateOf(false) }
     var showFlashNewsText by remember { mutableStateOf(false) }
-    var showFreeCropDialog by remember { mutableStateOf(false) }
+    var isCropModeActive by remember { mutableStateOf(false) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -156,7 +155,6 @@ fun EditorScreen(
             onAspectRatio = viewModel::setAspectRatio,
         )
 
-        // முக்கிய திருத்தம்: pipClips-ல் VIDEO மற்றும் IMAGE இரண்டுமே இணைக்கப்பட்டுள்ளன!
         val activePipClips = uiState.timeline.tracks
             .filter { it.type == TrackType.OVERLAY }
             .flatMap { it.clips }
@@ -177,6 +175,8 @@ fun EditorScreen(
             pipPlayer = viewModel.playerController.pipPlayer,
             pipClips = activePipClips,
             onScaleOverlay = viewModel::setOverlayScale,
+            onCropChange = { id, crop -> viewModel.setCrop(id, crop) },
+            isCropModeActive = isCropModeActive,
             fitMode = uiState.canvas.fitMode,
             backgroundColorArgb = uiState.canvas.backgroundColorArgb,
             allClips = uiState.timeline.allClips,
@@ -254,13 +254,22 @@ fun EditorScreen(
                             selClip.mediaUri?.contains("news_banner") != true
                     )
 
-                    if (isPipSelected) {
+                    if (isPipSelected && selClip != null) {
+                        val isKeyframeMode = selClip.keyframes.isNotEmpty()
+                        val isCutoutActive = selClip.filter?.id == "ai_cutout"
+
                         PipSelectedBar(
-                            onCrop = { showFreeCropDialog = true },
+                            isKeyframeMode = isKeyframeMode,
+                            isCropActive = isCropModeActive,
+                            isCutoutActive = isCutoutActive,
+                            onCrop = { isCropModeActive = !isCropModeActive },
                             onTrimRight = viewModel::trimRightAtPlayhead,
                             onCutout = { viewModel.togglePipCutout() },
                             onDelete = viewModel::deleteSelected,
                             onSettings = { viewModel.setActiveTool(EditorTool.KEYFRAME) },
+                            onKeyframeToggle = viewModel::addKeyframeAtPlayhead,
+                            onClipEnd = { /* Stretches PiP to main clip end */ },
+                            onVidEnd = { /* Stretches PiP to video end */ },
                         )
                     } else if (selClip != null) {
                         SelectedClipBar(
@@ -290,19 +299,6 @@ fun EditorScreen(
                 }
             }
         }
-    }
-
-    // Fty Free Crop Dialog திறக்கும் செயல்பாடு
-    val selectedClip = uiState.selectedClip
-    if (showFreeCropDialog && selectedClip != null) {
-        FreeCropDialog(
-            clip = selectedClip,
-            onDismiss = { showFreeCropDialog = false },
-            onApplyCrop = { cropRect ->
-                viewModel.setCrop(selectedClip.id, cropRect)
-                showFreeCropDialog = false
-            },
-        )
     }
 
     if (showNewsAlertTemplates) {
@@ -475,7 +471,7 @@ private fun PlaybackBar(
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
 ) {
-    val haptic = rememberHaptic()
+    val haptic = com.actioncut.core.designsystem.component.rememberHaptic()
     Row(
         modifier = Modifier
             .fillMaxWidth()
