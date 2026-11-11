@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,9 +30,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -88,7 +93,6 @@ fun PreviewPlayer(
             .background(Color.Black),
         contentAlignment = Alignment.Center,
     ) {
-        // கண்டிப்பான 16:9 பிரேமிற்குள் மட்டுமே அடங்கும் விண்டோ
         BoxWithConstraints(
             modifier = Modifier
                 .aspectRatio(aspectRatio.value)
@@ -99,12 +103,12 @@ fun PreviewPlayer(
             val w = constraints.maxWidth.toFloat()
             val h = constraints.maxHeight.toFloat()
 
-            // 1. பின்னணியில் அதே படத்தின் 100% மங்கலான Blur Effect
+            // 1. பின்னணியில் அதே படத்தின் Blur Effect
             if (currentMainClip != null && currentMainClip.mediaUri != null) {
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
                         .data(currentMainClip.mediaUri)
-                        .size(64, 36) // 64x36-க்கு சுருக்கி விரிப்பதன் மூலம் அதிவேக இயற்கை Blur உருவாதல்
+                        .size(64, 36)
                         .crossfade(true)
                         .build(),
                     contentDescription = null,
@@ -136,7 +140,6 @@ fun PreviewPlayer(
                 )
             }
 
-            // வீடியோ இருந்தால் மட்டுமே ExoPlayer இயங்கும் (படங்களின் போது இரட்டைப் படம் வராது)
             if (currentMainClip?.type == ClipType.VIDEO) {
                 AndroidView(
                     factory = { context ->
@@ -155,7 +158,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // 2. Main Track Image: இரண்டு விரல் Pinch Zoom + Drag to Move + Group 5 Zoom In-Out
+            // 2. Main Track Image
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
@@ -205,7 +208,7 @@ fun PreviewPlayer(
                 AsyncImage(
                     model = currentMainClip.mediaUri,
                     contentDescription = null,
-                    contentScale = ContentScale.Fit, // Fit: முழு படமும் தெரியும்; வெளியே Blur தெரியும்
+                    contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
@@ -227,6 +230,7 @@ fun PreviewPlayer(
                 )
             }
 
+            // 3. Fty-style PiP Layer (வீடியோ & போட்டோ இரண்டிற்கும் சியான் டாஷ்ட் பார்டர் & கைப்பிடிகள்)
             if (pipPlayer != null) {
                 PipLayer(
                     pipPlayer = pipPlayer,
@@ -240,7 +244,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // 3. Overlays Layer: News Alert பேனர் முழு உயரத்தில் இயங்குதல்
+            // Overlays Layer (News Alert)
             OverlayLayer(
                 overlays = overlays,
                 playheadMs = playheadMs,
@@ -312,6 +316,9 @@ fun PreviewPlayer(
     }
 }
 
+/**
+ * Fty Video Editor ஸ்கிரீன்ஷாட்டில் உள்ளபடியே PiP பாக்ஸ், சியான் டாஷ்ட் பார்டர் மற்றும் கைப்பிடிகள்
+ */
 @Composable
 private fun PipLayer(
     pipPlayer: ExoPlayer,
@@ -332,24 +339,40 @@ private fun PipLayer(
         val h = constraints.maxHeight.toFloat()
         val props = com.actioncut.core.model.Keyframes.propsAt(active, playheadMs - active.timelineStartMs)
         val t = props.transform
-        val density = androidx.compose.ui.platform.LocalDensity.current
-        val pipW = with(density) { (w * t.scale).toDp() }
-        val pipH = with(density) { (h * t.scale).toDp() }
+        val density = LocalContext.current.resources.displayMetrics.density
+        val pipW = (w * t.scale) / density
+        val pipH = (h * t.scale) / density
         val isSelected = active.id == selectedClipId
+
+        val cyanColor = Color(0xFF00E5FF)
 
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
-                .size(pipW, pipH)
+                .size(pipW.dp, pipH.dp)
                 .graphicsLayer {
                     translationX = (t.offsetX / 2f) * w
                     translationY = (t.offsetY / 2f) * h
                     rotationZ = t.rotationDegrees
                     alpha = props.opacity
                 }
-                .border(
-                    if (isSelected) 2.dp else 1.dp,
-                    if (isSelected) Color.White else Color.White.copy(alpha = 0.4f),
+                .then(
+                    if (isSelected) {
+                        Modifier.drawBehind {
+                            // Fty பாணி சியான் நிற டாஷ்ட் பார்டர் (Cyan Dashed Border)
+                            val stroke = Stroke(
+                                width = 2.5f * density,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+                            )
+                            drawRoundRect(
+                                color = cyanColor,
+                                cornerRadius = CornerRadius(4f * density),
+                                style = stroke
+                            )
+                        }
+                    } else {
+                        Modifier.border(1.dp, Color.White.copy(alpha = 0.4f))
+                    }
                 )
                 .pointerInput(active.id, w, h) {
                     var ox = t.offsetX
@@ -358,43 +381,66 @@ private fun PipLayer(
                         onDragStart = { onSelect(active.id); ox = active.transform.offsetX; oy = active.transform.offsetY },
                         onDrag = { change, drag ->
                             change.consume()
-                            ox = (ox + drag.x / (w / 2f)).coerceIn(-1f, 1f)
-                            oy = (oy + drag.y / (h / 2f)).coerceIn(-1f, 1f)
+                            ox = (ox + drag.x / (w / 2f)).coerceIn(-1.5f, 1.5f)
+                            oy = (oy + drag.y / (h / 2f)).coerceIn(-1.5f, 1.5f)
                             onMove(active.id, ox, oy)
                         },
                     )
                 },
         ) {
-            AndroidView(
-                factory = { context ->
-                    PlayerView(context).apply {
-                        useController = false
-                        this.player = pipPlayer
-                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                        setBackgroundColor(android.graphics.Color.BLACK)
-                    }
-                },
-                update = { it.player = pipPlayer },
-                modifier = Modifier.fillMaxSize(),
-            )
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .size(18.dp)
-                    .clip(CircleShape)
-                    .background(Color.White)
-                    .pointerInput(active.id, w) {
-                        var s = t.scale
-                        detectDragGestures(
-                            onDragStart = { onSelect(active.id); s = active.transform.scale },
-                            onDrag = { change, drag ->
-                                change.consume()
-                                s = (s + drag.x / w).coerceIn(0.1f, 1f)
-                                onScale(active.id, s)
-                            },
-                        )
+            // வீடியோ PiP அல்லது போட்டோ PiP இரண்டையும் ரெண்டர் செய்தல்
+            if (active.type == ClipType.VIDEO) {
+                AndroidView(
+                    factory = { context ->
+                        PlayerView(context).apply {
+                            useController = false
+                            this.player = pipPlayer
+                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                            setBackgroundColor(android.graphics.Color.BLACK)
+                        }
                     },
-            )
+                    update = { it.player = pipPlayer },
+                    modifier = Modifier.fillMaxSize().clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
+                )
+            } else {
+                AsyncImage(
+                    model = active.mediaUri,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
+                )
+            }
+
+            // Fty ஸ்கிரீன்ஷாட்டில் உள்ளபடியே தேர்வு செய்யப்பட்டால் தோன்றும் கைப்பிடிகள்
+            if (isSelected) {
+                // 4 பக்கங்களிலும் சியான் நிற வட்டக் கைப்பிடிகள்
+                Box(modifier = Modifier.align(Alignment.TopCenter).size(12.dp).clip(CircleShape).background(cyanColor))
+                Box(modifier = Modifier.align(Alignment.BottomCenter).size(12.dp).clip(CircleShape).background(cyanColor))
+                Box(modifier = Modifier.align(Alignment.CenterStart).size(12.dp).clip(CircleShape).background(cyanColor))
+                Box(modifier = Modifier.align(Alignment.CenterEnd).size(12.dp).clip(CircleShape).background(cyanColor))
+
+                // Fty வலது கீழ் மூலையில் உள்ள பெரிய வெள்ளை நிற ஸ்கேலிங் கைப்பிடி (Scale Handle)
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 6.dp, y = 6.dp)
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .border(2.dp, cyanColor, CircleShape)
+                        .pointerInput(active.id, w) {
+                            var s = t.scale
+                            detectDragGestures(
+                                onDragStart = { onSelect(active.id); s = active.transform.scale },
+                                onDrag = { change, drag ->
+                                    change.consume()
+                                    s = (s + drag.x / w).coerceIn(0.15f, 1.5f)
+                                    onScale(active.id, s)
+                                },
+                            )
+                        },
+                )
+            }
         }
     }
 }
@@ -408,7 +454,7 @@ private fun OverlayLayer(
     onMove: (String, Float, Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val density = androidx.compose.ui.platform.LocalDensity.current
+    val density = LocalContext.current.resources.displayMetrics.density
 
     BoxWithConstraints(modifier) {
         val w = constraints.maxWidth.toFloat()
