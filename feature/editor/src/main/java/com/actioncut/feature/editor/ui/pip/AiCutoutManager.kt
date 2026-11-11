@@ -41,8 +41,9 @@ object AiCutoutManager {
 
     private suspend fun runSelfieSegmentation(sourceBmp: Bitmap): Bitmap? = suspendCancellableCoroutine { continuation ->
         try {
+            // கூகுள் ML Kit-ன் சரியான மெத்தட்: setDetectorMode
             val options = SelfieSegmenterOptions.Builder()
-                .setDeliveryMode(SelfieSegmenterOptions.SINGLE_IMAGE_MODE)
+                .setDetectorMode(SelfieSegmenterOptions.SINGLE_IMAGE_MODE)
                 .build()
             val segmenter = Segmentation.getClient(options)
             val inputImage = InputImage.fromBitmap(sourceBmp, 0)
@@ -73,7 +74,7 @@ object AiCutoutManager {
                                 alpha,
                                 Color.red(origColor),
                                 Color.green(origColor),
-                                Color.blue(origColor)
+                                Color.blue(origColor),
                             )
                         }
                     }
