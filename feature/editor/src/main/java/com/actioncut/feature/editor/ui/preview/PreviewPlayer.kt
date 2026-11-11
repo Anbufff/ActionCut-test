@@ -36,7 +36,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
-import com.actioncut.core.designsystem.component.clickableNoRipple
 import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
@@ -69,10 +68,14 @@ fun PreviewPlayer(
         com.actioncut.core.model.FitMode.STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
-    // மெயின் டிராக்கில் உள்ள கிளிப்கள்
     val mainClips = allClips.filter { it.type == ClipType.VIDEO || it.type == ClipType.IMAGE }
         .sortedBy { it.timelineStartMs }
     val currentMainClip = mainClips.firstOrNull { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
+
+    // தற்போதைய News Alert பேனர்
+    val activeBanner = overlays.firstOrNull {
+        it.type == ClipType.STICKER && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
+    }
 
     Box(
         modifier = modifier
@@ -84,7 +87,22 @@ fun PreviewPlayer(
             modifier = Modifier
                 .aspectRatio(aspectRatio.value)
                 .background(Color(backgroundColorArgb))
-                .clickableNoRipple { onTogglePlay() },
+                // கேன்வாஸ் தொடுதலில்: இடதுபுறம் தொட்டால் News Alert, வலதுபுறம் தொட்டால் Main Image தேர்வு
+                .pointerInput(currentMainClip?.id, activeBanner?.id) {
+                    detectTapGestures(
+                        onDoubleTap = { onTogglePlay() },
+                        onTap = { offset ->
+                            val touchFractionX = offset.x / size.width
+                            if (touchFractionX <= 0.52f && activeBanner != null) {
+                                onSelectOverlay(activeBanner.id)
+                            } else if (currentMainClip != null) {
+                                onSelectOverlay(currentMainClip.id)
+                            } else {
+                                onTogglePlay()
+                            }
+                        }
+                    )
+                },
             contentAlignment = Alignment.Center,
         ) {
             AndroidView(
@@ -103,13 +121,12 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // Fty Video Editor: படம் உள்ள இடத்தில் மட்டுமே படம் இயங்கும்
+            // Zoom In - Out & Main Image
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
                 val halfDuration = duration / 2f
 
-                // முதல் பாதியில் 1.0x-1.10x Zoom In, இரண்டாம் பாதியில் 1.10x-1.0x Zoom Out
                 val zoomScale = if (timeInClip <= halfDuration) {
                     val p = (timeInClip.toFloat() / halfDuration).coerceIn(0f, 1f)
                     1.0f + (0.10f * p)
@@ -144,7 +161,6 @@ fun PreviewPlayer(
                         },
                 )
             } else if (currentMainClip == null) {
-                // படம் இல்லாத இடங்களில் முந்தைய கடைசி படம் திரையில் உறைந்து நிற்காமல் முழுக்க பிளாக் ஸ்கிரீன் ஆக்குதல் (Fty Editor)
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -174,6 +190,7 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
+            // Dynamic Scorecard Layer
             val activeScoreClip = allClips.firstOrNull { 
                 it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs 
             }
@@ -356,38 +373,26 @@ private fun OverlayLayer(
                             Modifier
                         },
                     )
-                    .pointerInput(clip.id, w, h) {
-                        var ox = t.offsetX
-                        var oy = t.offsetY
-                        detectDragGestures(
-                            onDragStart = {
-                                onSelect(clip.id)
-                                ox = clip.transform.offsetX
-                                oy = clip.transform.offsetY
-                            },
-                            onDrag = { change, drag ->
-                                change.consume()
-                                ox = (ox + drag.x / (w / 2f)).coerceIn(-1f, 1f)
-                                oy = (oy + drag.y / (h / 2f)).coerceIn(-1f, 1f)
-                                onMove(clip.id, ox, oy)
-                            },
-                        )
-                    }
-                    .clickableNoRipple { onSelect(clip.id) }
 
                 val imageUri = clip.mediaUri
                 if (imageUri != null && clip.text == null) {
                     StickerImage(
                         uri = imageUri,
                         widthPx = t.scale * w,
-                        modifier = Modifier.align(Alignment.Center).then(gestureModifier),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .then(gestureModifier)
+                            .clickable { onSelect(clip.id) },
                     )
                 } else {
                     Text(
                         text = glyph,
                         fontSize = (baseSp * t.scale).sp,
                         color = Color(clip.text?.colorArgb ?: 0xFFFFFFFF.toInt()),
-                        modifier = Modifier.align(Alignment.Center).then(gestureModifier),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .then(gestureModifier)
+                            .clickable { onSelect(clip.id) },
                     )
                 }
             }
