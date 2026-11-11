@@ -2,14 +2,14 @@ package com.actioncut.feature.editor.ui.tools
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CallSplit
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Delete
@@ -17,7 +17,6 @@ import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.FilterVintage
 import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
@@ -46,7 +45,7 @@ val MainTools: List<EditorTool> = listOf(
     EditorTool.SPEED,
     EditorTool.VOLUME,
     EditorTool.AUDIO,
-    EditorTool.MUSIC,
+    EditorTool.NEWS_ALERT, // Fty NEWS ALERT Button
     EditorTool.VOICEOVER,
     EditorTool.PIP,
     EditorTool.EXTRACT_AUDIO,
@@ -95,7 +94,7 @@ fun EditorTool.icon(): ImageVector = when (this) {
     EditorTool.VOLUME -> Icons.Filled.VolumeUp
     EditorTool.MUTE -> Icons.Filled.VolumeOff
     EditorTool.AUDIO -> Icons.Filled.LibraryMusic
-    EditorTool.MUSIC -> Icons.Filled.MusicNote
+    EditorTool.NEWS_ALERT -> Icons.Filled.Campaign // Fty NEWS ALERT Megaphone ஐகான்
     EditorTool.VOICEOVER -> Icons.Filled.Mic
     EditorTool.PIP -> Icons.Filled.PictureInPictureAlt
     EditorTool.CRIC -> Icons.Filled.SportsCricket
