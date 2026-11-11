@@ -80,24 +80,24 @@ fun PreviewPlayer(
         .sortedBy { it.timelineStartMs }
     val currentMainClip = mainClips.firstOrNull { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
 
-    BoxWithConstraints(
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .background(Color.Black),
         contentAlignment = Alignment.Center,
     ) {
-        val w = constraints.maxWidth.toFloat()
-        val h = constraints.maxHeight.toFloat()
-
-        // 1. கேன்வாஸ் விண்டோ கண்டிப்பான 16:9 விகிதத்தில் clipToBounds செய்யப்பட்டு அமையும்
-        Box(
+        // 1. கண்டிப்பாக 16:9 பிரேமிற்குள் மட்டுமே அடங்கும் விண்டோ (clipToBounds)
+        BoxWithConstraints(
             modifier = Modifier
                 .aspectRatio(aspectRatio.value)
                 .clipToBounds()
-                .background(Color(backgroundColorArgb)),
+                .background(Color.Black),
             contentAlignment = Alignment.Center,
         ) {
-            // 2. பின்னணியில் அதே படத்தின் மங்கலான Blur Effect
+            val w = constraints.maxWidth.toFloat()
+            val h = constraints.maxHeight.toFloat()
+
+            // 2. பின்னணியில் அதே படத்தின் மங்கலான Blur Effect + 35% Dark Scrim
             if (currentMainClip != null && currentMainClip.mediaUri != null) {
                 AsyncImage(
                     model = currentMainClip.mediaUri,
@@ -109,7 +109,7 @@ fun PreviewPlayer(
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                                 Modifier.graphicsLayer {
                                     renderEffect = android.graphics.RenderEffect.createBlurEffect(
-                                        45f, 45f, android.graphics.Shader.TileMode.CLAMP
+                                        55f, 55f, android.graphics.Shader.TileMode.CLAMP
                                     ).asComposeRenderEffect()
                                     alpha = 0.65f
                                 }
@@ -131,7 +131,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // வீடியோ கிளிப் இருந்தால் மட்டுமே ExoPlayer தெரியும் (இரட்டைப் படம் தெரிவதைத் தடுக்கும்)
+            // வீடியோ இருந்தால் மட்டுமே ExoPlayer இயங்கும் (படங்களின் போது இரட்டைப் படம் வராது)
             if (currentMainClip?.type == ClipType.VIDEO) {
                 AndroidView(
                     factory = { context ->
@@ -150,13 +150,12 @@ fun PreviewPlayer(
                 )
             }
 
-            // 3. Main Track Image: இரண்டு விரல் Pinch Zoom In/Out + Drag to Move + Group 5 Zoom
+            // 3. Main Track Image: இரண்டு விரல் Pinch Zoom (0.5x - 3.5x) + Drag to Move + Group 5 Zoom In-Out
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
                 val halfDuration = duration / 2f
 
-                // முதல் பாதி 1.0x -> 1.10x Zoom In, இரண்டாம் பாதி 1.10x -> 1.0x Zoom Out
                 val autoZoomScale = if (timeInClip <= halfDuration) {
                     val p = (timeInClip.toFloat() / halfDuration).coerceIn(0f, 1f)
                     1.0f + (0.10f * p)
@@ -180,8 +179,8 @@ fun PreviewPlayer(
                 val isMainSelected = currentMainClip.id == selectedClipId
                 val mainTransform = currentMainClip.transform
 
-                // இரண்டு விரலால் Pinch செய்து Zoom In/Out மற்றும் தொட்டு நகர்த்தும் GestureDetector
-                val pinchAndDragModifier = Modifier.pointerInput(currentMainClip.id, w, h) {
+                // இரண்டு விரலால் Pinch Zoom மற்றும் Drag செய்து நகர்த்தும் Gesture
+                val transformGestureModifier = Modifier.pointerInput(currentMainClip.id, w, h) {
                     var currentScale = mainTransform.scale
                     var currentOx = mainTransform.offsetX
                     var currentOy = mainTransform.offsetY
@@ -202,7 +201,7 @@ fun PreviewPlayer(
                 AsyncImage(
                     model = currentMainClip.mediaUri,
                     contentDescription = null,
-                    contentScale = if (fitMode == com.actioncut.core.model.FitMode.FIT) ContentScale.Fit else ContentScale.Crop,
+                    contentScale = ContentScale.Fit, // Fit: முழு படமும் தெரியும்; வெளியே Blur தெரியும்
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
@@ -213,7 +212,7 @@ fun PreviewPlayer(
                             translationY = (mainTransform.offsetY / 2f) * h
                             rotationZ = (currentMainClip.rotationDegrees + mainTransform.rotationDegrees).toFloat()
                         }
-                        .then(pinchAndDragModifier)
+                        .then(transformGestureModifier)
                         .then(
                             if (isMainSelected) {
                                 Modifier.border(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.8f))
@@ -237,7 +236,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // Overlays Layer: News Alert பேனர் முழு உயரத்தில் ரெண்டர் ஆகுதல்
+            // Overlays Layer: 16:9 பிரேமிற்குள் முழு உயரத்தில் இயங்கும் News Alert
             OverlayLayer(
                 overlays = overlays,
                 playheadMs = playheadMs,
@@ -444,7 +443,7 @@ private fun OverlayLayer(
                                     .fillMaxSize()
                                     .align(Alignment.Center),
                             )
-                            // இடதுபுற தொடுதல் பரப்பு: Player மீது கை வைத்தால் News Alert கிளிக் ஆகாது
+                            // இடதுபுறம் 48% தொடுதல் பரப்பு (Player Pinch & Drag-க்கு தடையின்றி இயங்கும்)
                             Box(
                                 modifier = Modifier
                                     .fillMaxHeight()
