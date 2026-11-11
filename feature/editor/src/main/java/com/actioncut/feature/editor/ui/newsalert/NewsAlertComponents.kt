@@ -1,4 +1,4 @@
-package com.actioncut.feature.editor.ui.newsalert
+package com.actioncut.feature.editor.ui
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -160,11 +160,6 @@ fun NewsAlertTemplatesDialog(
     }
 }
 
-/**
- * Flash News Text:
- * 1. Default-ஆக காலியாக ("") இருக்கும் (எளிதில் paste செய்யலாம்).
- * 2. கீழே உள்ள Apply மற்றும் Cancel பட்டன்கள் திரையில் தெளிவாகத் தெரியும்.
- */
 @Composable
 fun FlashNewsTextDialog(
     initialText: String = "",
@@ -191,7 +186,6 @@ fun FlashNewsTextDialog(
                     .imePadding()
                     .padding(16.dp),
             ) {
-                // Title Bar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -215,7 +209,6 @@ fun FlashNewsTextDialog(
 
                 Spacer(Modifier.height(12.dp))
 
-                // காலியான Textarea (எளிதில் paste செய்யும்படி)
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
@@ -241,7 +234,6 @@ fun FlashNewsTextDialog(
 
                 Spacer(Modifier.height(14.dp))
 
-                // 100% திரையில் தெளிவாகத் தெரியும் Buttons Row
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
