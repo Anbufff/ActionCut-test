@@ -1,6 +1,12 @@
 package com.actioncut.core.media.export
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.C
@@ -54,6 +60,10 @@ class Media3VideoExporter @Inject constructor(
             return@callbackFlow
         }
 
+        val aspect = settings.aspectRatio ?: project.aspectRatio
+        val (targetWidth, targetHeight) = targetDimensions(aspect, settings.resolution)
+
+        // Fty Video Editor: எக்ஸ்போர்ட் செய்யப்படும் ஒவ்வொரு படத்திற்கும் பின்னணியில் அதே படத்தின் 16:9 Blur Background அமைத்தல்
         val clips = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             rawClips.map { clip ->
                 if (clip.isReversed && clip.type == ClipType.VIDEO && clip.mediaUri != null) {
@@ -63,14 +73,19 @@ class Media3VideoExporter @Inject constructor(
                     } else {
                         clip
                     }
+                } else if (clip.type == ClipType.IMAGE && clip.mediaUri != null) {
+                    val blurredFrameUri = createBlurredBackdropImage(context, clip, targetWidth, targetHeight)
+                    if (blurredFrameUri != null) {
+                        clip.copy(mediaUri = blurredFrameUri)
+                    } else {
+                        clip
+                    }
                 } else {
                     clip
                 }
             }
         }
 
-        val aspect = settings.aspectRatio ?: project.aspectRatio
-        val (targetWidth, targetHeight) = targetDimensions(aspect, settings.resolution)
         val handler = Handler(Looper.getMainLooper())
         var transformer: Transformer? = null
         var progressRunnable: Runnable? = null
@@ -89,19 +104,18 @@ class Media3VideoExporter @Inject constructor(
                 val totalTimelineMs = project.timeline.durationMs
                 val totalVideoMs = clips.sumOf { it.timelineDurationMs }
 
-                // படங்கள் முடிந்த பிறகு கடைசி படம் நிற்காமல், மீதமுள்ள ஆடியோ நேரம் வரை பிளாக் ஸ்கிரீன் அமைத்தல் (Fty Editor)
                 val exportClips = if (totalTimelineMs > totalVideoMs && clips.isNotEmpty()) {
                     val blackFile = File(context.cacheDir, "black_gap.png")
                     if (!blackFile.exists()) {
-                        val bmp = android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888)
-                        val cv = android.graphics.Canvas(bmp)
+                        val bmp = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
+                        val cv = Canvas(bmp)
                         cv.drawColor(android.graphics.Color.BLACK)
-                        FileOutputStream(blackFile).use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                        FileOutputStream(blackFile).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
                     }
                     val blackClip = Clip(
                         id = "black_gap_${System.currentTimeMillis()}",
                         type = ClipType.IMAGE,
-                        mediaUri = android.net.Uri.fromFile(blackFile).toString(),
+                        mediaUri = Uri.fromFile(blackFile).toString(),
                         timelineStartMs = totalVideoMs,
                         timelineEndMs = totalTimelineMs,
                     )
@@ -211,6 +225,71 @@ class Media3VideoExporter @Inject constructor(
             }
         }
     }
+
+    /**
+     * எக்ஸ்போர்ட் வீடியோவில் கறுப்புப் பட்டைக்கு பதிலாக அதே படத்தின் மங்கலான 16:9 Blur Background-ஐ உருவாக்கும் முறை (Fty Video Editor)
+     */
+    private fun createBlurredBackdropImage(
+        context: Context,
+        clip: Clip,
+        targetWidth: Int,
+        targetHeight: Int,
+    ): String? = runCatching {
+        val uri = Uri.parse(clip.mediaUri)
+        val src = context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it)
+        } ?: return@runCatching null
+
+        val outBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(outBitmap)
+
+        // 1. பின்னணியில் மங்கலான Blur Effect
+        val small = Bitmap.createScaledBitmap(src, 64, 36, true)
+        val blurredBg = Bitmap.createScaledBitmap(small, targetWidth, targetHeight, true)
+        small.recycle()
+
+        val bgPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+        canvas.drawBitmap(blurredBg, 0f, 0f, bgPaint)
+        blurredBg.recycle()
+
+        // 2. பின்னணி மீது 35% கருப்பு நிழல் (Dark Scrim)
+        canvas.drawColor(android.graphics.Color.argb(90, 0, 0, 0))
+
+        // 3. முன்பக்கத்தில் தெளிவான அசல் படம் அமைத்தல்
+        val scaleFactor = minOf(
+            targetWidth.toFloat() / src.width.toFloat(),
+            targetHeight.toFloat() / src.height.toFloat(),
+        ) * clip.transform.scale
+
+        val fgW = src.width * scaleFactor
+        val fgH = src.height * scaleFactor
+
+        val centerX = targetWidth / 2f + (clip.transform.offsetX * targetWidth / 2f)
+        val centerY = targetHeight / 2f + (clip.transform.offsetY * targetHeight / 2f)
+
+        val dstRect = RectF(
+            centerX - fgW / 2f,
+            centerY - fgH / 2f,
+            centerX + fgW / 2f,
+            centerY + fgH / 2f,
+        )
+
+        canvas.save()
+        if (clip.rotationDegrees != 0) {
+            canvas.rotate(clip.rotationDegrees.toFloat(), centerX, centerY)
+        }
+        canvas.drawBitmap(src, null, dstRect, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+        canvas.restore()
+        src.recycle()
+
+        val outFile = File(context.cacheDir, "blur_export_${clip.id}.png")
+        FileOutputStream(outFile).use { out ->
+            outBitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+        }
+        outBitmap.recycle()
+
+        Uri.fromFile(outFile).toString()
+    }.getOrNull()
 
     private fun Clip.toEditedMediaItem(
         targetWidth: Int,
