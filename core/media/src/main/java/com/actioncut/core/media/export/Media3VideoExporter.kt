@@ -30,6 +30,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import java.io.File
+import java.io.FileOutputStream
 import javax.inject.Inject
 import kotlin.math.roundToInt
 
@@ -87,18 +89,28 @@ class Media3VideoExporter @Inject constructor(
                 val totalTimelineMs = project.timeline.durationMs
                 val totalVideoMs = clips.sumOf { it.timelineDurationMs }
 
+                // படங்கள் முடிந்த பிறகு கடைசி படம் நிற்காமல், மீதமுள்ள ஆடியோ நேரம் வரை பிளாக் ஸ்கிரீன் அமைத்தல் (Fty Editor)
                 val exportClips = if (totalTimelineMs > totalVideoMs && clips.isNotEmpty()) {
-                    val lastIndex = clips.size - 1
-                    val extraMs = totalTimelineMs - totalVideoMs
-                    clips.mapIndexed { idx, c ->
-                        if (idx == lastIndex) c.copy(timelineEndMs = c.timelineEndMs + extraMs) else c
+                    val blackFile = File(context.cacheDir, "black_gap.png")
+                    if (!blackFile.exists()) {
+                        val bmp = android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888)
+                        val cv = android.graphics.Canvas(bmp)
+                        cv.drawColor(android.graphics.Color.BLACK)
+                        FileOutputStream(blackFile).use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
                     }
+                    val blackClip = Clip(
+                        id = "black_gap_${System.currentTimeMillis()}",
+                        type = ClipType.IMAGE,
+                        mediaUri = android.net.Uri.fromFile(blackFile).toString(),
+                        timelineStartMs = totalVideoMs,
+                        timelineEndMs = totalTimelineMs,
+                    )
+                    clips + blackClip
                 } else {
                     clips
                 }
 
                 val editedItems = exportClips.mapIndexed { index, clip ->
-                    // Seamless Merge மற்றும் None ட்ரான்சிஷன்கள் 100% தூய்மையான இணைப்பைத் தரும் (No fade/dip to black)
                     val incoming = exportClips.getOrNull(index - 1)?.transitionToNext
                         ?.takeIf { it.type != TransitionType.NONE && it.type != TransitionType.SEAMLESS_MERGE }
                     val outgoing = clip.transitionToNext
