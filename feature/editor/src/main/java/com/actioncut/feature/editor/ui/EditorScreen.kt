@@ -70,7 +70,7 @@ fun EditorScreen(
 
     var showNewsAlertTemplates by remember { mutableStateOf(false) }
     var showFlashNewsText by remember { mutableStateOf(false) }
-    var isCropModeActive by remember { mutableStateOf(false) }
+    var isCropModeActive by remember { mutableStateOf(true) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -256,7 +256,7 @@ fun EditorScreen(
 
                     if (isPipSelected && selClip != null) {
                         val isKeyframeMode = selClip.keyframes.isNotEmpty()
-                        val isCutoutActive = selClip.filter?.id == "ai_cutout"
+                        val isCutoutActive = selClip.filter?.id?.contains("cutout") == true
 
                         PipSelectedBar(
                             isKeyframeMode = isKeyframeMode,
@@ -268,8 +268,9 @@ fun EditorScreen(
                             onDelete = viewModel::deleteSelected,
                             onSettings = { viewModel.setActiveTool(EditorTool.KEYFRAME) },
                             onKeyframeToggle = viewModel::addKeyframeAtPlayhead,
-                            onClipEnd = { /* Stretches PiP to main clip end */ },
-                            onVidEnd = { /* Stretches PiP to video end */ },
+                            onClipEnd = viewModel::setPipToClipEnd,
+                            onVidEnd = viewModel::setPipToVideoEnd,
+                            onFlip = viewModel::flipSelectedPip,
                         )
                     } else if (selClip != null) {
                         SelectedClipBar(
