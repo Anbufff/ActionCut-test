@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -160,6 +161,10 @@ fun NewsAlertTemplatesDialog(
     }
 }
 
+/**
+ * Flash News Text:
+ * பாக்ஸ் உயரம் குறைக்கப்பட்டு பட்டன்கள் நன்கு மேலே தெளிவாகத் தெரியும் வடிவம்.
+ */
 @Composable
 fun FlashNewsTextDialog(
     initialText: String = "",
@@ -172,104 +177,112 @@ fun FlashNewsTextDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Surface(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0xFF121212)),
-            color = Color(0xFF121212),
+                .background(Color.Black.copy(alpha = 0.75f))
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 16.dp, vertical = 20.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Column(
+            Surface(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .imePadding()
-                    .padding(16.dp),
+                    .fillMaxWidth()
+                    .wrapContentHeight()
+                    .clip(RoundedCornerShape(18.dp)),
+                color = Color(0xFF161618),
+                tonalElevation = 8.dp,
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(
-                        text = "Flash News Text",
-                        style = TextStyle(color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold),
-                        modifier = Modifier.weight(1f),
-                    )
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                Text(
-                    text = "Text-ஐ இங்கே Paste செய்யவும். ஒவ்வொரு (.) புள்ளிக்குப் பிறகும் அடுத்த வரியில், வேறு நிறத்தில் வரும். KF +/- மூலம் ஒவ்வொரு வாக்கியமாக வரவைக்கலாம்.",
-                    style = TextStyle(color = Color(0xFFB0B0B0), fontSize = 12.5.sp, lineHeight = 18.sp),
-                )
-
-                Spacer(Modifier.height(12.dp))
-
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    placeholder = {
+                    // Header
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            text = "செய்தியை இங்கே Paste செய்யவும்...",
-                            color = Color(0xFF777777),
-                            fontSize = 15.sp,
+                            text = "Flash News Text",
+                            style = TextStyle(color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold),
+                            modifier = Modifier.weight(1f),
                         )
-                    },
-                    textStyle = TextStyle(color = Color.White, fontSize = 15.sp, lineHeight = 22.sp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF1E1E20)),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFF00E5FF),
-                        unfocusedBorderColor = Color(0xFF333333),
-                        cursorColor = Color(0xFF00E5FF),
-                    ),
-                )
-
-                Spacer(Modifier.height(14.dp))
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Button(
-                        onClick = onDismiss,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF262626)),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp),
-                    ) {
-                        Text("Cancel", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+                        }
                     }
 
-                    Button(
-                        onClick = {
-                            if (text.isNotBlank()) {
-                                onApply(text)
-                            }
+                    Text(
+                        text = "Text-ஐ இங்கே Paste செய்யவும். ஒவ்வொரு (.) புள்ளிக்குப் பிறகும் அடுத்த வரியில், வேறு நிறத்தில் வரும். KF +/- மூலம் ஒவ்வொரு வாக்கியமாக வரவைக்கலாம்.",
+                        style = TextStyle(color = Color(0xFFB0B0B0), fontSize = 12.sp, lineHeight = 17.sp),
+                    )
+
+                    // உயரம் குறைக்கப்பட்ட Textarea (200.dp)
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        placeholder = {
+                            Text(
+                                text = "செய்தியை இங்கே Paste செய்யவும்...",
+                                color = Color(0xFF777777),
+                                fontSize = 14.sp,
+                            )
                         },
-                        enabled = text.isNotBlank(),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF00E5FF),
-                            disabledContainerColor = Color(0xFF005B66),
-                        ),
+                        textStyle = TextStyle(color = Color.White, fontSize = 14.5.sp, lineHeight = 21.sp),
                         modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp),
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF202022)),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF00E5FF),
+                            unfocusedBorderColor = Color(0xFF333333),
+                            cursorColor = Color(0xFF00E5FF),
+                        ),
+                    )
+
+                    // மேலே கொண்டு வரப்பட்ட Buttons Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Icon(Icons.Filled.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.size(6.dp))
-                        Text("Apply", color = Color.Black, fontWeight = FontWeight.Bold)
+                        Button(
+                            onClick = onDismiss,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2C2C2E)),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp),
+                        ) {
+                            Text("Cancel", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        Button(
+                            onClick = {
+                                if (text.isNotBlank()) {
+                                    onApply(text)
+                                }
+                            },
+                            enabled = text.isNotBlank(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF00E5FF),
+                                disabledContainerColor = Color(0xFF005B66),
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp),
+                        ) {
+                            Icon(Icons.Filled.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.size(4.dp))
+                            Text("Apply", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
