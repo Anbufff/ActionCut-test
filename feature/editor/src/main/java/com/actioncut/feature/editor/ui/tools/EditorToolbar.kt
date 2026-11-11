@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.FilterVintage
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.PictureInPictureAlt
@@ -94,7 +95,8 @@ fun EditorTool.icon(): ImageVector = when (this) {
     EditorTool.VOLUME -> Icons.Filled.VolumeUp
     EditorTool.MUTE -> Icons.Filled.VolumeOff
     EditorTool.AUDIO -> Icons.Filled.LibraryMusic
-    EditorTool.NEWS_ALERT -> Icons.Filled.Campaign // Fty NEWS ALERT Megaphone ஐகான்
+    EditorTool.NEWS_ALERT -> Icons.Filled.Campaign
+    EditorTool.MUSIC -> Icons.Filled.MusicNote
     EditorTool.VOICEOVER -> Icons.Filled.Mic
     EditorTool.PIP -> Icons.Filled.PictureInPictureAlt
     EditorTool.CRIC -> Icons.Filled.SportsCricket
