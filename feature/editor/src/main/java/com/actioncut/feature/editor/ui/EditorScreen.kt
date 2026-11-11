@@ -45,8 +45,11 @@ import com.actioncut.core.common.time.TimeFormatter
 import com.actioncut.core.designsystem.component.PrimaryButton
 import com.actioncut.core.designsystem.component.rememberHaptic
 import com.actioncut.core.model.AspectRatio
+import com.actioncut.core.model.ClipType
+import com.actioncut.core.model.TrackType
 import com.actioncut.feature.editor.ui.newsalert.FlashNewsTextDialog
 import com.actioncut.feature.editor.ui.newsalert.NewsAlertTemplatesDialog
+import com.actioncut.feature.editor.ui.pip.FreeCropDialog
 import com.actioncut.feature.editor.ui.pip.PipSelectedBar
 import com.actioncut.feature.editor.ui.preview.PreviewPlayer
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibrary
@@ -68,6 +71,7 @@ fun EditorScreen(
 
     var showNewsAlertTemplates by remember { mutableStateOf(false) }
     var showFlashNewsText by remember { mutableStateOf(false) }
+    var showFreeCropDialog by remember { mutableStateOf(false) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -101,7 +105,6 @@ fun EditorScreen(
         }
     }
 
-    // Fty Video Editor பாணியில் PiP-க்கு வீடியோ மற்றும் போட்டோ இரண்டையுமே சேர்க்கும் Launcher
     val pipMediaPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -153,24 +156,26 @@ fun EditorScreen(
             onAspectRatio = viewModel::setAspectRatio,
         )
 
+        // முக்கிய திருத்தம்: pipClips-ல் VIDEO மற்றும் IMAGE இரண்டுமே இணைக்கப்பட்டுள்ளன!
+        val activePipClips = uiState.timeline.tracks
+            .filter { it.type == TrackType.OVERLAY }
+            .flatMap { it.clips }
+            .filter { it.mediaUri?.contains("news_banner") != true }
+
         PreviewPlayer(
             player = viewModel.playerController.player,
             aspectRatio = uiState.aspectRatio,
             isPlaying = uiState.isPlaying,
             onTogglePlay = viewModel::togglePlayPause,
             overlays = uiState.timeline.allClips.filter {
-                it.type == com.actioncut.core.model.ClipType.TEXT ||
-                    it.type == com.actioncut.core.model.ClipType.STICKER
+                it.type == ClipType.TEXT || it.type == ClipType.STICKER
             },
             playheadMs = uiState.playheadMs,
             selectedClipId = uiState.selectedClipId,
             onSelectOverlay = viewModel::selectClip,
             onMoveOverlay = viewModel::setOverlayPosition,
             pipPlayer = viewModel.playerController.pipPlayer,
-            pipClips = uiState.timeline.tracks
-                .filter { it.type == com.actioncut.core.model.TrackType.OVERLAY }
-                .flatMap { it.clips }
-                .filter { it.type == com.actioncut.core.model.ClipType.VIDEO },
+            pipClips = activePipClips,
             onScaleOverlay = viewModel::setOverlayScale,
             fitMode = uiState.canvas.fitMode,
             backgroundColorArgb = uiState.canvas.backgroundColorArgb,
@@ -244,17 +249,16 @@ fun EditorScreen(
                 Column(modifier = Modifier.fillMaxWidth()) {
                     val selClip = uiState.selectedClip
                     val isPipSelected = selClip != null && (
-                        uiState.timeline.tracks.firstOrNull { it.type == com.actioncut.core.model.TrackType.OVERLAY }
+                        uiState.timeline.tracks.firstOrNull { it.type == TrackType.OVERLAY }
                             ?.clips?.any { it.id == selClip.id } == true &&
                             selClip.mediaUri?.contains("news_banner") != true
                     )
 
-                    // Fty Video Editor ஸ்கிரீன்ஷாட்டில் உள்ளபடியே PiP தேர்ந்தெடுக்கப்படும் போது தோன்றும் Toolbar
                     if (isPipSelected) {
                         PipSelectedBar(
-                            onCrop = { viewModel.setActiveTool(EditorTool.CROP) },
+                            onCrop = { showFreeCropDialog = true },
                             onTrimRight = viewModel::trimRightAtPlayhead,
-                            onCutout = { viewModel.toggleMuteSelected() }, // Background cutout / action
+                            onCutout = { viewModel.togglePipCutout() },
                             onDelete = viewModel::deleteSelected,
                             onSettings = { viewModel.setActiveTool(EditorTool.KEYFRAME) },
                         )
@@ -286,6 +290,19 @@ fun EditorScreen(
                 }
             }
         }
+    }
+
+    // Fty Free Crop Dialog திறக்கும் செயல்பாடு
+    val selectedClip = uiState.selectedClip
+    if (showFreeCropDialog && selectedClip != null) {
+        FreeCropDialog(
+            clip = selectedClip,
+            onDismiss = { showFreeCropDialog = false },
+            onApplyCrop = { cropRect ->
+                viewModel.setCrop(selectedClip.id, cropRect)
+                showFreeCropDialog = false
+            },
+        )
     }
 
     if (showNewsAlertTemplates) {
