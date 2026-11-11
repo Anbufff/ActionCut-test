@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.TextFields
@@ -123,11 +124,30 @@ fun EditorTimeline(
             Spacer(Modifier.width(halfViewportDp))
             Column {
                 TimeRuler(layoutDurationMs, pxPerSecond, contentWidthDp)
-                val orderedTracks = timeline.tracks.sortedBy { it.index }
-                if (orderedTracks.isEmpty()) {
+
+                // News Alert தொடும் போது Audio டிராக் மறைந்து, News Alert டிராக் வரும் லாஜிக்
+                val videoTrack = timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
+                val audioTrack = timeline.tracks.firstOrNull { it.type == TrackType.AUDIO }
+                val overlayTrack = timeline.tracks.firstOrNull { it.type == TrackType.OVERLAY }
+
+                val isOverlaySelected = overlayTrack?.clips?.any { it.id == selectedClipId } == true
+
+                val displayTracks = buildList {
+                    if (videoTrack != null) add(videoTrack)
+                    if (isOverlaySelected && overlayTrack != null) {
+                        add(overlayTrack) // Audio-விற்கு பதிலாக News Alert பட்டை வரும்!
+                    } else if (audioTrack != null) {
+                        add(audioTrack)   // வழக்கம்போல் Audio பட்டை வரும்
+                    } else if (overlayTrack != null && overlayTrack.clips.isNotEmpty()) {
+                        add(overlayTrack)
+                    }
+                }
+
+                if (displayTracks.isEmpty()) {
                     Spacer(Modifier.width(contentWidthDp).height(TRACK_HEIGHT.dp))
                 }
-                orderedTracks.forEach { track ->
+
+                displayTracks.forEach { track ->
                     TrackLane(
                         track = track,
                         pxPerSecond = pxPerSecond,
@@ -297,7 +317,7 @@ private fun ClipBlock(
             .width(widthDp)
             .fillMaxHeight()
             .clip(RoundedCornerShape(6.dp))
-            .background(laneColor(clip.type))
+            .background(laneColor(clip))
             .border(2.dp, borderColor, RoundedCornerShape(6.dp))
             .clickableNoRipple { onSelect() }
             .pointerInput(clip.id) {
@@ -330,7 +350,7 @@ private fun ClipBlock(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                imageVector = clipIcon(clip.type),
+                imageVector = clipIcon(clip),
                 contentDescription = null,
                 tint = Color.White.copy(alpha = 0.9f),
                 modifier = Modifier.size(14.dp),
@@ -364,6 +384,7 @@ private fun ClipBlock(
             }
         }
 
+        // தேர்ந்தெடுக்கப்பட்டால் விரலால் பிடித்து நீட்டிக்கும் Trimming Handles
         if (selected) {
             ClipTrimHandles(
                 clip = clip,
@@ -494,24 +515,31 @@ private fun DragHandle(
     }
 }
 
-private fun laneColor(type: ClipType): Color = when (type) {
-    ClipType.VIDEO -> LaneVideo
-    ClipType.IMAGE -> LaneVideo
-    ClipType.AUDIO -> LaneAudio
-    ClipType.TEXT -> LaneText
-    ClipType.STICKER -> LaneOverlay
+private fun laneColor(clip: Clip): Color {
+    if (clip.mediaUri?.contains("news_banner") == true) {
+        return Color(0xFF8E0614) // News Alert பேனருக்கு சிகப்பு நிற பட்டை
+    }
+    return when (clip.type) {
+        ClipType.VIDEO -> LaneVideo
+        ClipType.IMAGE -> LaneVideo
+        ClipType.AUDIO -> LaneAudio
+        ClipType.TEXT -> LaneText
+        ClipType.STICKER -> LaneOverlay
+    }
 }
 
-private fun clipIcon(type: ClipType) = when (type) {
-    ClipType.VIDEO -> Icons.Filled.Movie
-    ClipType.IMAGE -> Icons.Filled.Image
-    ClipType.AUDIO -> Icons.Filled.Audiotrack
-    ClipType.TEXT -> Icons.Filled.TextFields
-    ClipType.STICKER -> Icons.Filled.Image
+private fun clipIcon(clip: Clip) = when {
+    clip.mediaUri?.contains("news_banner") == true -> Icons.Filled.Campaign
+    clip.type == ClipType.VIDEO -> Icons.Filled.Movie
+    clip.type == ClipType.IMAGE -> Icons.Filled.Image
+    clip.type == ClipType.AUDIO -> Icons.Filled.Audiotrack
+    clip.type == ClipType.TEXT -> Icons.Filled.TextFields
+    else -> Icons.Filled.Image
 }
 
-private fun clipLabel(clip: Clip): String = when (clip.type) {
-    ClipType.TEXT -> clip.text?.text ?: "Text"
-    ClipType.AUDIO -> "Audio"
+private fun clipLabel(clip: Clip): String = when {
+    clip.mediaUri?.contains("news_banner") == true -> "NEWS ALERT"
+    clip.type == ClipType.TEXT -> clip.text?.text ?: "Text"
+    clip.type == ClipType.AUDIO -> "Audio"
     else -> clip.mediaUri?.substringAfterLast('/')?.take(14) ?: clip.type.name
 }
