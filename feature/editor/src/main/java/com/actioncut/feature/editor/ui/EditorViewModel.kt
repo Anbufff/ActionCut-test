@@ -20,6 +20,7 @@ import com.actioncut.core.model.CanvasSettings
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.ColorAdjustments
+import com.actioncut.core.model.CropRect
 import com.actioncut.core.model.Filter
 import com.actioncut.core.model.FitMode
 import com.actioncut.core.model.Keyframe
@@ -307,6 +308,7 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    // ------------------------------------------------------------------ Fty News Alert Banner
     fun addNewsBannerOverlay(text: String) {
         if (text.isBlank()) return
         viewModelScope.launch {
@@ -338,6 +340,51 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    // ------------------------------------------------------------------ Fty PiP (Picture-in-Picture)
+    /** Fty PiP: வீடியோ அல்லது போட்டோ இரண்டையுமே PiP-ஆகச் சேர்க்கும் செயல்பாடு */
+    fun addPipAtPlayhead(uri: String) {
+        viewModelScope.launch {
+            val media = resolveAnyMedia(uri) ?: return@launch
+            val isVideo = media.type == MediaType.VIDEO
+            val base = ClipFactory.fromMedia(
+                if (isVideo) media.copy(type = MediaType.VIDEO) else media.copy(type = MediaType.IMAGE),
+                _uiState.value.playheadMs,
+            )
+            val clip = base.copy(
+                transform = Transform(offsetX = 0.35f, offsetY = -0.35f, scale = 0.45f),
+                keyframes = listOf(
+                    Keyframe(timeMs = 0L, offsetX = 0.35f, offsetY = -0.35f, scale = 0.45f)
+                ),
+            )
+            val track = _uiState.value.timeline.tracks
+                .firstOrNull { it.type == TrackType.OVERLAY }
+            mutate(structural = true) { timeline ->
+                if (track != null) {
+                    TimelineEditor.addClip(timeline, track.id, clip)
+                } else {
+                    val (withTrack, trackId) = TimelineEditor.addTrack(timeline, TrackType.OVERLAY)
+                    TimelineEditor.addClip(withTrack, trackId, clip)
+                }
+            }
+            _uiState.update { it.copy(selectedClipId = clip.id) }
+        }
+    }
+
+    /** Fty PiP: CUTOUT பட்டனை அழுத்தும்போது வட்ட வடிவ மாஸ்க் / Cutout அமைத்தல் */
+    fun togglePipCutout() = withSelected { id ->
+        val clip = currentClip(id) ?: return@withSelected
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, id) { c ->
+                if (c.crop != null && !c.crop.isFull) {
+                    c.copy(crop = null)
+                } else {
+                    c.copy(crop = CropRect(0.12f, 0.08f, 0.88f, 0.92f))
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ Dynamic Scorecard
     fun addScorecardClip(data: ScorecardClipData) {
         val durationMs = 120_000L
         val cardFile = java.io.File(context.cacheDir, "card_${data.id}.png")
@@ -592,7 +639,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // இரண்டு விரல் Pinch Zoom மூலம் அளவை 0.5x முதல் 4.0x வரை பெரிதாக்க அனுமதித்தல்
     fun setOverlayScale(clipId: String, scale: Float) {
         val clip = currentClip(clipId) ?: return
         mutate(structural = false) {
@@ -645,31 +691,6 @@ class EditorViewModel @Inject constructor(
     fun setSpeedRamp(ramp: SpeedRamp) = withSelected { id ->
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, id) { c -> c.copy(speedRamp = ramp) }
-        }
-    }
-
-    fun addPipAtPlayhead(uri: String) {
-        viewModelScope.launch {
-            val media = resolveAnyMedia(uri) ?: return@launch
-            val base = ClipFactory.fromMedia(
-                media.copy(type = MediaType.VIDEO),
-                _uiState.value.playheadMs,
-            )
-            val clip = base.copy(
-                transform = Transform(offsetX = 0.4f, offsetY = -0.4f, scale = 0.4f),
-            )
-            val track = _uiState.value.timeline.tracks
-                .firstOrNull { it.type == TrackType.OVERLAY }
-            mutate(structural = true) { timeline ->
-                if (track != null) {
-                    TimelineEditor.addClip(timeline, track.id, clip)
-                } else {
-                    val (withTrack, trackId) =
-                        TimelineEditor.addTrack(timeline, TrackType.OVERLAY)
-                    TimelineEditor.addClip(withTrack, trackId, clip)
-                }
-            }
-            _uiState.update { it.copy(selectedClipId = clip.id) }
         }
     }
 
