@@ -92,9 +92,10 @@ class EditorViewModel @Inject constructor(
                     aspectRatio = project.aspectRatio,
                     canvas = project.canvas,
                     selectedClipId = project.timeline.allClips.firstOrNull()?.id,
+                    playheadMs = project.timeline.playheadMs,
                 )
             }
-            playerController.setTimeline(project.timeline)
+            playerController.setTimeline(project.timeline, preservePositionMs = project.timeline.playheadMs)
         }
     }
 
@@ -128,7 +129,17 @@ class EditorViewModel @Inject constructor(
     }
 
     // ------------------------------------------------------------------ Selection / Tools
-    fun selectClip(clipId: String?) = _uiState.update { it.copy(selectedClipId = clipId) }
+    fun selectClip(clipId: String?) {
+        _uiState.update { state ->
+            val clip = clipId?.let { id -> state.timeline.allClips.firstOrNull { it.id == id } }
+            val newPlayhead = if (clip != null && !clip.contains(state.playheadMs)) {
+                clip.timelineStartMs
+            } else {
+                state.playheadMs
+            }
+            state.copy(selectedClipId = clipId, playheadMs = newPlayhead)
+        }
+    }
 
     fun setAspectRatio(ratio: AspectRatio) {
         if (ratio != AspectRatio.RATIO_16_9 && ratio != AspectRatio.RATIO_4_5) return
@@ -382,29 +393,40 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(selectedClipId = copy.id) }
     }
 
-    // Trimming Handles இழுக்கப்படும் போது
-    fun trimStart(clipId: String, newStartMs: Long) =
-        mutate(structural = false) { TimelineEditor.trimClipStart(it, clipId, newStartMs) }
+    fun trimStart(clipId: String, newStartMs: Long) {
+        val clamped = newStartMs.coerceAtLeast(0)
+        mutate(structural = false) { TimelineEditor.trimClipStart(it, clipId, clamped) }
+        _uiState.update { it.copy(playheadMs = clamped) }
+    }
 
-    fun trimEnd(clipId: String, newEndMs: Long) =
-        mutate(structural = false) { TimelineEditor.trimClipEnd(it, clipId, newEndMs) }
+    fun trimEnd(clipId: String, newEndMs: Long) {
+        val clamped = newEndMs.coerceAtLeast(0)
+        mutate(structural = false) { TimelineEditor.trimClipEnd(it, clipId, clamped) }
+        _uiState.update { it.copy(playheadMs = clamped) }
+    }
 
     fun commitTrim() {
-        playerController.setTimeline(_uiState.value.timeline)
-        playerController.seekTo(_uiState.value.playheadMs)
+        val currentPos = _uiState.value.playheadMs
+        playerController.setTimeline(_uiState.value.timeline, preservePositionMs = currentPos)
+        playerController.seekTo(currentPos)
     }
 
-    // ஒரு படத்தை நகர்த்தும்போது (Drag) அடுத்தடுத்த படங்களும் நகரும்
+    // படத்தை நகர்த்தும் போதும் (Drag) Playhead அந்த படத்துடனேயே நகரும்
     fun moveClip(clipId: String, newStartMs: Long) {
         val track = TimelineEditor.findClip(_uiState.value.timeline, clipId)?.first ?: return
+        val clampedStart = newStartMs.coerceAtLeast(0)
         mutate(structural = false) {
-            TimelineEditor.moveClip(it, clipId, track.id, newStartMs.coerceAtLeast(0))
+            TimelineEditor.moveClip(it, clipId, track.id, clampedStart)
         }
+        // Vertical timeline line நீங்கள் வேலை செய்யும் image-இன் தொடக்கப் புள்ளியிலேயே நிற்கும்
+        _uiState.update { it.copy(playheadMs = clampedStart) }
     }
 
+    // Drag செய்து முடித்த பிறகும் Playhead 0-க்கு மாறாமல் அதே படத்தில் நிற்கும்
     fun commitArrangement() {
-        playerController.setTimeline(_uiState.value.timeline)
-        playerController.seekTo(_uiState.value.playheadMs)
+        val currentPos = _uiState.value.playheadMs
+        playerController.setTimeline(_uiState.value.timeline, preservePositionMs = currentPos)
+        playerController.seekTo(currentPos)
     }
 
     fun detachAudioFromSelected() = withSelected { id ->
@@ -663,17 +685,18 @@ class EditorViewModel @Inject constructor(
     }
 
     private fun applyTimeline(timeline: Timeline, structural: Boolean) {
+        val currentPlayhead = _uiState.value.playheadMs
         _uiState.update {
             it.copy(
                 timeline = timeline,
                 canUndo = undoStack.isNotEmpty(),
                 canRedo = redoStack.isNotEmpty(),
-                playheadMs = it.playheadMs.coerceIn(0, timeline.durationMs),
+                playheadMs = currentPlayhead.coerceIn(0, timeline.durationMs),
             )
         }
         if (structural) {
-            playerController.setTimeline(timeline)
-            playerController.seekTo(_uiState.value.playheadMs)
+            playerController.setTimeline(timeline, preservePositionMs = currentPlayhead)
+            playerController.seekTo(currentPlayhead)
         } else {
             playerController.updateVolumes(timeline)
             playerController.refreshPreviewEffects(timeline)
