@@ -10,32 +10,16 @@ import com.actioncut.core.model.Track
 import com.actioncut.core.model.TrackType
 import com.actioncut.core.model.Transform
 import com.actioncut.core.model.Transition
+import com.actioncut.core.model.TransitionType
 import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.SpeedPresets
 import java.util.UUID
 
-/**
- * Pure, side-effect-free editing engine. Every operation takes an immutable [Timeline]
- * and returns a new one, which makes the whole thing trivially unit-testable and a
- * perfect fit for an undo/redo stack in the ViewModel.
- *
- * Two time spaces are reconciled here (see [Clip]):
- *  - **timeline** space (where the clip sits on the canvas)
- *  - **source** space (the trimmed window inside the original media)
- *
- * They relate through [Clip.speed]: `timelineDuration = sourceDuration / speed`.
- * [Clip.isReversed] flips the source mapping (high source value first).
- */
 object TimelineEditor {
 
-    /** Minimum length any clip may be trimmed/split to. */
     const val MIN_CLIP_DURATION_MS = 100L
 
-    // ---------------------------------------------------------------------------------
-    // Track operations
-    // ---------------------------------------------------------------------------------
-
-    /** Adds an empty track of [type]; returns the new timeline and the new track id. */
+    // ----------------------------------------------------------------- Track Operations
     fun addTrack(timeline: Timeline, type: TrackType): Pair<Timeline, String> {
         val id = "trk_${UUID.randomUUID().toString().take(8)}"
         val track = Track(id = id, type = type, index = timeline.tracks.size)
@@ -45,14 +29,7 @@ object TimelineEditor {
     fun removeTrack(timeline: Timeline, trackId: String): Timeline =
         timeline.copy(tracks = timeline.tracks.filterNot { it.id == trackId })
 
-    // ---------------------------------------------------------------------------------
-    // Structural clip operations
-    // ---------------------------------------------------------------------------------
-
-    /**
-     * Appends [clip] to the end of [trackId], preserving the clip's duration but moving
-     * it to start exactly where the track currently ends (contiguous CapCut main lane).
-     */
+    // ----------------------------------------------------------------- Structural Operations
     fun appendClip(timeline: Timeline, trackId: String, clip: Clip): Timeline {
         val track = timeline.track(trackId) ?: return timeline
         val start = track.durationMs
@@ -63,11 +40,9 @@ object TimelineEditor {
         return mapTrack(timeline, trackId) { it.copy(clips = it.clips + placed) }
     }
 
-    /** Adds [clip] to [trackId] at its own position (no ripple), keeping the lane sorted. */
     fun addClip(timeline: Timeline, trackId: String, clip: Clip): Timeline =
         mapTrack(timeline, trackId) { t -> t.copy(clips = (t.clips + clip).sortedBy { it.timelineStartMs }) }
 
-    /** Inserts [clip] at its own [Clip.timelineStartMs]; later clips ripple right. */
     fun insertClip(timeline: Timeline, trackId: String, clip: Clip): Timeline {
         return mapTrack(timeline, trackId) { track ->
             val shifted = track.clips.map { existing ->
@@ -81,10 +56,6 @@ object TimelineEditor {
         }
     }
 
-    /**
-     * Removes [clipId]. When [ripple] is true, every later clip on the same track shifts
-     * left to close the gap (default behaviour for the main lane).
-     */
     fun removeClip(timeline: Timeline, clipId: String, ripple: Boolean = true): Timeline {
         val located = findClip(timeline, clipId) ?: return timeline
         val (track, clip) = located
@@ -105,10 +76,6 @@ object TimelineEditor {
         }
     }
 
-    /**
-     * Splits the clip containing [atTimelineMs] into two adjacent clips. No-op if the cut
-     * falls within [MIN_CLIP_DURATION_MS] of either edge.
-     */
     fun splitClip(timeline: Timeline, clipId: String, atTimelineMs: Long): Timeline {
         val located = findClip(timeline, clipId) ?: return timeline
         val (track, clip) = located
@@ -147,7 +114,6 @@ object TimelineEditor {
                 )
             }
         } else {
-            // Image / text / sticker: no source window, just split the timeline span.
             first = clip.copy(id = newClipId(), timelineEndMs = atTimelineMs, transitionToNext = null)
             second = clip.copy(id = newClipId(), timelineStartMs = atTimelineMs)
         }
@@ -157,7 +123,6 @@ object TimelineEditor {
         }
     }
 
-    /** Drags the left edge to [newStartMs], adjusting the trimmed source window. */
     fun trimClipStart(timeline: Timeline, clipId: String, newStartMs: Long): Timeline {
         val (_, clip) = findClip(timeline, clipId) ?: return timeline
         val clamped = newStartMs.coerceIn(
@@ -177,10 +142,6 @@ object TimelineEditor {
         }
     }
 
-    /**
-     * Drags the right edge to [newEndMs], adjusting the trimmed source window.
-     * அடுத்தடுத்து உள்ள படங்களை இடைவெளியின்றித் தானாக நகர்த்துகிறது (Ripple Trim).
-     */
     fun trimClipEnd(timeline: Timeline, clipId: String, newEndMs: Long): Timeline {
         val (track, clip) = findClip(timeline, clipId) ?: return timeline
         val clamped = newEndMs.coerceIn(
@@ -201,7 +162,6 @@ object TimelineEditor {
             }
         }
 
-        // Ripple: அடுத்தடுத்து உள்ள அனைத்து கிளிப்புகளையும் நகர்த்துதல்
         return mapTrack(updatedTimeline, track.id) { t ->
             val sorted = t.clips.sortedBy { it.timelineStartMs }
             val targetIdx = sorted.indexOfFirst { it.id == clipId }
@@ -218,10 +178,6 @@ object TimelineEditor {
         }
     }
 
-    /**
-     * ஒரு படத்தை drag செய்து நகர்த்தும்போது, அடுத்தடுத்து உள்ள அனைத்துப் படங்களும்
-     * தானாகவே நகரும் (Ripple Shift Drag).
-     */
     fun moveClip(
         timeline: Timeline,
         clipId: String,
@@ -231,7 +187,6 @@ object TimelineEditor {
         val (sourceTrack, clip) = findClip(timeline, clipId) ?: return timeline
         if (timeline.track(targetTrackId) == null) return timeline
 
-        // வெவ்வேறு Track-களுக்கு இடையே நகர்த்தப்பட்டால்
         if (sourceTrack.id != targetTrackId) {
             val start = newStartMs.coerceAtLeast(0)
             val moved = clip.copy(
@@ -246,12 +201,10 @@ object TimelineEditor {
             }
         }
 
-        // ஒரே Track-ல் படங்களை இழுத்து நகர்த்தும் போது (Ripple Logic)
         val sortedClips = sourceTrack.clips.sortedBy { it.timelineStartMs }
         val targetIndex = sortedClips.indexOfFirst { it.id == clipId }
         if (targetIndex < 0) return timeline
 
-        // முந்தைய படத்தை முந்தாமல் இருக்க குறைந்தபட்ச எல்லை
         val minAllowedStart = if (targetIndex > 0) sortedClips[targetIndex - 1].timelineEndMs else 0L
         val clampedStart = newStartMs.coerceAtLeast(minAllowedStart)
         val delta = clampedStart - clip.timelineStartMs
@@ -281,15 +234,32 @@ object TimelineEditor {
         }
     }
 
-    // -----------------------------------------------------------------
-    // Audio
-    // -----------------------------------------------------------------
+    // ----------------------------------------------------------------- Apply All & Random All
+    fun applyTransitionToAll(timeline: Timeline, transition: Transition): Timeline =
+        timeline.copy(
+            tracks = timeline.tracks.map { track ->
+                if (track.type == TrackType.VIDEO) {
+                    track.copy(clips = track.clips.map { it.copy(transitionToNext = transition) })
+                } else track
+            }
+        )
 
-    /**
-     * Extracts (detaches) the audio of a video clip into a separate audio clip on an AUDIO
-     * lane, aligned to the same timeline position, and mutes the original video clip so the
-     * audio isn't doubled. CapCut/InShot-style "Extract audio".
-     */
+    fun applyRandomTransitions(timeline: Timeline, candidates: List<TransitionType>, durationMs: Long = 500L): Timeline {
+        if (candidates.isEmpty()) return timeline
+        return timeline.copy(
+            tracks = timeline.tracks.map { track ->
+                if (track.type == TrackType.VIDEO) {
+                    track.copy(
+                        clips = track.clips.map { clip ->
+                            clip.copy(transitionToNext = Transition(candidates.random(), durationMs))
+                        }
+                    )
+                } else track
+            }
+        )
+    }
+
+    // ----------------------------------------------------------------- Audio / Properties
     fun detachAudio(timeline: Timeline, clipId: String): Timeline {
         val located = findClip(timeline, clipId) ?: return timeline
         val (_, clip) = located
@@ -308,9 +278,7 @@ object TimelineEditor {
             volume = if (clip.volume <= 0f) 1f else clip.volume,
         )
 
-        // Mute the original video clip's audio (it now lives on the audio lane).
         val muted = updateClip(timeline, clipId) { it.copy(volume = 0f) }
-
         val audioTrack = muted.tracks.firstOrNull { it.type == TrackType.AUDIO }
         return if (audioTrack != null) {
             mapTrack(muted, audioTrack.id) { t ->
@@ -322,11 +290,6 @@ object TimelineEditor {
         }
     }
 
-    // -----------------------------------------------------------------
-    // Property updates
-    // -----------------------------------------------------------------
-
-    /** Generic copy-on-write update for a single clip. */
     fun updateClip(timeline: Timeline, clipId: String, transform: (Clip) -> Clip): Timeline =
         timeline.copy(
             tracks = timeline.tracks.map { track ->
@@ -338,10 +301,6 @@ object TimelineEditor {
             },
         )
 
-    /**
-     * Changes playback speed, recomputing the timeline length from the fixed source
-     * window. Only applies to media with a real source timeline (video/audio).
-     */
     fun setSpeed(timeline: Timeline, clipId: String, speed: Float): Timeline {
         val s = speed.coerceIn(SpeedPresets.MIN, SpeedPresets.MAX)
         return updateClip(timeline, clipId) { c ->
@@ -389,11 +348,6 @@ object TimelineEditor {
             if (index in c.effects.indices) c.copy(effects = c.effects.filterIndexed { i, _ -> i != index }) else c
         }
 
-    // -----------------------------------------------------------------
-    // Lookup helpers
-    // -----------------------------------------------------------------
-
-    /** Finds a clip and its owning track. */
     fun findClip(timeline: Timeline, clipId: String): Pair<Track, Clip>? {
         for (track in timeline.tracks) {
             val clip = track.clips.firstOrNull { it.id == clipId }
@@ -402,29 +356,22 @@ object TimelineEditor {
         return null
     }
 
-    // -----------------------------------------------------------------
-    // Internals
-    // -----------------------------------------------------------------
-
     private fun newClipId(): String = "clp_${UUID.randomUUID().toString().take(8)}"
 
     private fun mapTrack(timeline: Timeline, trackId: String, transform: (Track) -> Track): Timeline =
         timeline.copy(tracks = timeline.tracks.map { if (it.id == trackId) transform(it) else it })
 
-    /** Source position for a timeline offset within a clip, honouring speed + reverse. */
     private fun sourceAt(clip: Clip, offsetTimelineMs: Long): Long {
         val sourceOffset = (offsetTimelineMs * clip.speed).toLong()
         return if (clip.isReversed) clip.sourceOutMs - sourceOffset else clip.sourceInMs + sourceOffset
     }
 
-    /** How far the left edge can extend left (extra source available before sourceIn). */
     private fun headRoom(clip: Clip): Long {
         if (!clip.hasSourceWindow) return clip.timelineStartMs
         val availableSource = if (clip.isReversed) Long.MAX_VALUE else clip.sourceInMs
         return (availableSource / clip.speed).toLong().coerceAtMost(clip.timelineStartMs)
     }
 
-    /** How far the right edge can extend right (extra trailing source after sourceOut). */
     private fun tailRoom(clip: Clip): Long {
         if (!clip.hasSourceWindow) return Long.MAX_VALUE / 2
         return (clip.sourceDurationMs / clip.speed).toLong()
