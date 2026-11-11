@@ -307,9 +307,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /**
-     * NEWS ALERT: Full video length-க்கு default ஆக set செய்தல்
-     */
     fun addNewsBannerOverlay(text: String) {
         if (text.isBlank()) return
         viewModelScope.launch {
@@ -595,10 +592,11 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    // இரண்டு விரல் Pinch Zoom In-Out மூலம் படத்தை 3.5x வரை பெரிதாக்க அனுமதித்தல்
     fun setOverlayScale(clipId: String, scale: Float) {
         val clip = currentClip(clipId) ?: return
         mutate(structural = false) {
-            TimelineEditor.setTransform(it, clipId, clip.transform.copy(scale = scale.coerceIn(0.1f, 1f)))
+            TimelineEditor.setTransform(it, clipId, clip.transform.copy(scale = scale.coerceIn(0.1f, 3.5f)))
         }
     }
 
