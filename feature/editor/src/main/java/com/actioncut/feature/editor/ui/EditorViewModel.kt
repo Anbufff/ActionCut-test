@@ -375,7 +375,8 @@ class EditorViewModel @Inject constructor(
         val clip = currentClip(id) ?: return@withSelected
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, id) { c ->
-                if (c.crop != null && !c.crop.isFull) {
+                val existingCrop = c.crop
+                if (existingCrop != null && !existingCrop.isFull) {
                     c.copy(crop = null)
                 } else {
                     c.copy(crop = CropRect(0.12f, 0.08f, 0.88f, 0.92f))
