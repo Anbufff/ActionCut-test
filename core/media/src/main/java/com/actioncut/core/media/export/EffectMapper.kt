@@ -20,6 +20,7 @@ import androidx.media3.effect.Contrast
 import androidx.media3.effect.Crop
 import androidx.media3.effect.GaussianBlur
 import androidx.media3.effect.HslAdjustment
+import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.Presentation
@@ -62,6 +63,18 @@ object EffectMapper {
                 .build()
         }
         clip.crop?.takeUnless { it.isFull }?.let { effects += cropEffect(it) }
+
+        // Preview-ல் வீரரை நகர்த்தி வைத்த அதே Position-ல் வீடியோ Export ஆக MatrixTransformation சேர்த்தல்
+        if (clip.transform.offsetX != 0f || clip.transform.offsetY != 0f) {
+            effects += MatrixTransformation { _, transformationMatrix ->
+                android.opengl.Matrix.translateM(
+                    transformationMatrix, 0,
+                    clip.transform.offsetX,
+                    -clip.transform.offsetY,
+                    0f,
+                )
+            }
+        }
 
         val adj = clip.adjustments
         if (adj.brightness != 0f) effects += Brightness(adj.brightness.coerceIn(-1f, 1f))
@@ -114,7 +127,6 @@ object EffectMapper {
             presentationLayout,
         )
 
-        // எக்ஸ்போர்ட் வீடியோவில் அம்பு மற்றும் பிளேயர் விவரங்களை மாற்றும் Overlay
         if (clip.scorecard != null) {
             val scOverlay = DynamicScorecardOverlay(clip.id, clip.scorecard!!)
             effects += OverlayEffect(ImmutableList.of(scOverlay))
