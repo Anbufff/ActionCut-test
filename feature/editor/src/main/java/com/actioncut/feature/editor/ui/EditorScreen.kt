@@ -238,6 +238,7 @@ fun EditorScreen(
                             onSplit = viewModel::splitAtPlayhead,
                             onDuplicate = viewModel::duplicateSelected,
                             onDelete = viewModel::deleteSelected,
+                            onTrimRight = viewModel::trimRightAtPlayhead,
                             onDeselect = { viewModel.selectClip(null) },
                         )
                     }
