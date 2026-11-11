@@ -35,10 +35,15 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import coil.compose.AsyncImage
 import com.actioncut.core.designsystem.component.clickableNoRipple
 import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.Clip
+import com.actioncut.core.model.ClipType
+import com.actioncut.core.model.TransitionType
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
+import kotlin.math.PI
+import kotlin.math.sin
 
 @Composable
 fun PreviewPlayer(
@@ -65,6 +70,11 @@ fun PreviewPlayer(
         com.actioncut.core.model.FitMode.FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
         com.actioncut.core.model.FitMode.STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
+
+    val mainClips = allClips.filter { it.type == ClipType.VIDEO || it.type == ClipType.IMAGE }
+        .sortedBy { it.timelineStartMs }
+    val currentMainClip = mainClips.firstOrNull { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -94,6 +104,40 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
+            if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
+                val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
+                val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
+                val progress = (timeInClip.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+
+                val zoomScale = 1.0f + (sin(progress * PI).toFloat() * 0.25f)
+
+                val transition = currentMainClip.transitionToNext
+                val trDuration = transition?.durationMs ?: 0L
+                val remainingTime = currentMainClip.timelineEndMs - playheadMs
+
+                val alphaVal = if (transition != null && transition.type != TransitionType.SEAMLESS_MERGE &&
+                    transition.type != TransitionType.NONE && remainingTime in 1..trDuration
+                ) {
+                    (remainingTime.toFloat() / trDuration.toFloat()).coerceIn(0f, 1f)
+                } else {
+                    1.0f
+                }
+
+                AsyncImage(
+                    model = currentMainClip.mediaUri,
+                    contentDescription = null,
+                    contentScale = if (fitMode == com.actioncut.core.model.FitMode.FIT) ContentScale.Fit else ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = zoomScale
+                            scaleY = zoomScale
+                            alpha = alphaVal
+                            rotationZ = (currentMainClip.rotationDegrees + currentMainClip.transform.rotationDegrees).toFloat()
+                        },
+                )
+            }
+
             if (pipPlayer != null) {
                 PipLayer(
                     pipPlayer = pipPlayer,
@@ -116,7 +160,6 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // ==================== Dynamic Scorecard Preview & 100% Smooth Tap Layer ====================
             val activeScoreClip = allClips.firstOrNull { 
                 it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs 
             }
@@ -135,7 +178,6 @@ fun PreviewPlayer(
                             contentScale = ContentScale.FillBounds,
                             modifier = Modifier
                                 .fillMaxSize()
-                                // pointerInput-ல் playheadMs தவிர்க்கப்பட்டதால் தொடுதல்கள் கேன்சல் ஆகாமல் அதியுயர் Smooth-ஆக இயங்கும்
                                 .pointerInput(activeScoreClip.id) {
                                     detectTapGestures { offset ->
                                         val curTimeInClip = (currentPlayheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
@@ -146,13 +188,13 @@ fun PreviewPlayer(
                                             sc,
                                             curTimeInClip,
                                             touchYFraction,
-                                            touchXFraction
+                                            touchXFraction,
                                         )
                                         if (hitRow >= 0) {
                                             onScorecardRowTapped(activeScoreClip.id, hitRow)
                                         }
                                     }
-                                }
+                                },
                         )
                     }
                 }
