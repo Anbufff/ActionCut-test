@@ -60,7 +60,6 @@ class PlayerController @Inject constructor(
     private var clockJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Main)
 
-    // HTML எடிட்டரின் audioClipsData.forEach(a => a.el) போன்று ஒவ்வொரு ஆடியோ கிளிப்பிற்கும் தனித்தனி பிளேயர் ஸ்டேட்
     private data class AudioTrackState(
         val clip: Clip,
         val player: ExoPlayer
@@ -78,7 +77,13 @@ class PlayerController @Inject constructor(
         player.addListener(listener)
     }
 
-    fun setTimeline(timeline: Timeline) {
+    /**
+     * டைம்லைன் அப்டேட் செய்யப்படும் போது 0.00-க்கு போகாமல்,
+     * தற்போது வேலை செய்யும் இடத்திலேயே playhead-ஐ தக்கவைக்கும் [preservePositionMs]
+     */
+    fun setTimeline(timeline: Timeline, preservePositionMs: Long? = null) {
+        val targetPos = preservePositionMs ?: masterPlayheadMs
+
         // பழைய ஆடியோ பிளேயர்களை விடுவித்தல்
         audioTrackStates.forEach { it.player.release() }
         audioTrackStates.clear()
@@ -111,7 +116,6 @@ class PlayerController @Inject constructor(
         applyCurrentVolume()
         applyPreviewEffects(force = true)
 
-        // HTML எடிட்டர் வடிவில் ஒவ்வொரு ஆடியோ கிளிப்பிற்கும் ExoPlayer தயார் செய்தல்
         val audioClips = audioClipsOf(timeline)
         totalAudioMs = audioClips.maxOfOrNull { it.timelineEndMs } ?: 0L
 
@@ -133,7 +137,13 @@ class PlayerController @Inject constructor(
         pipPlayer.prepare()
 
         totalTimelineMs = maxOf(totalVideoMs, totalAudioMs, timeline.durationMs)
-        masterPlayheadMs = 0L
+        
+        // 0.00-க்கு போகாமல் தேர்ந்தெடுக்கப்பட்ட அல்லது தற்போதைய இடத்திலேயே நிற்க வைக்கும் முறை
+        masterPlayheadMs = targetPos.coerceIn(0L, totalTimelineMs)
+
+        syncVideoState(forceSeek = true)
+        syncAudioState(forceSeek = true)
+        syncPipState(forceSeek = true)
 
         pushState()
     }
@@ -285,10 +295,6 @@ class PlayerController @Inject constructor(
         }
     }
 
-    /**
-     * HTML Video Editor-ல் உள்ள syncAudioState() முறையை அப்படியே Android-ல் பின்பற்றுதல்.
-     * தேவையில்லாமல் Seek செய்யாமல், சத்தம் தெளிவாக தொடர்ந்து ஒலிக்கும்.
-     */
     private fun syncAudioState(forceSeek: Boolean) {
         audioTrackStates.forEach { state ->
             val aClip = state.clip
@@ -299,7 +305,6 @@ class PlayerController @Inject constructor(
                 val offsetInClipMs = masterPlayheadMs - aClip.timelineStartMs
                 val targetMediaMs = aClip.sourceInMs + (offsetInClipMs * aClip.speed).toLong()
 
-                // சத்தம் துண்டிக்கப்படாமல் இருக்க 400ms-க்கு மேல் வேறுபாடு இருந்தால் மட்டுமே Seek செய்யப்படும்
                 if (forceSeek || abs(aPlayer.currentPosition - targetMediaMs) > 400L) {
                     aPlayer.seekTo(targetMediaMs.coerceAtLeast(0L))
                 }
@@ -336,7 +341,6 @@ class PlayerController @Inject constructor(
                 lastRealTime = now
 
                 masterPlayheadMs = (masterPlayheadMs + delta).coerceAtMost(totalTimelineMs)
-                // லூப்பில் forceSeek = false ஆக இருப்பதால் ஆடியோ தடையின்றி இயங்கும்
                 syncVideoState(forceSeek = false)
                 syncAudioState(forceSeek = false)
                 syncPipState(forceSeek = false)
