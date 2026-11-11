@@ -56,7 +56,6 @@ import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.TransitionType
-import com.actioncut.core.model.VisualEffectType
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
 
 @Composable
@@ -121,24 +120,24 @@ fun PreviewPlayer(
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                                 Modifier.graphicsLayer {
                                     renderEffect = android.graphics.RenderEffect.createBlurEffect(
-                                        45f, 45f, android.graphics.Shader.TileMode.CLAMP
+                                        45f, 45f, android.graphics.Shader.TileMode.CLAMP,
                                     ).asComposeRenderEffect()
                                 }
                             } else {
                                 Modifier
-                            }
+                            },
                         ),
                 )
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.35f))
+                        .background(Color.Black.copy(alpha = 0.35f)),
                 )
             } else {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black)
+                        .background(Color.Black),
                 )
             }
 
@@ -227,12 +226,12 @@ fun PreviewPlayer(
                                 Modifier.border(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.8f))
                             } else {
                                 Modifier
-                            }
+                            },
                         ),
                 )
             }
 
-            // 3. Fty-style PiP Layer (வீடியோ மற்றும் போட்டோ இரண்டையுமே இயக்கும்படி இணைக்கப்பட்டது)
+            // 3. Fty-style PiP Layer (வீடியோ & போட்டோ இரண்டையுமே இயக்கும்படி இணைக்கப்பட்டது)
             if (pipPlayer != null) {
                 PipLayer(
                     pipPlayer = pipPlayer,
@@ -347,8 +346,9 @@ private fun PipLayer(
         val isSelected = active.id == selectedClipId
         val cyanColor = Color(0xFF00E5FF)
 
-        // Fty Cutout Circle Shape கண்டறிதல்
-        val isCircleCutout = active.effects.any { it.type == VisualEffectType.CIRCLE_MASK }
+        // Fty Cutout Shape: filter ID அல்லது Crop அடிப்படையில் Circle Cutout கண்டறிதல்
+        val isCircleCutout = active.filter?.id == "cutout_circle" ||
+            (active.crop != null && active.crop.left == 0.12f && active.crop.top == 0.08f)
         val cutoutShape = if (isCircleCutout) CircleShape else RectangleShape
 
         Box(
@@ -366,7 +366,7 @@ private fun PipLayer(
                         Modifier.drawBehind {
                             val stroke = Stroke(
                                 width = 2.5f * density,
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f),
                             )
                             if (isCircleCutout) {
                                 drawCircle(color = cyanColor, style = stroke)
@@ -374,7 +374,7 @@ private fun PipLayer(
                                 drawRoundRect(
                                     color = cyanColor,
                                     cornerRadius = CornerRadius(4f * density),
-                                    style = stroke
+                                    style = stroke,
                                 )
                             }
                         }
@@ -407,7 +407,7 @@ private fun PipLayer(
                                 left = size.width * crop.left,
                                 top = size.height * crop.top,
                                 right = size.width * crop.right,
-                                bottom = size.height * crop.bottom
+                                bottom = size.height * crop.bottom,
                             )
                             drawContext.canvas.save()
                             drawContext.canvas.clipRect(clipRect)
@@ -417,7 +417,7 @@ private fun PipLayer(
                             drawContent()
                         }
                     }
-                    .clip(cutoutShape)
+                    .clip(cutoutShape),
             ) {
                 if (active.type == ClipType.VIDEO) {
                     AndroidView(
@@ -430,14 +430,14 @@ private fun PipLayer(
                             }
                         },
                         update = { it.player = pipPlayer },
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().clip(cutoutShape),
                     )
                 } else {
                     AsyncImage(
                         model = active.mediaUri,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().clip(cutoutShape),
                     )
                 }
             }
@@ -513,7 +513,7 @@ private fun OverlayLayer(
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .then(gestureModifier)
+                                .then(gestureModifier),
                         ) {
                             StickerImage(
                                 uri = imageUri,
@@ -527,7 +527,7 @@ private fun OverlayLayer(
                                     .fillMaxHeight()
                                     .fillMaxWidth(0.48f)
                                     .align(Alignment.CenterStart)
-                                    .clickable { onSelect(clip.id) }
+                                    .clickable { onSelect(clip.id) },
                             )
                         }
                     } else {
