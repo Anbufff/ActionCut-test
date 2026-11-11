@@ -794,7 +794,7 @@ class EditorViewModel @Inject constructor(
             it.copy(
                 timeline = timeline,
                 canUndo = undoStack.isNotEmpty(),
-                canRedo = redoStack.isNotEmpty>,
+                canRedo = redoStack.isNotEmpty(),
                 playheadMs = currentPlayhead.coerceIn(0, timeline.durationMs),
             )
         }
