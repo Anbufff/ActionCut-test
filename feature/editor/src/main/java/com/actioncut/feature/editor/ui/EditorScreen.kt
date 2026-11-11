@@ -47,6 +47,7 @@ import com.actioncut.core.designsystem.component.rememberHaptic
 import com.actioncut.core.model.AspectRatio
 import com.actioncut.feature.editor.ui.newsalert.FlashNewsTextDialog
 import com.actioncut.feature.editor.ui.newsalert.NewsAlertTemplatesDialog
+import com.actioncut.feature.editor.ui.pip.PipSelectedBar
 import com.actioncut.feature.editor.ui.preview.PreviewPlayer
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibrary
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibraryDialog
@@ -99,7 +100,9 @@ fun EditorScreen(
             viewModel.addAudioAtPlayhead(uri.toString())
         }
     }
-    val videoPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+
+    // Fty Video Editor பாணியில் PiP-க்கு வீடியோ மற்றும் போட்டோ இரண்டையுமே சேர்க்கும் Launcher
+    val pipMediaPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri != null) {
@@ -112,6 +115,7 @@ fun EditorScreen(
             viewModel.addPipAtPlayhead(uri.toString())
         }
     }
+
     var cricSource by remember { mutableStateOf<String?>(null) }
     var showPlayers by remember { mutableStateOf(false) }
     var showRegister by remember { mutableStateOf(false) }
@@ -238,7 +242,23 @@ fun EditorScreen(
                 )
             } else {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    if (uiState.selectedClip != null) {
+                    val selClip = uiState.selectedClip
+                    val isPipSelected = selClip != null && (
+                        uiState.timeline.tracks.firstOrNull { it.type == com.actioncut.core.model.TrackType.OVERLAY }
+                            ?.clips?.any { it.id == selClip.id } == true &&
+                            selClip.mediaUri?.contains("news_banner") != true
+                    )
+
+                    // Fty Video Editor ஸ்கிரீன்ஷாட்டில் உள்ளபடியே PiP தேர்ந்தெடுக்கப்படும் போது தோன்றும் Toolbar
+                    if (isPipSelected) {
+                        PipSelectedBar(
+                            onCrop = { viewModel.setActiveTool(EditorTool.CROP) },
+                            onTrimRight = viewModel::trimRightAtPlayhead,
+                            onCutout = { viewModel.toggleMuteSelected() }, // Background cutout / action
+                            onDelete = viewModel::deleteSelected,
+                            onSettings = { viewModel.setActiveTool(EditorTool.KEYFRAME) },
+                        )
+                    } else if (selClip != null) {
                         SelectedClipBar(
                             onSplit = viewModel::splitAtPlayhead,
                             onDuplicate = viewModel::duplicateSelected,
@@ -247,12 +267,13 @@ fun EditorScreen(
                             onDeselect = { viewModel.selectClip(null) },
                         )
                     }
+
                     EditorToolbar(
                         activeTool = uiState.activeTool,
                         onToolSelected = { tool ->
                             when (tool) {
                                 EditorTool.AUDIO -> audioPicker.launch(arrayOf("audio/*"))
-                                EditorTool.PIP -> videoPicker.launch(arrayOf("video/*"))
+                                EditorTool.PIP -> pipMediaPicker.launch(arrayOf("image/*", "video/*"))
                                 EditorTool.CRIC -> cricPicker.launch(arrayOf("image/*"))
                                 EditorTool.CARD_ADD -> showRegister = true
                                 EditorTool.PLAYER -> showPlayers = true
