@@ -22,6 +22,7 @@ import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.ColorAdjustments
 import com.actioncut.core.model.Filter
 import com.actioncut.core.model.FitMode
+import com.actioncut.core.model.Keyframe
 import com.actioncut.core.model.MediaItem
 import com.actioncut.core.model.MediaType
 import com.actioncut.core.model.Project
@@ -85,19 +86,51 @@ class EditorViewModel @Inject constructor(
                 _uiState.update { it.copy(isLoading = false) }
                 return@launch
             }
-            loadedProject = project
+
+            // அனைத்து படங்களுக்கும் Group 5 Zoom In-Out மற்றும் Seamless Merge-ஐ இயல்பாக அமைத்தல்
+            val initialTimeline = project.timeline.copy(
+                tracks = project.timeline.tracks.map { track ->
+                    if (track.type == TrackType.VIDEO) {
+                        track.copy(
+                            clips = track.clips.map { clip ->
+                                if (clip.type == ClipType.IMAGE) {
+                                    val hasZoomEffect = clip.effects.any { it.type == VisualEffectType.ZOOM_PULSE }
+                                    val effs = if (!hasZoomEffect) {
+                                        clip.effects + VisualEffect(VisualEffectType.ZOOM_PULSE, 1f)
+                                    } else clip.effects
+
+                                    val kfs = if (clip.keyframes.isEmpty()) {
+                                        listOf(
+                                            Keyframe(0L, scale = 1.0f),
+                                            Keyframe(clip.timelineDurationMs / 2, scale = 1.25f),
+                                            Keyframe(clip.timelineDurationMs, scale = 1.0f),
+                                        )
+                                    } else clip.keyframes
+
+                                    val tr = clip.transitionToNext ?: Transition(TransitionType.SEAMLESS_MERGE, 0L)
+                                    clip.copy(effects = effs, keyframes = kfs, transitionToNext = tr)
+                                } else clip
+                            }
+                        )
+                    } else track
+                }
+            )
+
+            val updatedProject = project.copy(timeline = initialTimeline)
+            loadedProject = updatedProject
+
             _uiState.update {
                 it.copy(
                     isLoading = false,
-                    projectName = project.name,
-                    timeline = project.timeline,
-                    aspectRatio = project.aspectRatio,
-                    canvas = project.canvas,
-                    selectedClipId = project.timeline.allClips.firstOrNull()?.id,
-                    playheadMs = project.timeline.playheadMs,
+                    projectName = updatedProject.name,
+                    timeline = initialTimeline,
+                    aspectRatio = updatedProject.aspectRatio,
+                    canvas = updatedProject.canvas,
+                    selectedClipId = initialTimeline.allClips.firstOrNull()?.id,
+                    playheadMs = initialTimeline.playheadMs,
                 )
             }
-            playerController.setTimeline(project.timeline, preservePositionMs = project.timeline.playheadMs)
+            playerController.setTimeline(initialTimeline, preservePositionMs = initialTimeline.playheadMs)
         }
     }
 
@@ -620,22 +653,20 @@ class EditorViewModel @Inject constructor(
 
     // ------------------------------------------------------------------ Transitions
     fun setTransition(transition: Transition?) = withSelected { id ->
-        mutate(structural = false) { TimelineEditor.setTransition(it, id, transition) }
+        mutate(structural = true) { TimelineEditor.setTransition(it, id, transition) }
     }
 
-    /** தேர்ந்தெடுக்கப்பட்ட ட்ரான்சிஷனை டைம்லைனில் உள்ள அனைத்து படங்களுக்கும் அப்ளை செய்தல் */
     fun applyTransitionToAll(transition: Transition) {
-        mutate(structural = false) { TimelineEditor.applyTransitionToAll(it, transition) }
+        mutate(structural = true) { TimelineEditor.applyTransitionToAll(it, transition) }
     }
 
-    /** குறிப்பிட்ட Group-ல் உள்ள effects-ஐ Random-ஆக டைம்லைன் முழுவதும் அமைத்தல் */
     fun applyRandomTransitions(category: TransitionCategory) {
         val candidates = if (category == TransitionCategory.ALL) {
-            TransitionType.entries.filter { it != TransitionType.NONE }
+            TransitionType.entries.filter { it != TransitionType.NONE && it != TransitionType.SEAMLESS_MERGE }
         } else {
             TransitionType.entries.filter { it.category == category }
         }
-        mutate(structural = false) { TimelineEditor.applyRandomTransitions(it, candidates) }
+        mutate(structural = true) { TimelineEditor.applyRandomTransitions(it, candidates) }
     }
 
     fun addEffect(effect: VisualEffect) = withSelected { id ->
