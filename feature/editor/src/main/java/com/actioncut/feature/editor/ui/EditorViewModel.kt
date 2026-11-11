@@ -22,6 +22,7 @@ import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.ColorAdjustments
 import com.actioncut.core.model.CropRect
 import com.actioncut.core.model.Filter
+import com.actioncut.core.model.FilterCategory
 import com.actioncut.core.model.FitMode
 import com.actioncut.core.model.Keyframe
 import com.actioncut.core.model.MediaItem
@@ -353,7 +354,7 @@ class EditorViewModel @Inject constructor(
             val clip = base.copy(
                 transform = Transform(offsetX = 0.35f, offsetY = -0.35f, scale = 0.45f),
                 keyframes = listOf(
-                    Keyframe(timeMs = 0L, offsetX = 0.35f, offsetY = -0.35f, scale = 0.45f)
+                    Keyframe(timeMs = 0L, offsetX = 0.35f, offsetY = -0.35f, scale = 0.45f),
                 ),
             )
             val track = _uiState.value.timeline.tracks
@@ -370,16 +371,16 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** Fty PiP: CUTOUT பட்டனை அழுத்தும்போது வட்ட வடிவ மாஸ்க் / Cutout அமைத்தல் */
+    /** Fty PiP: CUTOUT பட்டனை அழுத்தும்போது வட்ட வடிவ Cutout மாஸ்க் அமைத்தல் */
     fun togglePipCutout() = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, id) { c ->
-                val existingCrop = c.crop
-                if (existingCrop != null && !existingCrop.isFull) {
-                    c.copy(crop = null)
+                val isCutout = c.filter?.id == "cutout_circle"
+                if (isCutout) {
+                    c.copy(filter = null)
                 } else {
-                    c.copy(crop = CropRect(0.12f, 0.08f, 0.88f, 0.92f))
+                    c.copy(filter = Filter("cutout_circle", "Circle Cutout", FilterCategory.NONE))
                 }
             }
         }
