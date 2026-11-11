@@ -6,8 +6,6 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
-// Compose UI tests (Robolectric) rely on ui-test-manifest, which is only merged into the
-// debug variant. Run unit tests on debug only; release unit tests add no coverage here.
 androidComponents {
     beforeVariants(selector().withBuildType("release")) { variant ->
         (variant as? com.android.build.api.variant.HasUnitTestBuilder)?.enableUnitTest = false
@@ -39,7 +37,6 @@ android {
         }
     }
     lint {
-        // Editor preview uses Media3 PlayerView/AspectRatioFrameLayout (opt-in APIs).
         disable += "UnsafeOptInUsageError"
     }
 }
@@ -63,8 +60,11 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.video)
 
-    // On-device OCR for reading player names off the scoreboard rows (Cricket Score Card)
+    // On-device OCR
     implementation("com.google.mlkit:text-recognition:16.0.1")
+
+    // On-device Google AI Human / Person Cutout Segmentation (Fty HTML MediaPipe போல)
+    implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
