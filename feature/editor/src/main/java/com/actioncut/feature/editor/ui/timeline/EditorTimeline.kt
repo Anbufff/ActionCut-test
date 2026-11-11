@@ -57,7 +57,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.actioncut.core.designsystem.component.clickableNoRipple
 import com.actioncut.core.designsystem.theme.LaneAudio
-import com.actioncut.core.designsystem.theme.LaneOverlay
 import com.actioncut.core.designsystem.theme.LaneText
 import com.actioncut.core.designsystem.theme.LaneVideo
 import com.actioncut.core.model.Clip
@@ -129,15 +128,15 @@ fun EditorTimeline(
                 val audioTrack = timeline.tracks.firstOrNull { it.type == TrackType.AUDIO }
                 val overlayTrack = timeline.tracks.firstOrNull { it.type == TrackType.OVERLAY }
 
-                // News Alert தொடும் போது Audio டிராக் மறைந்து, News Alert டிராக் வரும் லாஜிக்
+                // Overlay (PiP / News Alert) தேர்ந்தெடுக்கப்பட்டால் Audio மறைந்து Overlay பட்டை தோன்றும் லாஜிக்
                 val isOverlaySelected = overlayTrack?.clips?.any { it.id == selectedClipId } == true
 
                 val displayTracks = buildList {
                     if (videoTrack != null) add(videoTrack)
                     if (isOverlaySelected && overlayTrack != null) {
-                        add(overlayTrack) // Audio மறைக்கப்பட்டு News Alert பட்டை அந்த இடத்திற்கு வரும்!
+                        add(overlayTrack) // Fty PiP & News Alert பட்டை!
                     } else if (audioTrack != null) {
-                        add(audioTrack)   // இயல்பாக Audio பட்டை வரும்
+                        add(audioTrack)
                     } else if (overlayTrack != null && overlayTrack.clips.isNotEmpty()) {
                         add(overlayTrack)
                     }
@@ -365,6 +364,24 @@ private fun ClipBlock(
             )
         }
 
+        // Fty PiP Keyframe Diamond Markers (◆)
+        if (clip.keyframes.isNotEmpty()) {
+            clip.keyframes.forEach { kf ->
+                val kfOffsetDp = with(density) { (kf.timeMs / 1000f * pxPerSecond).toDp() }
+                val isCurrent = abs(playheadMs - (clip.timelineStartMs + kf.timeMs)) <= 150L
+
+                Box(
+                    modifier = Modifier
+                        .offset(x = kfOffsetDp - 5.dp)
+                        .align(Alignment.CenterStart)
+                        .size(11.dp)
+                        .graphicsLayer { rotationZ = 45f }
+                        .background(if (isCurrent) Color(0xFFFF3B5C) else Color(0xFFFFD700))
+                        .border(1.dp, Color.Black, RoundedCornerShape(1.dp))
+                )
+            }
+        }
+
         val sc = clip.scorecard
         if (sc != null) {
             val kfs = sc.keyframes
@@ -519,20 +536,21 @@ private fun laneColor(clip: Clip): Color {
         return Color(0xFF8E0614)
     }
     return when (clip.type) {
-        ClipType.VIDEO -> LaneVideo
-        ClipType.IMAGE -> LaneVideo
         ClipType.AUDIO -> LaneAudio
         ClipType.TEXT -> LaneText
-        ClipType.STICKER -> LaneOverlay
+        ClipType.STICKER -> Color(0xFF7B1FA2) // Fty PiP Purple Track!
+        ClipType.VIDEO, ClipType.IMAGE -> {
+            // PiP Overlay டிராக்கிற்கு Fty-ல் உள்ளது போன்ற ஊதா நிறம் (Purple)
+            Color(0xFF7B1FA2)
+        }
     }
 }
 
 private fun clipIcon(clip: Clip) = when {
     clip.mediaUri?.contains("news_banner") == true -> Icons.Filled.Campaign
-    clip.type == ClipType.VIDEO -> Icons.Filled.Movie
-    clip.type == ClipType.IMAGE -> Icons.Filled.Image
     clip.type == ClipType.AUDIO -> Icons.Filled.Audiotrack
     clip.type == ClipType.TEXT -> Icons.Filled.TextFields
+    clip.type == ClipType.VIDEO -> Icons.Filled.Movie
     else -> Icons.Filled.Image
 }
 
@@ -540,5 +558,6 @@ private fun clipLabel(clip: Clip): String = when {
     clip.mediaUri?.contains("news_banner") == true -> "NEWS ALERT"
     clip.type == ClipType.TEXT -> clip.text?.text ?: "Text"
     clip.type == ClipType.AUDIO -> "Audio"
-    else -> clip.mediaUri?.substringAfterLast('/')?.take(14) ?: clip.type.name
+    clip.type == ClipType.VIDEO -> "PiP Video"
+    else -> "PiP Photo"
 }
