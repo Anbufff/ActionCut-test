@@ -2,7 +2,7 @@ package com.actioncut.feature.editor.ui
 
 /**
  * Editing tools shown in the bottom toolbar.
- * Music பட்டன் Fty Video Editor போலவே "NEWS ALERT" ஆக மாற்றப்பட்டுள்ளது.
+ * NEWS_ALERT மற்றும் MUSIC இரண்டும் பிழையின்றி இயங்கும்படி சேர்க்கப்பட்டுள்ளது.
  */
 enum class EditorTool(val label: String, val opensPanel: Boolean) {
     SPLIT("Split", false),
@@ -12,7 +12,8 @@ enum class EditorTool(val label: String, val opensPanel: Boolean) {
     VOLUME("Volume", true),
     MUTE("Mute", false),
     AUDIO("Audio", false),
-    NEWS_ALERT("NEWS ALERT", false), // Fty Video Editor NEWS ALERT Button
+    NEWS_ALERT("NEWS ALERT", false), // Fty News Alert Button
+    MUSIC("Music", true),
     VOICEOVER("Voiceover", true),
     PIP("PiP", false),
     CRIC("CRIC", false),
