@@ -38,6 +38,7 @@ import com.actioncut.core.model.TransitionCategory
 import com.actioncut.core.model.TransitionType
 import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.VisualEffectType
+import com.actioncut.feature.editor.ui.newsalert.NewsBannerRenderer
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -198,7 +199,7 @@ class EditorViewModel @Inject constructor(
             EditorTool.ROTATE -> { rotateSelected(); clearTool() }
             EditorTool.MUTE -> { toggleMuteSelected(); clearTool() }
             EditorTool.EXTRACT_AUDIO -> { detachAudioFromSelected(); clearTool() }
-            EditorTool.AUDIO, EditorTool.PIP, EditorTool.CRIC, EditorTool.CARD_ADD, EditorTool.PLAYER -> clearTool()
+            EditorTool.AUDIO, EditorTool.PIP, EditorTool.CRIC, EditorTool.CARD_ADD, EditorTool.PLAYER, EditorTool.NEWS_ALERT -> clearTool()
             else -> _uiState.update { it.copy(activeTool = tool) }
         }
     }
@@ -306,6 +307,36 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    // ------------------------------------------------------------------ Fty News Alert Banner
+    /**
+     * Fty Video Editor வடிவில் Flash News Text-ஐ சாய்வான சிகப்பு நிற பேனராக Overlay டிராக்கில் சேர்த்தல்
+     */
+    fun addNewsBannerOverlay(text: String) {
+        viewModelScope.launch {
+            val bannerUri = NewsBannerRenderer.createBannerBitmap(context, text)
+            val clip = Clip(
+                id = "banner_${System.currentTimeMillis()}",
+                type = ClipType.STICKER,
+                mediaUri = bannerUri,
+                timelineStartMs = _uiState.value.playheadMs,
+                timelineEndMs = _uiState.value.playheadMs + 8_000L,
+                transform = Transform(offsetX = 0f, offsetY = 0f, scale = 1.0f),
+            )
+            val track = _uiState.value.timeline.tracks
+                .firstOrNull { it.type == TrackType.OVERLAY }
+            mutate(structural = false) { timeline ->
+                if (track != null) {
+                    TimelineEditor.addClip(timeline, track.id, clip)
+                } else {
+                    val (withTrack, trackId) = TimelineEditor.addTrack(timeline, TrackType.OVERLAY)
+                    TimelineEditor.addClip(withTrack, trackId, clip)
+                }
+            }
+            _uiState.update { it.copy(selectedClipId = clip.id) }
+        }
+    }
+
+    // ------------------------------------------------------------------ Dynamic Scorecard
     fun addScorecardClip(data: ScorecardClipData) {
         val durationMs = 120_000L
         val cardFile = java.io.File(context.cacheDir, "card_${data.id}.png")
@@ -434,9 +465,6 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(playheadMs = clamped) }
     }
 
-    /**
-     * Trim R: Playhead நிற்கும் இடம் வரை படத்தின் வலதுபுறத்தை வெட்டி நீக்கும் ஃபங்ஷன் (Fty Video Editor)
-     */
     fun trimRightAtPlayhead() {
         val state = _uiState.value
         val clipId = state.selectedClipId ?: return
