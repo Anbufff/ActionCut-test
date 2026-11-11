@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -25,6 +26,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -75,10 +77,6 @@ fun PreviewPlayer(
         .sortedBy { it.timelineStartMs }
     val currentMainClip = mainClips.firstOrNull { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
 
-    val activeBanner = overlays.firstOrNull {
-        it.type == ClipType.STICKER && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
-    }
-
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
@@ -91,23 +89,7 @@ fun PreviewPlayer(
         Box(
             modifier = Modifier
                 .aspectRatio(aspectRatio.value)
-                .background(Color(backgroundColorArgb))
-                // கேன்வாஸ் தொடுதல்: இடதுபுறம் தொட்டால் News Alert, வலதுபுறம் தொட்டால் Main Image
-                .pointerInput(currentMainClip?.id, activeBanner?.id) {
-                    detectTapGestures(
-                        onDoubleTap = { onTogglePlay() },
-                        onTap = { offset ->
-                            val touchFractionX = offset.x / size.width.toFloat()
-                            if (touchFractionX <= 0.50f && activeBanner != null) {
-                                onSelectOverlay(activeBanner.id)
-                            } else if (currentMainClip != null) {
-                                onSelectOverlay(currentMainClip.id)
-                            } else {
-                                onTogglePlay()
-                            }
-                        }
-                    )
-                },
+                .background(Color(backgroundColorArgb)),
             contentAlignment = Alignment.Center,
         ) {
             AndroidView(
@@ -126,7 +108,7 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // Main Track Image: Zoom In - Out மற்றும் கேன்வாஸில் விரலால் நகர்த்தி வைக்கும் (Pan/Reposition) வசதி
+            // Main Track Image: கேன்வாஸில் Player-ஐ விரலால் தொட்டவுடன் நகர்த்தும் வசதி
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
@@ -155,26 +137,23 @@ fun PreviewPlayer(
                 val isMainSelected = currentMainClip.id == selectedClipId
                 val mainTransform = currentMainClip.transform
 
-                // Main Image தேர்ந்தெடுக்கப்பட்டிருக்கும் போது கேன்வாஸில் விரலால் நகர்த்தி வைக்கும் GestureDetector
-                val mainDragModifier = if (isMainSelected) {
-                    Modifier.pointerInput(currentMainClip.id, w, h) {
-                        var ox = mainTransform.offsetX
-                        var oy = mainTransform.offsetY
-                        detectDragGestures(
-                            onDragStart = {
-                                ox = currentMainClip.transform.offsetX
-                                oy = currentMainClip.transform.offsetY
-                            },
-                            onDrag = { change, drag ->
-                                change.consume()
-                                ox = (ox + drag.x / (w / 2f)).coerceIn(-1.5f, 1.5f)
-                                oy = (oy + drag.y / (h / 2f)).coerceIn(-1.5f, 1.5f)
-                                onMoveOverlay(currentMainClip.id, ox, oy)
-                            }
-                        )
-                    }
-                } else {
-                    Modifier
+                // Player-ஐ நேரடியாகத் தொட்டு நகர்த்தும் GestureDetector
+                val mainDragModifier = Modifier.pointerInput(currentMainClip.id, w, h) {
+                    var ox = mainTransform.offsetX
+                    var oy = mainTransform.offsetY
+                    detectDragGestures(
+                        onDragStart = {
+                            onSelectOverlay(currentMainClip.id)
+                            ox = currentMainClip.transform.offsetX
+                            oy = currentMainClip.transform.offsetY
+                        },
+                        onDrag = { change, drag ->
+                            change.consume()
+                            ox = (ox + drag.x / (w / 2f)).coerceIn(-1.5f, 1.5f)
+                            oy = (oy + drag.y / (h / 2f)).coerceIn(-1.5f, 1.5f)
+                            onMoveOverlay(currentMainClip.id, ox, oy)
+                        }
+                    )
                 }
 
                 AsyncImage(
@@ -221,6 +200,7 @@ fun PreviewPlayer(
                 )
             }
 
+            // Overlays Layer (News Alert பேனர் உள்பட)
             OverlayLayer(
                 overlays = overlays,
                 playheadMs = playheadMs,
@@ -387,9 +367,12 @@ private fun OverlayLayer(
     onMove: (String, Float, Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+
     BoxWithConstraints(modifier) {
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
+
         overlays
             .filter { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
             .forEach { clip ->
@@ -398,6 +381,7 @@ private fun OverlayLayer(
                 val glyph = clip.text?.text ?: ""
                 val baseSp = clip.text?.fontSizeSp ?: 24f
                 val isSelected = clip.id == selectedClipId
+                val isNewsBanner = clip.mediaUri?.contains("news_banner") == true
 
                 val gestureModifier = Modifier
                     .graphicsLayer {
@@ -406,24 +390,42 @@ private fun OverlayLayer(
                         rotationZ = t.rotationDegrees
                         alpha = props.opacity
                     }
-                    .then(
-                        if (isSelected) {
-                            Modifier.border(1.dp, Color.White.copy(alpha = 0.6f))
-                        } else {
-                            Modifier
-                        },
-                    )
 
                 val imageUri = clip.mediaUri
                 if (imageUri != null && clip.text == null) {
-                    StickerImage(
-                        uri = imageUri,
-                        widthPx = t.scale * w,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .then(gestureModifier)
-                            .clickable { onSelect(clip.id) },
-                    )
+                    if (isNewsBanner) {
+                        // News Alert தொடுதல் பரப்பு இடதுபுறம் 52% அளவுக்கு மட்டுமே கட்டுப்படுத்தப்படுகிறது.
+                        // இதனால் வலதுபுறம் உள்ள Player-ஐ தொடும்போது News Alert கிளிக் ஆகாது!
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .fillMaxWidth(0.52f)
+                                .align(Alignment.CenterStart)
+                                .clipToBounds()
+                                .then(gestureModifier)
+                                .pointerInput(clip.id) {
+                                    detectTapGestures(onTap = { onSelect(clip.id) })
+                                }
+                        ) {
+                            StickerImage(
+                                uri = imageUri,
+                                widthPx = w,
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(with(density) { w.toDp() })
+                                    .align(Alignment.CenterStart),
+                            )
+                        }
+                    } else {
+                        StickerImage(
+                            uri = imageUri,
+                            widthPx = t.scale * w,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .then(gestureModifier)
+                                .clickable { onSelect(clip.id) },
+                        )
+                    }
                 } else {
                     Text(
                         text = glyph,
