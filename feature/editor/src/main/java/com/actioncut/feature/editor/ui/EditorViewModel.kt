@@ -592,11 +592,11 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // இரண்டு விரல் Pinch Zoom In-Out மூலம் படத்தை 3.5x வரை பெரிதாக்க அனுமதித்தல்
+    // இரண்டு விரல் Pinch Zoom மூலம் அளவை 0.5x முதல் 4.0x வரை பெரிதாக்க அனுமதித்தல்
     fun setOverlayScale(clipId: String, scale: Float) {
         val clip = currentClip(clipId) ?: return
         mutate(structural = false) {
-            TimelineEditor.setTransform(it, clipId, clip.transform.copy(scale = scale.coerceIn(0.1f, 3.5f)))
+            TimelineEditor.setTransform(it, clipId, clip.transform.copy(scale = scale.coerceIn(0.1f, 4.0f)))
         }
     }
 
