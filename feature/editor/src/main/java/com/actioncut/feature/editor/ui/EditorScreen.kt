@@ -45,6 +45,8 @@ import com.actioncut.core.common.time.TimeFormatter
 import com.actioncut.core.designsystem.component.PrimaryButton
 import com.actioncut.core.designsystem.component.rememberHaptic
 import com.actioncut.core.model.AspectRatio
+import com.actioncut.feature.editor.ui.newsalert.FlashNewsTextDialog
+import com.actioncut.feature.editor.ui.newsalert.NewsAlertTemplatesDialog
 import com.actioncut.feature.editor.ui.preview.PreviewPlayer
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibrary
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibraryDialog
@@ -62,6 +64,10 @@ fun EditorScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var showRename by remember { mutableStateOf(false) }
+
+    // Fty News Alert Templates & Flash News Text Dialog States
+    var showNewsAlertTemplates by remember { mutableStateOf(false) }
+    var showFlashNewsText by remember { mutableStateOf(false) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -251,6 +257,7 @@ fun EditorScreen(
                                 EditorTool.CRIC -> cricPicker.launch(arrayOf("image/*"))
                                 EditorTool.CARD_ADD -> showRegister = true
                                 EditorTool.PLAYER -> showPlayers = true
+                                EditorTool.NEWS_ALERT -> showNewsAlertTemplates = true // News Alert Templates திறக்கப்படும்
                                 else -> viewModel.setActiveTool(tool)
                             }
                         },
@@ -259,6 +266,28 @@ fun EditorScreen(
                 }
             }
         }
+    }
+
+    // Fty Video Editor News Alert Templates Dialog (ஸ்கிரீன்ஷாட் 1)
+    if (showNewsAlertTemplates) {
+        NewsAlertTemplatesDialog(
+            onDismiss = { showNewsAlertTemplates = false },
+            onSelectTemplate = {
+                showNewsAlertTemplates = false
+                showFlashNewsText = true
+            },
+        )
+    }
+
+    // Fty Video Editor Flash News Text Dialog (ஸ்கிரீன்ஷாட் 2)
+    if (showFlashNewsText) {
+        FlashNewsTextDialog(
+            onDismiss = { showFlashNewsText = false },
+            onApply = { text ->
+                showFlashNewsText = false
+                viewModel.addNewsBannerOverlay(text)
+            },
+        )
     }
 
     if (showRegister) {
