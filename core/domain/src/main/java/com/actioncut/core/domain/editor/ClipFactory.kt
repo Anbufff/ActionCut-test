@@ -34,25 +34,24 @@ object ClipFactory {
             media.durationMs.coerceAtLeast(TimelineEditor.MIN_CLIP_DURATION_MS)
         }
 
-        // Fty Editor போன்று அனைத்து படங்களுக்கும் Group 5 Zoom In-Out எஃபெக்ட் தானாக அப்ளை ஆதல்
+        // Fty Editor Group 5 Zoom In-Out எஃபெக்ட்
         val imageEffects = if (media.type == MediaType.IMAGE) {
             listOf(VisualEffect(VisualEffectType.ZOOM_PULSE, intensity = 1.0f))
         } else {
             emptyList()
         }
 
-        // நடுவில் பெரிதாகி மீண்டும் பழைய நிலைக்குச் சுருங்கும் Keyframe அனிமேஷன்
+        // முதல் பாதியில் 1.0x -> 1.10x, இரண்டாம் பாதியில் 1.10x -> 1.0x
         val imageKeyframes = if (media.type == MediaType.IMAGE) {
             listOf(
                 Keyframe(timeMs = 0L, scale = 1.0f),
-                Keyframe(timeMs = duration / 2, scale = 1.25f),
+                Keyframe(timeMs = duration / 2, scale = 1.10f),
                 Keyframe(timeMs = duration, scale = 1.0f),
             )
         } else {
             emptyList()
         }
 
-        // அனைத்துப் படங்களுக்கும் இடையே உள்ள default transition = Seamless Merge
         val defaultTransition = if (media.type == MediaType.IMAGE) {
             Transition(TransitionType.SEAMLESS_MERGE, 0L)
         } else {
