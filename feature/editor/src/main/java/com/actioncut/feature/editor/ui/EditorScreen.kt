@@ -45,6 +45,8 @@ import com.actioncut.core.common.time.TimeFormatter
 import com.actioncut.core.designsystem.component.PrimaryButton
 import com.actioncut.core.designsystem.component.rememberHaptic
 import com.actioncut.core.model.AspectRatio
+import com.actioncut.feature.editor.ui.newsalert.FlashNewsTextDialog
+import com.actioncut.feature.editor.ui.newsalert.NewsAlertTemplatesDialog
 import com.actioncut.feature.editor.ui.preview.PreviewPlayer
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibrary
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibraryDialog
