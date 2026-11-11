@@ -1,4 +1,4 @@
-package com.actioncut.feature.editor.ui
+package com.actioncut.feature.editor.ui.newsalert
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -163,7 +163,7 @@ fun NewsAlertTemplatesDialog(
 
 /**
  * Flash News Text:
- * பாக்ஸ் உயரம் குறைக்கப்பட்டு பட்டன்கள் நன்கு மேலே தெளிவாகத் தெரியும் வடிவம்.
+ * பாக்ஸ் உயரம் குறைக்கப்பட்ட மற்றும் பட்டன்கள் மேலே தெளிவாகத் தெரியும் வடிவம்.
  */
 @Composable
 fun FlashNewsTextDialog(
@@ -201,7 +201,6 @@ fun FlashNewsTextDialog(
                         .padding(18.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    // Header
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -221,7 +220,6 @@ fun FlashNewsTextDialog(
                         style = TextStyle(color = Color(0xFFB0B0B0), fontSize = 12.sp, lineHeight = 17.sp),
                     )
 
-                    // உயரம் குறைக்கப்பட்ட Textarea (200.dp)
                     OutlinedTextField(
                         value = text,
                         onValueChange = { text = it },
@@ -245,7 +243,6 @@ fun FlashNewsTextDialog(
                         ),
                     )
 
-                    // மேலே கொண்டு வரப்பட்ட Buttons Row
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
