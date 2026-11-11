@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -21,15 +22,15 @@ import androidx.compose.ui.unit.dp
 import com.actioncut.core.designsystem.component.ToolItem
 
 /**
- * Contextual action bar shown above the toolbar whenever a clip is selected. Surfaces the
- * most-used clip actions — **Split, Duplicate, Delete** — as large, always-visible buttons
- * so deleting a clip no longer requires hunting through the end of the scrolling toolbar.
+ * Contextual action bar shown above the toolbar whenever a clip is selected.
+ * Includes Split, Duplicate, Delete, Trim R, and Done.
  */
 @Composable
 fun SelectedClipBar(
     onSplit: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
+    onTrimRight: () -> Unit = {},
     onDeselect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -49,11 +50,12 @@ fun SelectedClipBar(
                 text = "Clip",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(end = 8.dp),
+                modifier = Modifier.padding(end = 4.dp),
             )
             ToolItem(label = "Split", icon = Icons.Filled.ContentCut, onClick = onSplit)
             ToolItem(label = "Duplicate", icon = Icons.Filled.ContentCopy, onClick = onDuplicate)
             ToolItem(label = "Delete", icon = Icons.Filled.DeleteOutline, onClick = onDelete)
+            ToolItem(label = "Trim R", icon = Icons.AutoMirrored.Filled.ArrowForward, onClick = onTrimRight)
             androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
             ToolItem(label = "Done", icon = Icons.Filled.Done, onClick = onDeselect)
         }
