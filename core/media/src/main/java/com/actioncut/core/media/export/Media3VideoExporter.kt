@@ -25,6 +25,7 @@ import com.actioncut.core.model.ExportSettings
 import com.actioncut.core.model.ExportState
 import com.actioncut.core.model.Project
 import com.actioncut.core.model.Resolution
+import com.actioncut.core.model.TransitionType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -83,13 +84,11 @@ class Media3VideoExporter @Inject constructor(
                     com.actioncut.core.model.FitMode.STRETCH -> Presentation.LAYOUT_STRETCH_TO_FIT
                 }
 
-                // எக்ஸ்போர்ட் செய்யப்படும் வீடியோ ஆடியோவின் மொத்த நீளம் (06:12) வரை ரெண்டர் ஆவதை உறுதி செய்தல்
                 val totalTimelineMs = project.timeline.durationMs
                 val totalVideoMs = clips.sumOf { it.timelineDurationMs }
 
                 val exportClips = if (totalTimelineMs > totalVideoMs && clips.isNotEmpty()) {
                     val lastIndex = clips.size - 1
-                    val lastClip = clips[lastIndex]
                     val extraMs = totalTimelineMs - totalVideoMs
                     clips.mapIndexed { idx, c ->
                         if (idx == lastIndex) c.copy(timelineEndMs = c.timelineEndMs + extraMs) else c
@@ -99,10 +98,12 @@ class Media3VideoExporter @Inject constructor(
                 }
 
                 val editedItems = exportClips.mapIndexed { index, clip ->
+                    // Seamless Merge மற்றும் None ட்ரான்சிஷன்கள் 100% தூய்மையான இணைப்பைத் தரும் (No fade/dip to black)
                     val incoming = exportClips.getOrNull(index - 1)?.transitionToNext
-                        ?.takeIf { it.type != com.actioncut.core.model.TransitionType.NONE }
+                        ?.takeIf { it.type != TransitionType.NONE && it.type != TransitionType.SEAMLESS_MERGE }
                     val outgoing = clip.transitionToNext
-                        ?.takeIf { it.type != com.actioncut.core.model.TransitionType.NONE }
+                        ?.takeIf { it.type != TransitionType.NONE && it.type != TransitionType.SEAMLESS_MERGE }
+
                     clip.toEditedMediaItem(
                         targetWidth, targetHeight, settings, overlayClips, presentationLayout,
                         incoming, outgoing,
