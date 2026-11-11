@@ -65,11 +65,12 @@ internal object Shaders {
         }
     """
 
+    // Fty Group 5: முதல் பாதியில் 1.0x-1.10x Zoom In, இரண்டாம் பாதியில் 1.10x-1.0x Zoom Out
     private val ZOOM_PULSE = HEADER + """
         void main() {
           float cycle = sin(fract(uTime * 0.125) * 3.14159265);
-          float s = 1.0 / (1.0 + 0.25 * cycle * uIntensity);
-          vec2 uv = (vTexSamplingCoord - 0.5) * s + 0.5;
+          float scale = 1.0 + 0.10 * cycle * uIntensity;
+          vec2 uv = (vTexSamplingCoord - 0.5) / scale + 0.5;
           gl_FragColor = texture2D(uTexSampler, uv);
         }
     """
