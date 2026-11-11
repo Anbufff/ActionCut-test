@@ -87,7 +87,7 @@ class EditorViewModel @Inject constructor(
                 return@launch
             }
 
-            // அனைத்து படங்களுக்கும் Group 5 Zoom In-Out மற்றும் Seamless Merge-ஐ இயல்பாக அமைத்தல்
+            // அனைத்து படங்களுக்கும் 1.0x -> 1.10x -> 1.0x Keyframe மற்றும் Seamless Merge அமைத்தல்
             val initialTimeline = project.timeline.copy(
                 tracks = project.timeline.tracks.map { track ->
                     if (track.type == TrackType.VIDEO) {
@@ -102,7 +102,7 @@ class EditorViewModel @Inject constructor(
                                     val kfs = if (clip.keyframes.isEmpty()) {
                                         listOf(
                                             Keyframe(0L, scale = 1.0f),
-                                            Keyframe(clip.timelineDurationMs / 2, scale = 1.25f),
+                                            Keyframe(clip.timelineDurationMs / 2, scale = 1.10f),
                                             Keyframe(clip.timelineDurationMs, scale = 1.0f),
                                         )
                                     } else clip.keyframes
