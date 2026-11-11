@@ -38,6 +38,7 @@ import com.actioncut.core.model.TransitionCategory
 import com.actioncut.core.model.TransitionType
 import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.VisualEffectType
+import com.actioncut.feature.editor.ui.newsalert.NewsBannerRenderer
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -307,8 +308,7 @@ class EditorViewModel @Inject constructor(
     }
 
     /**
-     * NEWS ALERT: Full video length-க்கு default ஆக set ஆதல்!
-     * தேவையான இடத்தில் Playhead வைத்து Trim R மூலம் எளிதாக வெட்டிக் கொள்ளலாம்.
+     * NEWS ALERT: Full video length-க்கு default ஆக set செய்தல்
      */
     fun addNewsBannerOverlay(text: String) {
         if (text.isBlank()) return
@@ -317,7 +317,6 @@ class EditorViewModel @Inject constructor(
             val currentPlayhead = _uiState.value.playheadMs
             val totalTimelineMs = _uiState.value.timeline.durationMs
 
-            // Full Video End வரை தானாக நீட்டி அமைத்தல்
             val bannerEndMs = if (totalTimelineMs > currentPlayhead) totalTimelineMs else currentPlayhead + 30_000L
 
             val clip = Clip(
