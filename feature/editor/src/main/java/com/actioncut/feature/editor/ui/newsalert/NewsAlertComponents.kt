@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -38,7 +40,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,7 +48,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path as ComposePath
 import androidx.compose.ui.text.TextStyle
@@ -59,9 +59,6 @@ import androidx.compose.ui.window.DialogProperties
 import java.io.File
 import java.io.FileOutputStream
 
-/**
- * ஸ்கிரீன்ஷாட் 1: News Alert Templates பாட்டம் ஷீட்
- */
 @Composable
 fun NewsAlertTemplatesDialog(
     onDismiss: () -> Unit,
@@ -79,10 +76,10 @@ fun NewsAlertTemplatesDialog(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
+                    .navigationBarsPadding()
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                // Header with Close
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -97,7 +94,6 @@ fun NewsAlertTemplatesDialog(
                     }
                 }
 
-                // Template 1 Preview Card: FLASH NEWS
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -124,7 +120,6 @@ fun NewsAlertTemplatesDialog(
                     )
                 }
 
-                // Template 2 Action Card: NEWS BANNER CARD (மஞ்சள் பார்டர் கொண்ட கார்டு)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -166,7 +161,9 @@ fun NewsAlertTemplatesDialog(
 }
 
 /**
- * ஸ்கிரீன்ஷாட் 2: Flash News Text உள்ளீட்டு டயலாக்
+ * Flash News Text:
+ * 1. Default-ஆக காலியாக ("") இருக்கும் (எளிதில் paste செய்யலாம்).
+ * 2. கீழே உள்ள Apply மற்றும் Cancel பட்டன்கள் திரையில் தெளிவாகத் தெரியும்.
  */
 @Composable
 fun FlashNewsTextDialog(
@@ -174,30 +171,27 @@ fun FlashNewsTextDialog(
     onDismiss: () -> Unit,
     onApply: (String) -> Unit,
 ) {
-    var text by remember {
-        mutableStateOf(
-            initialText.ifBlank {
-                "அன்பு மற்றும் இரக்கம் மற்றும் பிற சமயத்தினர் ஆவர் இவர்கள் பெரும்பாலும் தங்கள் விரைவான முடிவுகளையும் பல பவுண்டுகள்.\nஎப்ள மற்றும் பிற சமயத்தினர் ஆவர் இவர்கள் பெரும்பாலும் தங்கள் விரைவான"
-            }
-        )
-    }
+    var text by remember { mutableStateOf(initialText) }
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF121212)),
             color = Color(0xFF121212),
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .imePadding()
                     .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                // Title
+                // Title Bar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -212,16 +206,26 @@ fun FlashNewsTextDialog(
                     }
                 }
 
-                // Subtitle Instruction (படத்தில் உள்ள அதே தமிழ் உரை)
+                Spacer(Modifier.height(8.dp))
+
                 Text(
                     text = "Text-ஐ இங்கே Paste செய்யவும். ஒவ்வொரு (.) புள்ளிக்குப் பிறகும் அடுத்த வரியில், வேறு நிறத்தில் வரும். KF +/- மூலம் ஒவ்வொரு வாக்கியமாக வரவைக்கலாம்.",
                     style = TextStyle(color = Color(0xFFB0B0B0), fontSize = 12.5.sp, lineHeight = 18.sp),
                 )
 
-                // Big Text Area
+                Spacer(Modifier.height(12.dp))
+
+                // காலியான Textarea (எளிதில் paste செய்யும்படி)
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
+                    placeholder = {
+                        Text(
+                            text = "செய்தியை இங்கே Paste செய்யவும்...",
+                            color = Color(0xFF777777),
+                            fontSize = 15.sp,
+                        )
+                    },
                     textStyle = TextStyle(color = Color.White, fontSize = 15.sp, lineHeight = 22.sp),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -235,28 +239,44 @@ fun FlashNewsTextDialog(
                     ),
                 )
 
-                // Buttons: Cancel & Apply
+                Spacer(Modifier.height(14.dp))
+
+                // 100% திரையில் தெளிவாகத் தெரியும் Buttons Row
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Button(
                         onClick = onDismiss,
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF262626)),
-                        modifier = Modifier.weight(1f).height(46.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
                     ) {
                         Text("Cancel", color = Color.White, fontWeight = FontWeight.SemiBold)
                     }
 
                     Button(
-                        onClick = { onApply(text) },
+                        onClick = {
+                            if (text.isNotBlank()) {
+                                onApply(text)
+                            }
+                        },
+                        enabled = text.isNotBlank(),
                         shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
-                        modifier = Modifier.weight(1f).height(46.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF00E5FF),
+                            disabledContainerColor = Color(0xFF005B66),
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
                     ) {
                         Icon(Icons.Filled.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.size(4.dp))
+                        Spacer(Modifier.size(6.dp))
                         Text("Apply", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
                 }
@@ -265,10 +285,6 @@ fun FlashNewsTextDialog(
     }
 }
 
-/**
- * ஸ்கிரீன்ஷாட் 3: Fty Video Editor-ல் உள்ளது போல இடதுபுறம் சாய்வான சிகப்பு நிற Flash News Banner
- * மற்றும் மஞ்சள்/வெள்ளை நிற வாக்கியங்களை உருவாக்கும் Renderer
- */
 object NewsBannerRenderer {
 
     fun createBannerBitmap(context: Context, rawText: String): String {
@@ -280,7 +296,6 @@ object NewsBannerRenderer {
         val bannerWidth = width * 0.52f
         val slantOffset = width * 0.08f
 
-        // 1. இடதுபுற சாய்வான சிகப்பு நிற Polygon Banner
         val path = Path().apply {
             moveTo(0f, 0f)
             lineTo(bannerWidth, 0f)
@@ -299,7 +314,6 @@ object NewsBannerRenderer {
         }
         canvas.drawPath(path, bannerPaint)
 
-        // சாய்வான கோட்டின் மீது மெல்லிய பார்டர்
         val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = 3f
@@ -307,7 +321,6 @@ object NewsBannerRenderer {
         }
         canvas.drawLine(bannerWidth, 0f, bannerWidth - slantOffset, height.toFloat(), borderPaint)
 
-        // 2. வாக்கியங்களை புள்ளி (.) அடிப்படையில் பிரித்தல்
         val sentences = rawText.split(".")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
@@ -329,15 +342,12 @@ object NewsBannerRenderer {
         val lineHeight = 48f
 
         sentences.forEachIndexed { index, sentence ->
-            // Fty வடிவில்: முதல் வாக்கியம் மஞ்சள் (#FFE600), அடுத்த வாக்கியம் வெள்ளை (#FFFFFF)
             val isYellow = index % 2 == 0
             textPaint.color = if (isYellow) AndroidColor.parseColor("#FFE600") else AndroidColor.WHITE
             bulletPaint.color = if (isYellow) AndroidColor.parseColor("#FFE600") else AndroidColor.WHITE
 
-            // புல்லட் வட்டம் 'o'
             canvas.drawCircle(startX, startY - 10f, 9f, bulletPaint)
 
-            // நீண்ட வரிகளை மடித்து (Wrap) எழுதுதல்
             val words = sentence.split(" ")
             var line = ""
             words.forEach { word ->
@@ -352,11 +362,10 @@ object NewsBannerRenderer {
             }
             if (line.isNotEmpty()) {
                 canvas.drawText(line, startX + 30f, startY, textPaint)
-                startY += lineHeight + 28f // வாக்கியங்களுக்கு இடையே உள்ள இடைவெளி
+                startY += lineHeight + 28f
             }
         }
 
-        // Cache-ல் சேமித்து URI உருவாக்குதல்
         val file = File(context.cacheDir, "news_banner_${System.currentTimeMillis()}.png")
         FileOutputStream(file).use { out ->
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
