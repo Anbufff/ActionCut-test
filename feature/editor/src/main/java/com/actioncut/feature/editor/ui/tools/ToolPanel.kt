@@ -531,17 +531,12 @@ private fun StickerPanel(onAddSticker: (String) -> Unit) {
 @Composable
 private fun MusicPanel(onAddLibraryTrack: (com.actioncut.core.model.LibraryTrack) -> Unit) {
     val haptic = com.actioncut.core.designsystem.component.rememberHaptic()
-    var category by remember { mutableStateOf(AudioCategory.NEWS_ALERT) }
-    val tracks = when (category) {
-        AudioCategory.NEWS_ALERT -> AudioLibrary.newsAlerts
-        AudioCategory.SFX -> AudioLibrary.sfx
-        AudioCategory.BGM -> AudioLibrary.bgm
-    }
+    var category by remember { mutableStateOf(AudioCategory.MUSIC) }
+    val tracks = if (category == AudioCategory.MUSIC) AudioLibrary.music else AudioLibrary.sfx
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SelectableChip("News Alert", category == AudioCategory.NEWS_ALERT, onClick = { category = AudioCategory.NEWS_ALERT })
+            SelectableChip("Music", category == AudioCategory.MUSIC, onClick = { category = AudioCategory.MUSIC })
             SelectableChip("SFX", category == AudioCategory.SFX, onClick = { category = AudioCategory.SFX })
-            SelectableChip("BGM", category == AudioCategory.BGM, onClick = { category = AudioCategory.BGM })
         }
         Column(
             modifier = Modifier
