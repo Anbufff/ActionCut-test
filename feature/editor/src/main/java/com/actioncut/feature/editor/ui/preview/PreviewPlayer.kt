@@ -69,6 +69,7 @@ fun PreviewPlayer(
         com.actioncut.core.model.FitMode.STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
+    // மெயின் டிராக்கில் உள்ள கிளிப்கள்
     val mainClips = allClips.filter { it.type == ClipType.VIDEO || it.type == ClipType.IMAGE }
         .sortedBy { it.timelineStartMs }
     val currentMainClip = mainClips.firstOrNull { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
@@ -102,12 +103,13 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // Fty Video Editor: முதல் பாதியில் 1.0x-1.10x Zoom In, இரண்டாம் பாதியில் 1.10x-1.0x Zoom Out
+            // Fty Video Editor: படம் உள்ள இடத்தில் மட்டுமே படம் இயங்கும்
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
                 val halfDuration = duration / 2f
 
+                // முதல் பாதியில் 1.0x-1.10x Zoom In, இரண்டாம் பாதியில் 1.10x-1.0x Zoom Out
                 val zoomScale = if (timeInClip <= halfDuration) {
                     val p = (timeInClip.toFloat() / halfDuration).coerceIn(0f, 1f)
                     1.0f + (0.10f * p)
@@ -140,6 +142,13 @@ fun PreviewPlayer(
                             alpha = alphaVal
                             rotationZ = (currentMainClip.rotationDegrees + currentMainClip.transform.rotationDegrees).toFloat()
                         },
+                )
+            } else if (currentMainClip == null) {
+                // படம் இல்லாத இடங்களில் முந்தைய கடைசி படம் திரையில் உறைந்து நிற்காமல் முழுக்க பிளாக் ஸ்கிரீன் ஆக்குதல் (Fty Editor)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(backgroundColorArgb)),
                 )
             }
 
