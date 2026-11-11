@@ -38,7 +38,6 @@ import com.actioncut.core.model.TransitionCategory
 import com.actioncut.core.model.TransitionType
 import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.VisualEffectType
-import com.actioncut.feature.editor.ui.newsalert.NewsBannerRenderer
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -318,7 +317,7 @@ class EditorViewModel @Inject constructor(
             val currentPlayhead = _uiState.value.playheadMs
             val totalTimelineMs = _uiState.value.timeline.durationMs
 
-            // Full Video End வரை நீட்டி அமைத்தல்
+            // Full Video End வரை தானாக நீட்டி அமைத்தல்
             val bannerEndMs = if (totalTimelineMs > currentPlayhead) totalTimelineMs else currentPlayhead + 30_000L
 
             val clip = Clip(
