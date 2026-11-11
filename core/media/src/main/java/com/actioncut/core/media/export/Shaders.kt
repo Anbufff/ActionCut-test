@@ -2,15 +2,8 @@ package com.actioncut.core.media.export
 
 import com.actioncut.core.model.VisualEffectType
 
-/**
- * GLSL ES 1.00 fragment shaders for ActionCut's stylized effects, paired to the
- * [ShaderEffect] uniform contract. Each returns final colour in `gl_FragColor`.
- *
- * Kept as inline strings (no asset files) so the render path is fully self-contained.
- */
 internal object Shaders {
 
-    /** Common header shared by every fragment shader (uniforms + a cheap hash noise). */
     private const val HEADER = """
         #version 100
         precision highp float;
@@ -22,7 +15,6 @@ internal object Shaders {
         float rand(vec2 c) { return fract(sin(dot(c, vec2(12.9898, 78.233))) * 43758.5453); }
     """
 
-    /** Returns the fragment shader for [type], or null if it is not a stylized shader effect. */
     fun fragmentFor(type: VisualEffectType): String? = when (type) {
         VisualEffectType.GLITCH -> GLITCH
         VisualEffectType.RGB_SPLIT -> RGB_SPLIT
@@ -32,7 +24,6 @@ internal object Shaders {
         VisualEffectType.LIGHT_LEAK -> LIGHT_LEAK
         VisualEffectType.VHS -> VHS
         VisualEffectType.PIXELATE -> PIXELATE
-        // Blur variants use stock Media3 GaussianBlur instead of a custom shader.
         VisualEffectType.GAUSSIAN_BLUR,
         VisualEffectType.RADIAL_BLUR,
         VisualEffectType.BOKEH,
@@ -76,7 +67,8 @@ internal object Shaders {
 
     private val ZOOM_PULSE = HEADER + """
         void main() {
-          float s = 1.0 - 0.10 * uIntensity * (0.5 + 0.5 * sin(uTime * 3.14159));
+          float cycle = sin(fract(uTime * 0.125) * 3.14159265);
+          float s = 1.0 / (1.0 + 0.25 * cycle * uIntensity);
           vec2 uv = (vTexSamplingCoord - 0.5) * s + 0.5;
           gl_FragColor = texture2D(uTexSampler, uv);
         }
@@ -97,7 +89,7 @@ internal object Shaders {
           float pos = 0.5 + 0.5 * sin(uTime * 0.7);
           float d = smoothstep(0.0, 0.6, 1.0 - abs(vTexSamplingCoord.x - pos));
           vec3 leak = vec3(1.0, 0.55, 0.2) * d * uIntensity * 0.6;
-          vec3 outc = 1.0 - (1.0 - col.rgb) * (1.0 - leak); // screen blend
+          vec3 outc = 1.0 - (1.0 - col.rgb) * (1.0 - leak);
           gl_FragColor = vec4(outc, col.a);
         }
     """
