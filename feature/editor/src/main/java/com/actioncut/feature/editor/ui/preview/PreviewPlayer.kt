@@ -42,8 +42,6 @@ import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.TransitionType
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
-import kotlin.math.PI
-import kotlin.math.sin
 
 @Composable
 fun PreviewPlayer(
@@ -104,12 +102,19 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
+            // Fty Video Editor: முதல் பாதியில் 1.0x-1.10x Zoom In, இரண்டாம் பாதியில் 1.10x-1.0x Zoom Out
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
-                val progress = (timeInClip.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                val halfDuration = duration / 2f
 
-                val zoomScale = 1.0f + (sin(progress * PI).toFloat() * 0.25f)
+                val zoomScale = if (timeInClip <= halfDuration) {
+                    val p = (timeInClip.toFloat() / halfDuration).coerceIn(0f, 1f)
+                    1.0f + (0.10f * p)
+                } else {
+                    val p = ((timeInClip.toFloat() - halfDuration) / halfDuration).coerceIn(0f, 1f)
+                    1.10f - (0.10f * p)
+                }
 
                 val transition = currentMainClip.transitionToNext
                 val trDuration = transition?.durationMs ?: 0L
