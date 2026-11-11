@@ -79,22 +79,26 @@ fun PreviewPlayer(
         it.type == ClipType.STICKER && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .background(Color.Black),
         contentAlignment = Alignment.Center,
     ) {
+        val w = constraints.maxWidth.toFloat()
+        val h = constraints.maxHeight.toFloat()
+
         Box(
             modifier = Modifier
                 .aspectRatio(aspectRatio.value)
                 .background(Color(backgroundColorArgb))
+                // கேன்வாஸ் தொடுதல்: இடதுபுறம் தொட்டால் News Alert, வலதுபுறம் தொட்டால் Main Image
                 .pointerInput(currentMainClip?.id, activeBanner?.id) {
                     detectTapGestures(
                         onDoubleTap = { onTogglePlay() },
                         onTap = { offset ->
                             val touchFractionX = offset.x / size.width.toFloat()
-                            if (touchFractionX <= 0.52f && activeBanner != null) {
+                            if (touchFractionX <= 0.50f && activeBanner != null) {
                                 onSelectOverlay(activeBanner.id)
                             } else if (currentMainClip != null) {
                                 onSelectOverlay(currentMainClip.id)
@@ -122,6 +126,7 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
+            // Main Track Image: Zoom In - Out மற்றும் கேன்வாஸில் விரலால் நகர்த்தி வைக்கும் (Pan/Reposition) வசதி
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
@@ -147,6 +152,31 @@ fun PreviewPlayer(
                     1.0f
                 }
 
+                val isMainSelected = currentMainClip.id == selectedClipId
+                val mainTransform = currentMainClip.transform
+
+                // Main Image தேர்ந்தெடுக்கப்பட்டிருக்கும் போது கேன்வாஸில் விரலால் நகர்த்தி வைக்கும் GestureDetector
+                val mainDragModifier = if (isMainSelected) {
+                    Modifier.pointerInput(currentMainClip.id, w, h) {
+                        var ox = mainTransform.offsetX
+                        var oy = mainTransform.offsetY
+                        detectDragGestures(
+                            onDragStart = {
+                                ox = currentMainClip.transform.offsetX
+                                oy = currentMainClip.transform.offsetY
+                            },
+                            onDrag = { change, drag ->
+                                change.consume()
+                                ox = (ox + drag.x / (w / 2f)).coerceIn(-1.5f, 1.5f)
+                                oy = (oy + drag.y / (h / 2f)).coerceIn(-1.5f, 1.5f)
+                                onMoveOverlay(currentMainClip.id, ox, oy)
+                            }
+                        )
+                    }
+                } else {
+                    Modifier
+                }
+
                 AsyncImage(
                     model = currentMainClip.mediaUri,
                     contentDescription = null,
@@ -157,8 +187,18 @@ fun PreviewPlayer(
                             scaleX = zoomScale
                             scaleY = zoomScale
                             alpha = alphaVal
-                            rotationZ = (currentMainClip.rotationDegrees + currentMainClip.transform.rotationDegrees).toFloat()
-                        },
+                            translationX = (mainTransform.offsetX / 2f) * w
+                            translationY = (mainTransform.offsetY / 2f) * h
+                            rotationZ = (currentMainClip.rotationDegrees + mainTransform.rotationDegrees).toFloat()
+                        }
+                        .then(mainDragModifier)
+                        .then(
+                            if (isMainSelected) {
+                                Modifier.border(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.8f))
+                            } else {
+                                Modifier
+                            }
+                        ),
                 )
             } else if (currentMainClip == null) {
                 Box(
@@ -190,6 +230,7 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
+            // Dynamic Scorecard Layer
             val activeScoreClip = allClips.firstOrNull { 
                 it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs 
             }
