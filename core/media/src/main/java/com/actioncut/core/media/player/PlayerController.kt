@@ -54,7 +54,6 @@ class PlayerController @Inject constructor(
     var totalVideoMs: Long = 0L
     var totalAudioMs: Long = 0L
 
-    // HTML Video Editor மாஸ்டர் டைம்லைன் கடிகாரம்
     private var masterPlayheadMs: Long = 0L
     private var isTimelinePlaying: Boolean = false
     private var clockJob: Job? = null
@@ -77,14 +76,9 @@ class PlayerController @Inject constructor(
         player.addListener(listener)
     }
 
-    /**
-     * டைம்லைன் அப்டேட் செய்யப்படும் போது 0.00-க்கு போகாமல்,
-     * தற்போது வேலை செய்யும் இடத்திலேயே playhead-ஐ தக்கவைக்கும் [preservePositionMs]
-     */
     fun setTimeline(timeline: Timeline, preservePositionMs: Long? = null) {
         val targetPos = preservePositionMs ?: masterPlayheadMs
 
-        // பழைய ஆடியோ பிளேயர்களை விடுவித்தல்
         audioTrackStates.forEach { it.player.release() }
         audioTrackStates.clear()
 
@@ -137,8 +131,6 @@ class PlayerController @Inject constructor(
         pipPlayer.prepare()
 
         totalTimelineMs = maxOf(totalVideoMs, totalAudioMs, timeline.durationMs)
-        
-        // 0.00-க்கு போகாமல் தேர்ந்தெடுக்கப்பட்ட அல்லது தற்போதைய இடத்திலேயே நிற்க வைக்கும் முறை
         masterPlayheadMs = targetPos.coerceIn(0L, totalTimelineMs)
 
         syncVideoState(forceSeek = true)
@@ -285,11 +277,8 @@ class PlayerController @Inject constructor(
                 player.play()
             }
         } else {
-            if (player.mediaItemCount > 0) {
-                val lastIdx = player.mediaItemCount - 1
-                val lastStart = videoStartsMs.getOrElse(lastIdx) { 0L }
-                val lastItemDur = (totalVideoMs - lastStart).coerceAtLeast(1L)
-                player.seekTo(lastIdx, (lastItemDur - 5L).coerceAtLeast(0L))
+            // படங்கள் முடிந்த பிறகு பழைய கடைசி பிரேமில் தங்காமல் பிளேயரை பாஸ் செய்தல்
+            if (player.isPlaying) {
                 player.pause()
             }
         }
