@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -42,6 +43,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
@@ -86,7 +88,7 @@ fun PreviewPlayer(
             .background(Color.Black),
         contentAlignment = Alignment.Center,
     ) {
-        // 1. கண்டிப்பாக 16:9 பிரேமிற்குள் மட்டுமே அடங்கும் விண்டோ (clipToBounds)
+        // கண்டிப்பான 16:9 பிரேமிற்குள் மட்டுமே அடங்கும் விண்டோ
         BoxWithConstraints(
             modifier = Modifier
                 .aspectRatio(aspectRatio.value)
@@ -97,10 +99,14 @@ fun PreviewPlayer(
             val w = constraints.maxWidth.toFloat()
             val h = constraints.maxHeight.toFloat()
 
-            // 2. பின்னணியில் அதே படத்தின் மங்கலான Blur Effect + 35% Dark Scrim
+            // 1. பின்னணியில் அதே படத்தின் 100% மங்கலான Blur Effect
             if (currentMainClip != null && currentMainClip.mediaUri != null) {
                 AsyncImage(
-                    model = currentMainClip.mediaUri,
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(currentMainClip.mediaUri)
+                        .size(64, 36) // 64x36-க்கு சுருக்கி விரிப்பதன் மூலம் அதிவேக இயற்கை Blur உருவாதல்
+                        .crossfade(true)
+                        .build(),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -109,12 +115,11 @@ fun PreviewPlayer(
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                                 Modifier.graphicsLayer {
                                     renderEffect = android.graphics.RenderEffect.createBlurEffect(
-                                        55f, 55f, android.graphics.Shader.TileMode.CLAMP
+                                        45f, 45f, android.graphics.Shader.TileMode.CLAMP
                                     ).asComposeRenderEffect()
-                                    alpha = 0.65f
                                 }
                             } else {
-                                Modifier.graphicsLayer { alpha = 0.45f }
+                                Modifier
                             }
                         ),
                 )
@@ -150,7 +155,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // 3. Main Track Image: இரண்டு விரல் Pinch Zoom (0.5x - 3.5x) + Drag to Move + Group 5 Zoom In-Out
+            // 2. Main Track Image: இரண்டு விரல் Pinch Zoom + Drag to Move + Group 5 Zoom In-Out
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
@@ -179,7 +184,6 @@ fun PreviewPlayer(
                 val isMainSelected = currentMainClip.id == selectedClipId
                 val mainTransform = currentMainClip.transform
 
-                // இரண்டு விரலால் Pinch Zoom மற்றும் Drag செய்து நகர்த்தும் Gesture
                 val transformGestureModifier = Modifier.pointerInput(currentMainClip.id, w, h) {
                     var currentScale = mainTransform.scale
                     var currentOx = mainTransform.offsetX
@@ -236,7 +240,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // Overlays Layer: 16:9 பிரேமிற்குள் முழு உயரத்தில் இயங்கும் News Alert
+            // 3. Overlays Layer: News Alert பேனர் முழு உயரத்தில் இயங்குதல்
             OverlayLayer(
                 overlays = overlays,
                 playheadMs = playheadMs,
@@ -443,7 +447,6 @@ private fun OverlayLayer(
                                     .fillMaxSize()
                                     .align(Alignment.Center),
                             )
-                            // இடதுபுறம் 48% தொடுதல் பரப்பு (Player Pinch & Drag-க்கு தடையின்றி இயங்கும்)
                             Box(
                                 modifier = Modifier
                                     .fillMaxHeight()
