@@ -1,8 +1,8 @@
 package com.actioncut.feature.editor.ui
 
 /**
- * Editing tools shown in the bottom toolbar. Some are instant actions (split, delete,
- * reverse, rotate); others open a parameter [opensPanel] panel (speed, volume, filters…).
+ * Editing tools shown in the bottom toolbar.
+ * Music பட்டன் Fty Video Editor போலவே "NEWS ALERT" ஆக மாற்றப்பட்டுள்ளது.
  */
 enum class EditorTool(val label: String, val opensPanel: Boolean) {
     SPLIT("Split", false),
@@ -12,7 +12,7 @@ enum class EditorTool(val label: String, val opensPanel: Boolean) {
     VOLUME("Volume", true),
     MUTE("Mute", false),
     AUDIO("Audio", false),
-    MUSIC("Music", true),
+    NEWS_ALERT("NEWS ALERT", false), // Fty Video Editor NEWS ALERT Button
     VOICEOVER("Voiceover", true),
     PIP("PiP", false),
     CRIC("CRIC", false),
