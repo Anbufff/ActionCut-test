@@ -178,9 +178,6 @@ fun ToolPanel(
     }
 }
 
-/**
- * ஸ்கிரீன்ஷாட்டில் உள்ளபடியே துல்லியமாக வடிவமைக்கப்பட்ட Transitions பாட்டம் ஷீட்
- */
 @Composable
 private fun TransitionPanel(
     current: Transition?,
@@ -197,7 +194,6 @@ private fun TransitionPanel(
             .fillMaxWidth()
             .padding(vertical = 4.dp),
     ) {
-        // தலைப்பு மற்றும் Close பட்டன்
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -213,7 +209,6 @@ private fun TransitionPanel(
             }
         }
 
-        // Category Filter Chips (All, Slide, Move, Wipe, Mix)
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 6.dp),
@@ -243,7 +238,6 @@ private fun TransitionPanel(
             }
         }
 
-        // தமிழ் வழிகாட்டுதல் உரை
         Text(
             text = "மேலே ஒரு Group-ஐ தேர்ந்தெடுத்து \"Random All\" அழுத்தினால், அந்த Group-ல் உள்ள effects மட்டும் Random ஆக Timeline முழுவதும் Apply ஆகும்.",
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp, lineHeight = 16.sp),
@@ -251,50 +245,46 @@ private fun TransitionPanel(
             modifier = Modifier.padding(vertical = 6.dp),
         )
 
-        // SEAMLESS MERGE கார்டு (படத்தில் உள்ளபடி)
-        if (selectedCategory == TransitionCategory.ALL || selectedCategory == TransitionCategory.SEAMLESS) {
-            Text(
-                text = "SEAMLESS",
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                color = Color(0xFF9E9E9E),
-                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
-            )
-            val isSeamlessSelected = selectedType == TransitionType.SEAMLESS_MERGE
-            Box(
-                modifier = Modifier
-                    .size(width = 86.dp, height = 72.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFF161616))
-                    .border(
-                        width = 2.dp,
-                        color = if (isSeamlessSelected) Color(0xFF00E5FF) else Color(0xFF333333),
-                        shape = RoundedCornerShape(12.dp),
-                    )
-                    .clickable { selectedType = TransitionType.SEAMLESS_MERGE },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Link,
-                    contentDescription = "Seamless",
-                    tint = Color(0xFF00E5FF),
-                    modifier = Modifier.size(32.dp),
+        Text(
+            text = "SEAMLESS",
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = Color(0xFF9E9E9E),
+            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+        )
+        val isSeamlessSelected = selectedType == TransitionType.SEAMLESS_MERGE
+        Box(
+            modifier = Modifier
+                .size(width = 86.dp, height = 72.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0xFF161616))
+                .border(
+                    width = 2.dp,
+                    color = if (isSeamlessSelected) Color(0xFF00E5FF) else Color(0xFF333333),
+                    shape = RoundedCornerShape(12.dp),
                 )
-            }
-            Text(
-                text = "Seamless Merge",
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                color = Color.White,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            Text(
-                text = "இரண்டு Image/Video Clips-ம் எந்த Visual Effect-மும் இல்லாமல், ஒரே Image போல் 100% Invisible ஆக இணையும் (Play & Export இரண்டிலும்).",
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 15.sp),
-                color = Color(0xFF888888),
-                modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
+                .clickable { selectedType = TransitionType.SEAMLESS_MERGE },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Link,
+                contentDescription = "Seamless",
+                tint = Color(0xFF00E5FF),
+                modifier = Modifier.size(32.dp),
             )
         }
+        Text(
+            text = "Seamless Merge",
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+            color = Color.White,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        Text(
+            text = "இரண்டு Image/Video Clips-ம் எந்த Visual Effect-மும் இல்லாமல், ஒரே Image போல் 100% Invisible ஆக இணையும் (Play & Export இரண்டிலும்).",
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 15.sp),
+            color = Color(0xFF888888),
+            modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
+        )
 
-        // இதர எஃபெக்ட்களின் பட்டியல்
         val otherTypes = TransitionType.entries.filter {
             it != TransitionType.NONE && it != TransitionType.SEAMLESS_MERGE &&
                 (selectedCategory == TransitionCategory.ALL || it.category == selectedCategory)
@@ -342,25 +332,25 @@ private fun TransitionPanel(
 
         Spacer(Modifier.height(8.dp))
 
-        // கீழே உள்ள 3 முக்கிய பட்டன்கள்: Random All, Apply All, Apply
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 🎲 Random All
             OutlinedButton(
-                onClick = { onRandomAll(selectedCategory); onClose() },
+                onClick = {
+                    onRandomAll(selectedCategory)
+                    onClose()
+                },
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.outlinedButtonColors(containerColor = Color(0xFF222222)),
             ) {
                 Icon(Icons.Filled.Casino, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.size(4.dp))
-                Text("Random All", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("Random All", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
             }
 
-            // ✔ Apply All
             OutlinedButton(
                 onClick = {
                     onApplyAll(Transition(selectedType, if (selectedType == TransitionType.SEAMLESS_MERGE) 0L else 500L))
@@ -372,10 +362,9 @@ private fun TransitionPanel(
             ) {
                 Icon(Icons.Filled.DoneAll, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.size(4.dp))
-                Text("Apply All", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("Apply All", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
             }
 
-            // ✔ Apply
             Button(
                 onClick = {
                     onTransition(Transition(selectedType, if (selectedType == TransitionType.SEAMLESS_MERGE) 0L else 500L))
@@ -387,7 +376,7 @@ private fun TransitionPanel(
             ) {
                 Icon(Icons.Filled.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.size(4.dp))
-                Text("Apply", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("Apply", color = Color.Black, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
