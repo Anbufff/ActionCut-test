@@ -373,17 +373,65 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    /** CLIP END: மெயின் வீடியோ கிளிப் முடியும் வரை PiP-ஐ நீட்டிக்கும் செயல்பாடு */
+    fun setPipToClipEnd() = withSelected { id ->
+        val clip = currentClip(id) ?: return@withSelected
+        val videoTrack = _uiState.value.timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
+        val mainClip = videoTrack?.clipAt(clip.timelineStartMs)
+            ?: videoTrack?.clips?.firstOrNull { it.timelineEndMs > clip.timelineStartMs }
+        val targetEndMs = mainClip?.timelineEndMs ?: _uiState.value.timeline.durationMs
+        if (targetEndMs > clip.timelineStartMs) {
+            mutate(structural = false) { timeline ->
+                TimelineEditor.updateClip(timeline, id) { c ->
+                    c.copy(timelineEndMs = targetEndMs)
+                }
+            }
+        }
+    }
+
+    /** VID END: முழு வீடியோ முடியும் இறுதி வரை PiP-ஐ நீட்டிக்கும் செயல்பாடு */
+    fun setPipToVideoEnd() = withSelected { id ->
+        val clip = currentClip(id) ?: return@withSelected
+        val totalMs = _uiState.value.timeline.durationMs
+        if (totalMs > clip.timelineStartMs) {
+            mutate(structural = false) { timeline ->
+                TimelineEditor.updateClip(timeline, id) { c ->
+                    c.copy(timelineEndMs = totalMs)
+                }
+            }
+        }
+    }
+
+    /** FLIP: PiP-ஐ இடமிருந்து வலமாக மிரர் (Horizontal Flip) செய்யும் செயல்பாடு */
+    fun flipSelectedPip() = withSelected { id ->
+        val clip = currentClip(id) ?: return@withSelected
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, id) { c ->
+                val curId = c.filter?.id.orEmpty()
+                val newId = when {
+                    curId.contains("flip") && curId.contains("cutout") -> "ai_cutout"
+                    curId.contains("flip") -> ""
+                    curId.contains("cutout") -> "ai_cutout_flip"
+                    else -> "flip"
+                }
+                c.copy(filter = if (newId.isEmpty()) null else Filter(newId, "Filter", FilterCategory.NONE))
+            }
+        }
+    }
+
     /** Fty HTML MediaPipe பாணியில் Google AI Human Cutout இயக்குதல்/நிறுத்துதல் */
     fun togglePipCutout() = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, id) { c ->
-                val isCutout = c.filter?.id == "ai_cutout"
-                if (isCutout) {
-                    c.copy(filter = null)
-                } else {
-                    c.copy(filter = Filter("ai_cutout", "AI Cutout", FilterCategory.NONE))
+                val curId = c.filter?.id.orEmpty()
+                val newId = when {
+                    curId.contains("cutout") && curId.contains("flip") -> "flip"
+                    curId.contains("cutout") -> ""
+                    curId.contains("flip") -> "ai_cutout_flip"
+                    else -> "ai_cutout"
                 }
+                c.copy(filter = if (newId.isEmpty()) null else Filter(newId, "AI Cutout", FilterCategory.NONE))
             }
         }
     }
