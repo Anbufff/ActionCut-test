@@ -31,9 +31,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -53,9 +56,8 @@ import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.TransitionType
+import com.actioncut.core.model.VisualEffectType
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
-import kotlin.math.PI
-import kotlin.math.sin
 
 @Composable
 fun PreviewPlayer(
@@ -158,7 +160,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // 2. Main Track Image
+            // 2. Main Track Image (Ken Burns Auto-Zoom)
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
@@ -230,7 +232,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // 3. Fty-style PiP Layer (வீடியோ & போட்டோ இரண்டிற்கும் சியான் டாஷ்ட் பார்டர் & கைப்பிடிகள்)
+            // 3. Fty-style PiP Layer (வீடியோ மற்றும் போட்டோ இரண்டையுமே இயக்கும்படி இணைக்கப்பட்டது)
             if (pipPlayer != null) {
                 PipLayer(
                     pipPlayer = pipPlayer,
@@ -255,8 +257,8 @@ fun PreviewPlayer(
             )
 
             // Dynamic Scorecard Layer
-            val activeScoreClip = allClips.firstOrNull { 
-                it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs 
+            val activeScoreClip = allClips.firstOrNull {
+                it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
             }
 
             if (activeScoreClip != null) {
@@ -317,7 +319,7 @@ fun PreviewPlayer(
 }
 
 /**
- * Fty Video Editor ஸ்கிரீன்ஷாட்டில் உள்ளபடியே PiP பாக்ஸ், சியான் டாஷ்ட் பார்டர் மற்றும் கைப்பிடிகள்
+ * Fty Video Editor ஸ்கிரீன்ஷாட்டில் உள்ளபடியே PiP பாக்ஸ், சியான் டாஷ்ட் பார்டர், Cutout மற்றும் Free Crop
  */
 @Composable
 private fun PipLayer(
@@ -343,8 +345,11 @@ private fun PipLayer(
         val pipW = (w * t.scale) / density
         val pipH = (h * t.scale) / density
         val isSelected = active.id == selectedClipId
-
         val cyanColor = Color(0xFF00E5FF)
+
+        // Fty Cutout Circle Shape கண்டறிதல்
+        val isCircleCutout = active.effects.any { it.type == VisualEffectType.CIRCLE_MASK }
+        val cutoutShape = if (isCircleCutout) CircleShape else RectangleShape
 
         Box(
             modifier = Modifier
@@ -359,19 +364,22 @@ private fun PipLayer(
                 .then(
                     if (isSelected) {
                         Modifier.drawBehind {
-                            // Fty பாணி சியான் நிற டாஷ்ட் பார்டர் (Cyan Dashed Border)
                             val stroke = Stroke(
                                 width = 2.5f * density,
                                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
                             )
-                            drawRoundRect(
-                                color = cyanColor,
-                                cornerRadius = CornerRadius(4f * density),
-                                style = stroke
-                            )
+                            if (isCircleCutout) {
+                                drawCircle(color = cyanColor, style = stroke)
+                            } else {
+                                drawRoundRect(
+                                    color = cyanColor,
+                                    cornerRadius = CornerRadius(4f * density),
+                                    style = stroke
+                                )
+                            }
                         }
                     } else {
-                        Modifier.border(1.dp, Color.White.copy(alpha = 0.4f))
+                        Modifier.border(1.dp, Color.White.copy(alpha = 0.4f), cutoutShape)
                     }
                 )
                 .pointerInput(active.id, w, h) {
@@ -388,38 +396,59 @@ private fun PipLayer(
                     )
                 },
         ) {
-            // வீடியோ PiP அல்லது போட்டோ PiP இரண்டையும் ரெண்டர் செய்தல்
-            if (active.type == ClipType.VIDEO) {
-                AndroidView(
-                    factory = { context ->
-                        PlayerView(context).apply {
-                            useController = false
-                            this.player = pipPlayer
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                            setBackgroundColor(android.graphics.Color.BLACK)
+            // Free Crop & Cutout Shape Clamping
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .drawWithContent {
+                        val crop = active.crop
+                        if (crop != null && !crop.isFull) {
+                            val clipRect = Rect(
+                                left = size.width * crop.left,
+                                top = size.height * crop.top,
+                                right = size.width * crop.right,
+                                bottom = size.height * crop.bottom
+                            )
+                            drawContext.canvas.save()
+                            drawContext.canvas.clipRect(clipRect)
+                            drawContent()
+                            drawContext.canvas.restore()
+                        } else {
+                            drawContent()
                         }
-                    },
-                    update = { it.player = pipPlayer },
-                    modifier = Modifier.fillMaxSize().clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
-                )
-            } else {
-                AsyncImage(
-                    model = active.mediaUri,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize().clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp)),
-                )
+                    }
+                    .clip(cutoutShape)
+            ) {
+                if (active.type == ClipType.VIDEO) {
+                    AndroidView(
+                        factory = { context ->
+                            PlayerView(context).apply {
+                                useController = false
+                                this.player = pipPlayer
+                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                setBackgroundColor(android.graphics.Color.BLACK)
+                            }
+                        },
+                        update = { it.player = pipPlayer },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    AsyncImage(
+                        model = active.mediaUri,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
 
-            // Fty ஸ்கிரீன்ஷாட்டில் உள்ளபடியே தேர்வு செய்யப்பட்டால் தோன்றும் கைப்பிடிகள்
+            // Fty ஸ்கிரீன்ஷாட்டில் உள்ளபடியே தேர்வு செய்யப்பட்டால் தோன்றும் 4 பக்க வட்டங்கள் & ஸ்கேலிங் கைப்பிடி
             if (isSelected) {
-                // 4 பக்கங்களிலும் சியான் நிற வட்டக் கைப்பிடிகள்
                 Box(modifier = Modifier.align(Alignment.TopCenter).size(12.dp).clip(CircleShape).background(cyanColor))
                 Box(modifier = Modifier.align(Alignment.BottomCenter).size(12.dp).clip(CircleShape).background(cyanColor))
                 Box(modifier = Modifier.align(Alignment.CenterStart).size(12.dp).clip(CircleShape).background(cyanColor))
                 Box(modifier = Modifier.align(Alignment.CenterEnd).size(12.dp).clip(CircleShape).background(cyanColor))
 
-                // Fty வலது கீழ் மூலையில் உள்ள பெரிய வெள்ளை நிற ஸ்கேலிங் கைப்பிடி (Scale Handle)
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -434,7 +463,7 @@ private fun PipLayer(
                                 onDragStart = { onSelect(active.id); s = active.transform.scale },
                                 onDrag = { change, drag ->
                                     change.consume()
-                                    s = (s + drag.x / w).coerceIn(0.15f, 1.5f)
+                                    s = (s + drag.x / w).coerceIn(0.15f, 1.8f)
                                     onScale(active.id, s)
                                 },
                             )
