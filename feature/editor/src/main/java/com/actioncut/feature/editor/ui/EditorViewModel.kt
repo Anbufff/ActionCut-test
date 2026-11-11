@@ -87,7 +87,6 @@ class EditorViewModel @Inject constructor(
                 return@launch
             }
 
-            // அனைத்து படங்களுக்கும் 1.0x -> 1.10x -> 1.0x Keyframe மற்றும் Seamless Merge அமைத்தல்
             val initialTimeline = project.timeline.copy(
                 tracks = project.timeline.tracks.map { track ->
                     if (track.type == TrackType.VIDEO) {
@@ -433,6 +432,20 @@ class EditorViewModel @Inject constructor(
         val clamped = newEndMs.coerceAtLeast(0)
         mutate(structural = false) { TimelineEditor.trimClipEnd(it, clipId, clamped) }
         _uiState.update { it.copy(playheadMs = clamped) }
+    }
+
+    /**
+     * Trim R: Playhead நிற்கும் இடம் வரை படத்தின் வலதுபுறத்தை வெட்டி நீக்கும் ஃபங்ஷன் (Fty Video Editor)
+     */
+    fun trimRightAtPlayhead() {
+        val state = _uiState.value
+        val clipId = state.selectedClipId ?: return
+        val clip = currentClip(clipId) ?: return
+        val playhead = state.playheadMs
+        if (playhead > clip.timelineStartMs && playhead < clip.timelineEndMs) {
+            trimEnd(clipId, playhead)
+            commitTrim()
+        }
     }
 
     fun commitTrim() {
