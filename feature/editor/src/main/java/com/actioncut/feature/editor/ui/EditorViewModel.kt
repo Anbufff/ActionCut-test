@@ -33,6 +33,8 @@ import com.actioncut.core.model.Timeline
 import com.actioncut.core.model.TrackType
 import com.actioncut.core.model.Transform
 import com.actioncut.core.model.Transition
+import com.actioncut.core.model.TransitionCategory
+import com.actioncut.core.model.TransitionType
 import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.VisualEffectType
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
@@ -119,7 +121,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Playback
     fun togglePlayPause() = playerController.togglePlayPause()
 
     fun seekTo(positionMs: Long) {
@@ -128,7 +129,6 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(playheadMs = clamped) }
     }
 
-    // ------------------------------------------------------------------ Selection / Tools
     fun selectClip(clipId: String?) {
         _uiState.update { state ->
             val clip = clipId?.let { id -> state.timeline.allClips.firstOrNull { it.id == id } }
@@ -182,7 +182,6 @@ class EditorViewModel @Inject constructor(
         )
     }
 
-    // ------------------------------------------------------------------ Add More Media (+)
     private suspend fun resolveAnyMedia(uriStr: String): MediaItem? {
         val parsedUri = Uri.parse(uriStr)
         val mimeType = runCatching { context.contentResolver.getType(parsedUri) }.getOrNull()
@@ -275,7 +274,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Dynamic Scorecard
     fun addScorecardClip(data: ScorecardClipData) {
         val durationMs = 120_000L
         val cardFile = java.io.File(context.cacheDir, "card_${data.id}.png")
@@ -369,7 +367,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Structural Edits
     fun splitAtPlayhead() {
         val state = _uiState.value
         val clipId = state.selectedClipId ?: clipAtPlayhead()?.id ?: return
@@ -411,18 +408,15 @@ class EditorViewModel @Inject constructor(
         playerController.seekTo(currentPos)
     }
 
-    // படத்தை நகர்த்தும் போதும் (Drag) Playhead அந்த படத்துடனேயே நகரும்
     fun moveClip(clipId: String, newStartMs: Long) {
         val track = TimelineEditor.findClip(_uiState.value.timeline, clipId)?.first ?: return
         val clampedStart = newStartMs.coerceAtLeast(0)
         mutate(structural = false) {
             TimelineEditor.moveClip(it, clipId, track.id, clampedStart)
         }
-        // Vertical timeline line நீங்கள் வேலை செய்யும் image-இன் தொடக்கப் புள்ளியிலேயே நிற்கும்
         _uiState.update { it.copy(playheadMs = clampedStart) }
     }
 
-    // Drag செய்து முடித்த பிறகும் Playhead 0-க்கு மாறாமல் அதே படத்தில் நிற்கும்
     fun commitArrangement() {
         val currentPos = _uiState.value.playheadMs
         playerController.setTimeline(_uiState.value.timeline, preservePositionMs = currentPos)
@@ -530,7 +524,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Canvas / Crop
     fun setFitMode(mode: FitMode) = updateCanvas { it.copy(fitMode = mode) }
 
     fun setBackgroundColor(argb: Int) = updateCanvas { it.copy(backgroundColorArgb = argb) }
@@ -548,7 +541,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Keyframes (Transform)
     fun addKeyframeAtPlayhead() = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
         val timeInClip = (_uiState.value.playheadMs - clip.timelineStartMs).coerceAtLeast(0L)
@@ -605,7 +597,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Property Edits
     fun setVolume(volume: Float) = withSelected { id ->
         mutate(structural = false) { TimelineEditor.setVolume(it, id, volume) }
     }
@@ -627,8 +618,24 @@ class EditorViewModel @Inject constructor(
         mutate(structural = false) { TimelineEditor.updateClip(it, id) { clip -> clip.copy(text = text) } }
     }
 
+    // ------------------------------------------------------------------ Transitions
     fun setTransition(transition: Transition?) = withSelected { id ->
         mutate(structural = false) { TimelineEditor.setTransition(it, id, transition) }
+    }
+
+    /** தேர்ந்தெடுக்கப்பட்ட ட்ரான்சிஷனை டைம்லைனில் உள்ள அனைத்து படங்களுக்கும் அப்ளை செய்தல் */
+    fun applyTransitionToAll(transition: Transition) {
+        mutate(structural = false) { TimelineEditor.applyTransitionToAll(it, transition) }
+    }
+
+    /** குறிப்பிட்ட Group-ல் உள்ள effects-ஐ Random-ஆக டைம்லைன் முழுவதும் அமைத்தல் */
+    fun applyRandomTransitions(category: TransitionCategory) {
+        val candidates = if (category == TransitionCategory.ALL) {
+            TransitionType.entries.filter { it != TransitionType.NONE }
+        } else {
+            TransitionType.entries.filter { it.category == category }
+        }
+        mutate(structural = false) { TimelineEditor.applyRandomTransitions(it, candidates) }
     }
 
     fun addEffect(effect: VisualEffect) = withSelected { id ->
@@ -647,7 +654,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Undo / Redo
     fun undo() {
         if (undoStack.isEmpty()) return
         redoStack.addLast(_uiState.value.timeline)
@@ -662,7 +668,6 @@ class EditorViewModel @Inject constructor(
         applyTimeline(next, structural = true)
     }
 
-    // ------------------------------------------------------------------ Internals
     private inline fun withSelected(action: (String) -> Unit) {
         _uiState.value.selectedClipId?.let(action)
     }
