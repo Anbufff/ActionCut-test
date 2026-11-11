@@ -192,7 +192,7 @@ fun EditorScreen(
             onSelectClip = viewModel::selectClip,
             onTrimStart = viewModel::trimStart,
             onTrimEnd = viewModel::trimEnd,
-            onTrimCommit = viewModel::commitTrim, // விரலை எடுக்கும்போது பிளேயரை அப்டேட் செய்யும் மென்மையான முறை
+            onTrimCommit = viewModel::commitTrim,
             onMoveClip = viewModel::moveClip,
             onMoveCommit = viewModel::commitArrangement,
             onLoadWaveform = viewModel::loadWaveform,
@@ -228,6 +228,8 @@ fun EditorScreen(
                     onStopVoiceover = viewModel::stopVoiceover,
                     onAddKeyframe = viewModel::addKeyframeAtPlayhead,
                     onClearKeyframes = viewModel::clearKeyframes,
+                    onApplyTransitionToAll = viewModel::applyTransitionToAll,
+                    onApplyRandomTransitions = viewModel::applyRandomTransitions,
                 )
             } else {
                 Column(modifier = Modifier.fillMaxWidth()) {
