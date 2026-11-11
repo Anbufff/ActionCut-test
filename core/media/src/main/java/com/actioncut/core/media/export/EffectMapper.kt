@@ -65,9 +65,10 @@ object EffectMapper {
         }
         clip.crop?.takeUnless { it.isFull }?.let { effects += cropEffect(it) }
 
-        // Media3 MatrixTransformation API-க்கு ஏற்றவாறு android.graphics.Matrix ரிட்டர்ன் செய்யும் பிழை திருத்தப்பட்ட வடிவம்
-        if (clip.transform.offsetX != 0f || clip.transform.offsetY != 0f) {
+        // Pinch Zoom & Position Offset எக்ஸ்போர்ட் வீடியோவிலும் துல்லியமாக அமைதல்
+        if (clip.transform.offsetX != 0f || clip.transform.offsetY != 0f || clip.transform.scale != 1f) {
             val transMatrix = Matrix().apply {
+                postScale(clip.transform.scale, clip.transform.scale)
                 postTranslate(clip.transform.offsetX, -clip.transform.offsetY)
             }
             effects += MatrixTransformation { _ -> transMatrix }
@@ -139,9 +140,15 @@ object EffectMapper {
         }
         val active = overlapping.filter { !it.text?.text.isNullOrEmpty() }
         val images = overlapping.filter { it.mediaUri != null && it.text?.text.isNullOrEmpty() }
-        if (active.isEmpty() && images.isEmpty()) return null
 
-        val textOverlays: List<TextureOverlay> = active.map { ov ->
+        val textureOverlays = mutableListOf<TextureOverlay>()
+
+        // எக்ஸ்போர்ட் வீடியோவில் படத்தின் பின்னணியில் Blur Effect அமைத்தல்
+        if (clip.type == ClipType.IMAGE && clip.mediaUri != null) {
+            createBlurredBackgroundOverlay(clip, targetWidth)?.let { textureOverlays += it }
+        }
+
+        active.forEach { ov ->
             val props = ov.text!!
             val span = SpannableString(props.text)
             val sizePx = (props.fontSizeSp * ov.transform.scale * 2.5f).toInt().coerceAtLeast(24)
@@ -154,12 +161,36 @@ object EffectMapper {
                 )
                 .setRotationDegrees(ov.transform.rotationDegrees)
                 .build()
-            TextOverlay.createStaticTextOverlay(span, settings)
+            textureOverlays += TextOverlay.createStaticTextOverlay(span, settings)
         }
-        val imageOverlays: List<TextureOverlay> = images.mapNotNull { imageOverlay(it, clip, targetWidth) }
-        val textureOverlays = textOverlays + imageOverlays
+
+        images.forEach { ov ->
+            imageOverlay(ov, clip, targetWidth)?.let { textureOverlays += it }
+        }
+
         if (textureOverlays.isEmpty()) return null
         return OverlayEffect(ImmutableList.copyOf(textureOverlays))
+    }
+
+    /**
+     * எக்ஸ்போர்ட் வீடியோவில் கறுப்புப் பட்டைக்கு பதிலாக அதே படத்தின் மங்கலான Blur Background-ஐ உருவாக்கும் முறை
+     */
+    private fun createBlurredBackgroundOverlay(clip: Clip, targetWidth: Int): TextureOverlay? {
+        val path = clip.mediaUri?.let { Uri.parse(it).path } ?: return null
+        val src = BitmapFactory.decodeFile(path) ?: return null
+        val targetHeight = (targetWidth * 9) / 16
+        // 160x90-க்கு சுருக்கி 1920x1080-க்கு விரிப்பதன் மூலம் அதிவேகமான மென்மையான Blur Background உருவாதல்
+        val small = Bitmap.createScaledBitmap(src, 160, 90, true)
+        val blurred = Bitmap.createScaledBitmap(small, targetWidth, targetHeight, true)
+        small.recycle()
+        src.recycle()
+
+        val canvas = android.graphics.Canvas(blurred)
+        canvas.drawColor(android.graphics.Color.argb(85, 0, 0, 0)) // 35% Dark Scrim
+
+        val visible = OverlaySettings.Builder().build()
+        val hidden = OverlaySettings.Builder().setAlphaScale(0f).build()
+        return TimedBitmapOverlay(blurred, visible, hidden, 0L, clip.timelineDurationMs * 1_000L)
     }
 
     private fun imageOverlay(ov: Clip, clip: Clip, targetWidth: Int): TextureOverlay? {
