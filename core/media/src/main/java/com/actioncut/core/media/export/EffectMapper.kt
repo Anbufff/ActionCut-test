@@ -2,6 +2,7 @@ package com.actioncut.core.media.export
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.net.Uri
 import android.text.SpannableString
 import android.text.Spanned
@@ -64,16 +65,12 @@ object EffectMapper {
         }
         clip.crop?.takeUnless { it.isFull }?.let { effects += cropEffect(it) }
 
-        // Preview-ல் வீரரை நகர்த்தி வைத்த அதே Position-ல் வீடியோ Export ஆக MatrixTransformation சேர்த்தல்
+        // Media3 MatrixTransformation API-க்கு ஏற்றவாறு android.graphics.Matrix ரிட்டர்ன் செய்யும் பிழை திருத்தப்பட்ட வடிவம்
         if (clip.transform.offsetX != 0f || clip.transform.offsetY != 0f) {
-            effects += MatrixTransformation { _, transformationMatrix ->
-                android.opengl.Matrix.translateM(
-                    transformationMatrix, 0,
-                    clip.transform.offsetX,
-                    -clip.transform.offsetY,
-                    0f,
-                )
+            val transMatrix = Matrix().apply {
+                postTranslate(clip.transform.offsetX, -clip.transform.offsetY)
             }
+            effects += MatrixTransformation { _ -> transMatrix }
         }
 
         val adj = clip.adjustments
