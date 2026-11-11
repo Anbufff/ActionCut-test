@@ -3,22 +3,22 @@ package com.actioncut.core.domain.editor
 import com.actioncut.core.common.id.Ids
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
+import com.actioncut.core.model.Keyframe
 import com.actioncut.core.model.MediaItem
 import com.actioncut.core.model.MediaType
 import com.actioncut.core.model.TextAlignment
 import com.actioncut.core.model.TextProperties
 import com.actioncut.core.model.Transform
+import com.actioncut.core.model.Transition
+import com.actioncut.core.model.TransitionType
+import com.actioncut.core.model.VisualEffect
+import com.actioncut.core.model.VisualEffectType
 
 /** Builds [Clip]s from raw media / user actions with sensible defaults. */
 object ClipFactory {
 
-    /** How long a still image occupies the timeline by default (stickers / emoji stickers). */
     const val DEFAULT_IMAGE_DURATION_MS = 3_000L
-
-    /** How long a picture added to the main track occupies the timeline by default (8 s, as in the web editor). */
     const val DEFAULT_PICTURE_DURATION_MS = 8_000L
-
-    /** Default duration for a freshly added text clip. */
     const val DEFAULT_TEXT_DURATION_MS = 2_000L
 
     fun fromMedia(media: MediaItem, timelineStartMs: Long): Clip {
@@ -33,6 +33,32 @@ object ClipFactory {
         } else {
             media.durationMs.coerceAtLeast(TimelineEditor.MIN_CLIP_DURATION_MS)
         }
+
+        // Fty Editor போன்று அனைத்து படங்களுக்கும் Group 5 Zoom In-Out எஃபெக்ட் தானாக அப்ளை ஆதல்
+        val imageEffects = if (media.type == MediaType.IMAGE) {
+            listOf(VisualEffect(VisualEffectType.ZOOM_PULSE, intensity = 1.0f))
+        } else {
+            emptyList()
+        }
+
+        // நடுவில் பெரிதாகி மீண்டும் பழைய நிலைக்குச் சுருங்கும் Keyframe அனிமேஷன்
+        val imageKeyframes = if (media.type == MediaType.IMAGE) {
+            listOf(
+                Keyframe(timeMs = 0L, scale = 1.0f),
+                Keyframe(timeMs = duration / 2, scale = 1.25f),
+                Keyframe(timeMs = duration, scale = 1.0f),
+            )
+        } else {
+            emptyList()
+        }
+
+        // அனைத்துப் படங்களுக்கும் இடையே உள்ள default transition = Seamless Merge
+        val defaultTransition = if (media.type == MediaType.IMAGE) {
+            Transition(TransitionType.SEAMLESS_MERGE, 0L)
+        } else {
+            null
+        }
+
         return Clip(
             id = Ids.clip(),
             type = type,
@@ -41,6 +67,9 @@ object ClipFactory {
             timelineEndMs = timelineStartMs + duration,
             sourceInMs = 0L,
             sourceOutMs = if (hasSource) media.durationMs else 0L,
+            effects = imageEffects,
+            keyframes = imageKeyframes,
+            transitionToNext = defaultTransition,
         )
     }
 
@@ -61,7 +90,6 @@ object ClipFactory {
             timelineEndMs = timelineStartMs + durationMs,
         )
 
-    /** A rendered image (e.g. a cricket score card PNG) placed as an overlay sticker. */
     fun scoreCard(uri: String, timelineStartMs: Long, durationMs: Long, transform: Transform): Clip =
         Clip(
             id = Ids.clip(),
@@ -72,7 +100,6 @@ object ClipFactory {
             transform = transform,
         )
 
-    /** An emoji "sticker" overlay (rendered as a large glyph; no image asset needed). */
     fun emojiSticker(emoji: String, timelineStartMs: Long, durationMs: Long = DEFAULT_IMAGE_DURATION_MS): Clip =
         Clip(
             id = Ids.clip(),
