@@ -346,9 +346,10 @@ private fun PipLayer(
         val isSelected = active.id == selectedClipId
         val cyanColor = Color(0xFF00E5FF)
 
-        // Fty Cutout Shape: filter ID அல்லது Crop அடிப்படையில் Circle Cutout கண்டறிதல்
+        // சேஃப்-கால் மூலம் ஸ்மார்ட்-காஸ்ட் பிரச்சனை இன்றி Circle Cutout கண்டறிதல்
+        val activeCrop = active.crop
         val isCircleCutout = active.filter?.id == "cutout_circle" ||
-            (active.crop != null && active.crop.left == 0.12f && active.crop.top == 0.08f)
+            (activeCrop?.left == 0.12f && activeCrop?.top == 0.08f)
         val cutoutShape = if (isCircleCutout) CircleShape else RectangleShape
 
         Box(
@@ -401,13 +402,17 @@ private fun PipLayer(
                 modifier = Modifier
                     .fillMaxSize()
                     .drawWithContent {
-                        val crop = active.crop
+                        val crop = activeCrop
                         if (crop != null && !crop.isFull) {
+                            val cLeft = crop.left
+                            val cTop = crop.top
+                            val cRight = crop.right
+                            val cBottom = crop.bottom
                             val clipRect = Rect(
-                                left = size.width * crop.left,
-                                top = size.height * crop.top,
-                                right = size.width * crop.right,
-                                bottom = size.height * crop.bottom,
+                                left = size.width * cLeft,
+                                top = size.height * cTop,
+                                right = size.width * cRight,
+                                bottom = size.height * cBottom,
                             )
                             drawContext.canvas.save()
                             drawContext.canvas.clipRect(clipRect)
