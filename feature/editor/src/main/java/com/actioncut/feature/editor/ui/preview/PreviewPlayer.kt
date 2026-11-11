@@ -3,6 +3,7 @@ package com.actioncut.feature.editor.ui.preview
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -41,6 +42,8 @@ import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.TransitionType
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
+import kotlin.math.PI
+import kotlin.math.sin
 
 @Composable
 fun PreviewPlayer(
@@ -72,7 +75,6 @@ fun PreviewPlayer(
         .sortedBy { it.timelineStartMs }
     val currentMainClip = mainClips.firstOrNull { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
 
-    // தற்போதைய News Alert பேனர்
     val activeBanner = overlays.firstOrNull {
         it.type == ClipType.STICKER && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
     }
@@ -87,12 +89,11 @@ fun PreviewPlayer(
             modifier = Modifier
                 .aspectRatio(aspectRatio.value)
                 .background(Color(backgroundColorArgb))
-                // கேன்வாஸ் தொடுதலில்: இடதுபுறம் தொட்டால் News Alert, வலதுபுறம் தொட்டால் Main Image தேர்வு
                 .pointerInput(currentMainClip?.id, activeBanner?.id) {
                     detectTapGestures(
                         onDoubleTap = { onTogglePlay() },
                         onTap = { offset ->
-                            val touchFractionX = offset.x / size.width
+                            val touchFractionX = offset.x / size.width.toFloat()
                             if (touchFractionX <= 0.52f && activeBanner != null) {
                                 onSelectOverlay(activeBanner.id)
                             } else if (currentMainClip != null) {
@@ -121,7 +122,6 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // Zoom In - Out & Main Image
             if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                 val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                 val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
@@ -190,7 +190,6 @@ fun PreviewPlayer(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // Dynamic Scorecard Layer
             val activeScoreClip = allClips.firstOrNull { 
                 it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs 
             }
