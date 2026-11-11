@@ -125,19 +125,19 @@ fun EditorTimeline(
             Column {
                 TimeRuler(layoutDurationMs, pxPerSecond, contentWidthDp)
 
-                // News Alert தொடும் போது Audio டிராக் மறைந்து, News Alert டிராக் வரும் லாஜிக்
                 val videoTrack = timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
                 val audioTrack = timeline.tracks.firstOrNull { it.type == TrackType.AUDIO }
                 val overlayTrack = timeline.tracks.firstOrNull { it.type == TrackType.OVERLAY }
 
+                // News Alert தொடும் போது Audio டிராக் மறைந்து, News Alert டிராக் வரும் லாஜிக்
                 val isOverlaySelected = overlayTrack?.clips?.any { it.id == selectedClipId } == true
 
                 val displayTracks = buildList {
                     if (videoTrack != null) add(videoTrack)
                     if (isOverlaySelected && overlayTrack != null) {
-                        add(overlayTrack) // Audio-விற்கு பதிலாக News Alert பட்டை வரும்!
+                        add(overlayTrack) // Audio மறைக்கப்பட்டு News Alert பட்டை அந்த இடத்திற்கு வரும்!
                     } else if (audioTrack != null) {
-                        add(audioTrack)   // வழக்கம்போல் Audio பட்டை வரும்
+                        add(audioTrack)   // இயல்பாக Audio பட்டை வரும்
                     } else if (overlayTrack != null && overlayTrack.clips.isNotEmpty()) {
                         add(overlayTrack)
                     }
@@ -384,7 +384,6 @@ private fun ClipBlock(
             }
         }
 
-        // தேர்ந்தெடுக்கப்பட்டால் விரலால் பிடித்து நீட்டிக்கும் Trimming Handles
         if (selected) {
             ClipTrimHandles(
                 clip = clip,
@@ -517,7 +516,7 @@ private fun DragHandle(
 
 private fun laneColor(clip: Clip): Color {
     if (clip.mediaUri?.contains("news_banner") == true) {
-        return Color(0xFF8E0614) // News Alert பேனருக்கு சிகப்பு நிற பட்டை
+        return Color(0xFF8E0614)
     }
     return when (clip.type) {
         ClipType.VIDEO -> LaneVideo
