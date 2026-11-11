@@ -352,9 +352,11 @@ class EditorViewModel @Inject constructor(
                 _uiState.value.playheadMs,
             )
             val clip = base.copy(
-                transform = Transform(offsetX = 0.35f, offsetY = -0.35f, scale = 0.45f),
+                type = if (isVideo) ClipType.VIDEO else ClipType.IMAGE,
+                transform = Transform(offsetX = 0.0f, offsetY = 0.0f, scale = 0.5f),
+                crop = CropRect(0f, 0f, 1f, 1f),
                 keyframes = listOf(
-                    Keyframe(timeMs = 0L, offsetX = 0.35f, offsetY = -0.35f, scale = 0.45f),
+                    Keyframe(timeMs = 0L, offsetX = 0.0f, offsetY = 0.0f, scale = 0.5f),
                 ),
             )
             val track = _uiState.value.timeline.tracks
@@ -371,16 +373,16 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** Fty PiP: CUTOUT பட்டனை அழுத்தும்போது வட்ட வடிவ Cutout மாஸ்க் அமைத்தல் */
+    /** Fty HTML MediaPipe பாணியில் Google AI Human Cutout இயக்குதல்/நிறுத்துதல் */
     fun togglePipCutout() = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, id) { c ->
-                val isCutout = c.filter?.id == "cutout_circle"
+                val isCutout = c.filter?.id == "ai_cutout"
                 if (isCutout) {
                     c.copy(filter = null)
                 } else {
-                    c.copy(filter = Filter("cutout_circle", "Circle Cutout", FilterCategory.NONE))
+                    c.copy(filter = Filter("ai_cutout", "AI Cutout", FilterCategory.NONE))
                 }
             }
         }
@@ -659,7 +661,8 @@ class EditorViewModel @Inject constructor(
         scheduleSave()
     }
 
-    fun setCrop(clipId: String, crop: com.actioncut.core.model.CropRect) {
+    /** Fty Live On-Screen Free Crop மாற்றங்களை உடனுக்குடன் Timeline Clip-ல் சேமித்தல் */
+    fun setCrop(clipId: String, crop: CropRect) {
         mutate(structural = false) {
             TimelineEditor.updateClip(it, clipId) { c -> c.copy(crop = crop) }
         }
@@ -668,7 +671,7 @@ class EditorViewModel @Inject constructor(
     fun addKeyframeAtPlayhead() = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
         val timeInClip = (_uiState.value.playheadMs - clip.timelineStartMs).coerceAtLeast(0L)
-        val kf = com.actioncut.core.model.Keyframe(
+        val kf = Keyframe(
             timeMs = timeInClip,
             offsetX = clip.transform.offsetX,
             offsetY = clip.transform.offsetY,
@@ -791,7 +794,7 @@ class EditorViewModel @Inject constructor(
             it.copy(
                 timeline = timeline,
                 canUndo = undoStack.isNotEmpty(),
-                canRedo = redoStack.isNotEmpty(),
+                canRedo = redoStack.isNotEmpty>,
                 playheadMs = currentPlayhead.coerceIn(0, timeline.durationMs),
             )
         }
