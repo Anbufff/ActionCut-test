@@ -63,7 +63,7 @@ fun PreviewPlayer(
     pipClips: List<Clip> = emptyList(),
     onScaleOverlay: (String, Float) -> Unit = { _, _ -> },
     onCropChange: (String, CropRect) -> Unit = { _, _ -> },
-    isCropModeActive: Boolean = true,
+    isCropModeActive: Boolean = false,
     fitMode: FitMode = FitMode.FILL,
     backgroundColorArgb: Int = 0xFF000000.toInt(),
     allClips: List<Clip> = emptyList(),
@@ -199,7 +199,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // 3. Fty பாணியில் PiP லேயர்
+            // 3. PiP லேயர்
             if (pipPlayer != null) {
                 PipLayer(
                     pipPlayer = pipPlayer,
@@ -288,7 +288,7 @@ fun PreviewPlayer(
 }
 
 /**
- * 2-விரல் Pinch-to-Zoom மற்றும் எளிதான கார்னர் கிராப் கண்ட்ரோலர்
+ * 2-விரல் ஸ்மூத் Pinch Zoom மற்றும் கார்னர் கிராப் கண்ட்ரோலர்
  */
 @Composable
 private fun PipLayer(
@@ -300,7 +300,7 @@ private fun PipLayer(
     onMove: (String, Float, Float) -> Unit,
     onScale: (String, Float) -> Unit,
     onCropChange: (String, CropRect) -> Unit,
-    isCropModeActive: Boolean = true,
+    isCropModeActive: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val active = pipClips.firstOrNull {
@@ -362,7 +362,7 @@ private fun PipLayer(
                         val down = awaitFirstDown(requireUnconsumed = false)
                         onSelect(active.id)
 
-                        // தொட எளிதாக இருக்க பெரிய 50dp தொடுவட்டம்
+                        // 50dp பெரிய தொடுவட்டம் - விரல் மிஸ் ஆகாது
                         val cornerTouchRadius = 50f * density
                         val edgeTouchRadius = 40f * density
                         val scaleTouchRadius = 55f * density
@@ -371,10 +371,8 @@ private fun PipLayer(
                         val ty = down.position.y
 
                         var target = when {
-                            // 1. வலது கீழ் மூலை ஸ்கேலிங் கைப்பிடி (Scale handle)
                             hypot(tx - pipPixelW, ty - pipPixelH) < scaleTouchRadius -> DragTarget.SCALE
 
-                            // 2. Crop Mode இயக்கத்தில் இருக்கும்போது கார்னர் மற்றும் எட்ஜ் புள்ளிகள்
                             isCropModeActive && hypot(tx - cL, ty - cT) < cornerTouchRadius -> DragTarget.CORNER_TL
                             isCropModeActive && hypot(tx - cR, ty - cT) < cornerTouchRadius -> DragTarget.CORNER_TR
                             isCropModeActive && hypot(tx - cL, ty - cB) < cornerTouchRadius -> DragTarget.CORNER_BL
@@ -385,11 +383,11 @@ private fun PipLayer(
                             isCropModeActive && hypot(tx - cL, ty - cCenterY) < edgeTouchRadius -> DragTarget.EDGE_L
                             isCropModeActive && hypot(tx - cR, ty - cCenterY) < edgeTouchRadius -> DragTarget.EDGE_R
 
-                            // 3. மற்றபடி படத்தை விரலால் தொட்டு எங்கு வேண்டுமானாலும் நகர்த்தலாம்
                             else -> DragTarget.MOVE_PIP
                         }
 
-                        var prevPointers = 1
+                        // பழைய Pinch Distance-ஐ முழுமையாக ரீசெட் செய்தல்
+                        var prevPointers = 0
                         var prevDistance = 0f
 
                         do {
@@ -398,17 +396,18 @@ private fun PipLayer(
                             if (pointers.isEmpty()) break
 
                             if (pointers.size >= 2) {
-                                // 🌟 2-விரல் Pinch Zoom & Move (அதிவேகமாக பெரிதாக்கவும் சிறிதாக்கவும் முடியும்)
+                                // 🌟 இரண்டு விரல் Pinch Zoom (சுருங்கும் பிழை நீக்கப்பட்டது)
                                 val p1 = pointers[0].position
                                 val p2 = pointers[1].position
                                 val currentDistance = hypot(p1.x - p2.x, p1.y - p2.y)
 
-                                if (prevPointers >= 2 && prevDistance > 0f) {
-                                    val zoomFactor = currentDistance / prevDistance
-                                    liveScale = (liveScale * zoomFactor).coerceIn(0.1f, 4.0f)
+                                if (prevPointers >= 2 && prevDistance > 10f) {
+                                    val rawZoom = currentDistance / prevDistance
+                                    val smoothZoom = rawZoom.coerceIn(0.85f, 1.20f)
+                                    liveScale = (liveScale * smoothZoom).coerceIn(0.15f, 4.0f)
                                 }
                                 prevDistance = currentDistance
-                                prevPointers = pointers.size
+                                prevPointers = 2
 
                                 val centroid = (p1 + p2) / 2f
                                 val prevCentroid = (pointers[0].previousPosition + pointers[1].previousPosition) / 2f
@@ -433,7 +432,7 @@ private fun PipLayer(
                                         pointer.consume()
                                     }
                                     DragTarget.SCALE -> {
-                                        liveScale = (liveScale + (dx + dy) / (2f * w)).coerceIn(0.1f, 4.0f)
+                                        liveScale = (liveScale + (dx + dy) / (2f * w)).coerceIn(0.15f, 4.0f)
                                         pointer.consume()
                                     }
                                     DragTarget.CORNER_TL -> {
@@ -485,6 +484,7 @@ private fun PipLayer(
                             }
                         } while (true)
 
+                        // அளவை அப்படியே லாக் செய்தல்
                         onMove(active.id, liveOffsetX, liveOffsetY)
                         onScale(active.id, liveScale)
                         if (isCropModeActive) {
@@ -493,7 +493,7 @@ private fun PipLayer(
                     }
                 },
         ) {
-            // 1. படம் (மிரர்/Flip செய்யப்பட்டாலும் டச் தவறாகாமல் வரைதல்)
+            // 1. படம் (மிரர் செய்யப்பட்டாலும் கார்னர் திசை மாறாமல் இருக்க Inner graphicsLayer மட்டும்)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -653,7 +653,7 @@ private fun PipLayer(
                     )
                 }
 
-                // Fty Scale Circle (White with Cyan border)
+                // Fty Scale Circle
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
