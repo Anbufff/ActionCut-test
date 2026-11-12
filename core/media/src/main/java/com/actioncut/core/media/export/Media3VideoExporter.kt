@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.net.Uri
@@ -316,8 +317,6 @@ class Media3VideoExporter @Inject constructor(
 
         val left = cx - pw / 2f
         val top = cy - ph / 2f
-        val right = cx + pw / 2f
-        val bottom = cy + ph / 2f
 
         val crop = clip.crop ?: CropRect(0f, 0f, 1f, 1f)
         val cropRect = RectF(
@@ -452,7 +451,7 @@ class Media3VideoExporter @Inject constructor(
             OverlayEffect(ImmutableList.of(it.forClip(timelineStartMs)))
         }
 
-        // 🌟 16:9 FORMAT ANIMATED WATERMARK LOGO OVERLAY (வீடியோ எக்ஸ்போர்ட்)
+        // 🌟 16:9 அதிவேக ரீ-யூசபிள் வாட்டர்மார்க் லேயர்
         val watermarkOverlayEffect: Effect = OverlayEffect(
             ImmutableList.of(NewsCrickWatermarkOverlay(targetWidth, targetHeight, timelineStartMs))
         )
@@ -467,7 +466,6 @@ class Media3VideoExporter @Inject constructor(
             templateOverlay = templateOverlayEffect,
         ).toMutableList()
 
-        // Watermark லோகோவை வீடியோவின் மீது சேர்த்தல்
         videoEffects += watermarkOverlayEffect
 
         val clipDurUs = timelineDurationMs * 1_000L
@@ -553,39 +551,46 @@ class Media3VideoExporter @Inject constructor(
 }
 
 /**
- * 🌟 16:9 FORMAT ANIMATED WATERMARK LOGO OVERLAY CLASS
+ * ⚡ ULTRA-FAST ZERO-ALLOCATION WATERMARK OVERLAY
+ * ஒவ்வொரு பிரேமுக்கும் புதிய Bitmap ஒதுக்காமல், ஒரே பிட்மேப்பை ரீ-யூஸ் செய்து அதிவேகமாக வரையும்.
  */
 private class NewsCrickWatermarkOverlay(
-    private val targetWidth: Int,
-    private val targetHeight: Int,
+    targetWidth: Int,
+    targetHeight: Int,
     private val clipStartMs: Long = 0L,
 ) : BitmapOverlay() {
 
     private val defaultSettings = OverlaySettings.Builder().build()
 
+    // 🌟 ஒரே ஒரு பிட்மேப் & கேன்வாஸ் மட்டுமே உருவாக்கப்படுகிறது (Zero Garbage Collection)
+    private val reusableBmp: Bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+    private val reusableCanvas: Canvas = Canvas(reusableBmp)
+
+    // கணக்கீடுகளை முன்கூட்டியே சேமித்து வைப்பதால் CPU வேகம் மிச்சமாகும்
+    private val logoW = targetWidth * 0.125f
+    private val logoH = logoW * 0.75f
+    private val marginX = targetWidth * 0.012f
+    private val marginY = targetHeight * 0.015f
+    private val logoX = targetWidth - logoW - marginX
+    private val logoY = marginY
+
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         val currentPlayheadMs = clipStartMs + (presentationTimeUs / 1000L)
         val timeSec = currentPlayheadMs / 1000f
 
-        val bmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bmp)
+        // முந்தைய பிரேமை வேகமாக அழித்துவிட்டு புது அனிமேஷன் வரைதல் (Super Fast)
+        reusableBmp.eraseColor(Color.TRANSPARENT)
+        NewsCrickWatermarkRenderer.renderLogo(reusableCanvas, logoX, logoY, logoW, logoH, timeSec)
 
-        // 16:9 திரையில் வலது மேல் மூலைக்கான அளவு மற்றும் இடம் (அசல் Fty விகிதம்)
-        val logoW = targetWidth * 0.125f
-        val logoH = logoW * 0.75f
-        val marginX = targetWidth * 0.012f
-        val marginY = targetHeight * 0.015f
-
-        val logoX = targetWidth - logoW - marginX
-        val logoY = marginY
-
-        NewsCrickWatermarkRenderer.renderLogo(canvas, logoX, logoY, logoW, logoH, timeSec)
-        return bmp
+        return reusableBmp
     }
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = defaultSettings
 }
 
+/**
+ * ⚡ ULTRA-FAST ZERO-ALLOCATION FB TEMPLATE OVERLAY
+ */
 private class FbTemplateOverlay(
     private val context: Context,
     private val targetWidth: Int,
@@ -596,6 +601,17 @@ private class FbTemplateOverlay(
 
     private val defaultSettings = OverlaySettings.Builder().build()
     private var cachedBottomBitmap: Bitmap? = null
+
+    // 🌟 ரீ-யூசபிள் பிட்மேப் மற்றும் கேன்வாஸ்
+    private val reusableBmp: Bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+    private val reusableCanvas: Canvas = Canvas(reusableBmp)
+    private val bgPaint = Paint().apply { color = android.graphics.Color.parseColor("#0B0B0B") }
+    private val imgPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+
+    private val vH = (targetWidth * (9f / 16f)).roundToInt()
+    private val barH = targetHeight - 2 * vH
+    private val bottomY = vH + barH
+    private val bottomRect = RectF(0f, bottomY.toFloat(), targetWidth.toFloat(), targetHeight.toFloat())
 
     init {
         if (!bottomImageUriStr.isNullOrBlank()) {
@@ -618,21 +634,14 @@ private class FbTemplateOverlay(
         val currentPlayheadMs = clipStartMs + (presentationTimeUs / 1000L)
         val timeSeconds = currentPlayheadMs / 1000f
 
-        val outBmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(outBmp)
+        reusableBmp.eraseColor(Color.TRANSPARENT)
 
-        val vH = (targetWidth * (9f / 16f)).roundToInt()
-        val barH = targetHeight - 2 * vH
-        val bottomY = vH + barH
+        reusableCanvas.save()
+        reusableCanvas.translate(0f, vH.toFloat())
+        FbTemplateBarRenderer.drawTplBar(reusableCanvas, targetWidth.toFloat(), barH.toFloat(), timeSeconds)
+        reusableCanvas.restore()
 
-        canvas.save()
-        canvas.translate(0f, vH.toFloat())
-        FbTemplateBarRenderer.drawTplBar(canvas, targetWidth.toFloat(), barH.toFloat(), timeSeconds)
-        canvas.restore()
-
-        val bottomRect = RectF(0f, bottomY.toFloat(), targetWidth.toFloat(), targetHeight.toFloat())
-        val bgPaint = Paint().apply { color = android.graphics.Color.parseColor("#0B0B0B") }
-        canvas.drawRect(bottomRect, bgPaint)
+        reusableCanvas.drawRect(bottomRect, bgPaint)
 
         val src = cachedBottomBitmap
         if (src != null && !src.isRecycled) {
@@ -644,11 +653,10 @@ private class FbTemplateOverlay(
             val dx = (targetWidth - dw) / 2f
             val dy = bottomY + (vH - dh) / 2f
 
-            val imgPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
-            canvas.drawBitmap(src, null, RectF(dx, dy, dx + dw, dy + dh), imgPaint)
+            reusableCanvas.drawBitmap(src, null, RectF(dx, dy, dx + dw, dy + dh), imgPaint)
         }
 
-        return outBmp
+        return reusableBmp
     }
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = defaultSettings
