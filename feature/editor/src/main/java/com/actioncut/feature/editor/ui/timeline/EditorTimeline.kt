@@ -335,12 +335,11 @@ private fun ClipBlock(
                         currentOnMoveClip(clip.id, moveAnchor + deltaMs)
                     },
                     onDragEnd = { currentOnMoveCommit() },
-                    onDragCancel = { currentOnMoveCommit() },
+                    onDragCancel = { currentOnCommit() },
                 )
             },
         contentAlignment = Alignment.CenterStart,
     ) {
-        // Main Track மற்றும் PiP-ல் அசல் படத்தின் Thumbnail-ஐ டைம்லைனில் வரைதல்
         if ((clip.type == ClipType.IMAGE || clip.type == ClipType.VIDEO) && clip.mediaUri != null && clip.mediaUri?.contains("news_banner") != true) {
             AsyncImage(
                 model = clip.mediaUri,
@@ -382,7 +381,6 @@ private fun ClipBlock(
             )
         }
 
-        // மஞ்சள் டைமண்ட் குறியீடுகள் (◆) OVERLAY / PiP ட்ராக்கில் மட்டுமே காட்டப்பட வேண்டும்!
         if (trackType == TrackType.OVERLAY && clip.keyframes.isNotEmpty()) {
             clip.keyframes.forEach { kf ->
                 val kfOffsetDp = with(density) { (kf.timeMs / 1000f * pxPerSecond).toDp() }
@@ -400,6 +398,7 @@ private fun ClipBlock(
             }
         }
 
+        // ==================== Scorecard Keyframe Diamonds (Smart Cast Safe) ====================
         val sc = clip.scorecard
         if (sc != null) {
             val kfs = sc.keyframes
