@@ -406,7 +406,10 @@ fun PreviewPlayer(
                                         val pointers = event.changes.filter { it.pressed }
                                         if (pointers.isEmpty()) break
 
-                                        if (pointers.size >= 2) {
+                                        // Pinch/pan of the MAIN photo only when it is selected. Before, a stray 2-finger
+                                        // touch on the preview moved/zoomed the main photo locally without saving it,
+                                        // so the preview showed a zoomed/shifted photo while export was correct.
+                                        if (pointers.size >= 2 && isMainSelected) {
                                             val p1 = pointers[0].position
                                             val p2 = pointers[1].position
                                             val currentDistance = hypot(p1.x - p2.x, p1.y - p2.y)
