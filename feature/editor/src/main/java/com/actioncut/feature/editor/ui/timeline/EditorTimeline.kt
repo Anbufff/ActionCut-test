@@ -335,7 +335,7 @@ private fun ClipBlock(
                         currentOnMoveClip(clip.id, moveAnchor + deltaMs)
                     },
                     onDragEnd = { currentOnMoveCommit() },
-                    onDragCancel = { currentOnCommit() },
+                    onDragCancel = { currentOnMoveCommit() },
                 )
             },
         contentAlignment = Alignment.CenterStart,
