@@ -544,7 +544,9 @@ fun PreviewPlayer(
                 }
             }
 
-            if (!isPlaying) {
+            // Hide the centre play button while a PiP clip is selected: it sat on top of the PiP and stole touches.
+            val isPipSelectedNow = selectedClipId != null && pipClips.any { it.id == selectedClipId }
+            if (!isPlaying && !isPipSelectedNow) {
                 Box(
                     modifier = Modifier
                         .size(56.dp)
@@ -698,9 +700,11 @@ private fun PipLayer(
                         val tx = down.position.x
                         val ty = down.position.y
 
-                        val cornerRadius = 38f * density
-                        val edgeRadius = 32f * density
-                        val scaleRadius = 42f * density
+                        // Handle hit-zones shrink on small PiP boxes so the middle stays draggable
+                        val cropSide = minOf(curR - curL, curB - curT).coerceAtLeast(1f)
+                        val cornerRadius = minOf(38f * density, cropSide * 0.22f)
+                        val edgeRadius = minOf(32f * density, cropSide * 0.16f)
+                        val scaleRadius = minOf(42f * density, cropSide * 0.25f)
 
                         val target = if (isCropModeActive) {
                             when {
