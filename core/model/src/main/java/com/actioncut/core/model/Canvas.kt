@@ -5,19 +5,20 @@ import kotlinx.serialization.Serializable
 /** How a clip fills the project canvas. */
 @Serializable
 enum class FitMode(val displayName: String) {
-    FIT("Fit"),       // whole frame visible (letterboxed)
-    FILL("Fill"),     // crop to fill the canvas
-    STRETCH("Stretch"), // distort to fill
+    FIT("Fit"),
+    FILL("Fill"),
+    STRETCH("Stretch"),
 }
 
 /**
- * Project-level canvas appearance: how media fits, and the background shown behind it
- * (e.g. the letterbox area in [FitMode.FIT]).
+ * Project-level canvas appearance and 4:5 TPL template settings.
  */
 @Serializable
 data class CanvasSettings(
     val fitMode: FitMode = FitMode.FILL,
     val backgroundColorArgb: Int = 0xFF000000.toInt(),
+    val isFbTemplateEnabled: Boolean = false,
+    val fbTemplateImageUri: String? = null,
 )
 
 /** Background colour swatches offered in the Canvas panel (ARGB). */
