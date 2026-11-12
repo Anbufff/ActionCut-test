@@ -1,5 +1,7 @@
 package com.actioncut.feature.editor.ui.preview
 
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
 import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.foundation.Image
@@ -588,7 +590,7 @@ private fun PipLayer(
         mutableStateOf(
             if (isAiCutoutOn && active.mediaUri != null) {
                 val f = java.io.File(context.cacheDir, "cutout_${active.mediaUri.hashCode()}.png")
-                if (f.exists() && f.length() > 0L) android.net.Uri.fromFile(f).toString() else null
+                if (f.exists() && f.length() > 0L) Uri.fromFile(f).toString() else null
             } else null
         )
     }
@@ -598,6 +600,39 @@ private fun PipLayer(
             cutoutUri = AiCutoutManager.getOrCreateCutoutUri(context, active.mediaUri!!)
         } else {
             cutoutUri = null
+        }
+    }
+
+    val displayUri = if (isAiCutoutOn && cutoutUri != null) cutoutUri else active.mediaUri
+
+    // 🌟 படத்தின் அசல் நீள-அகல விகிதத்தை (Intrinsic Aspect Ratio) கண்டறிதல்
+    var mediaAspectRatio by remember(active.id, displayUri) {
+        mutableFloatStateOf(
+            runCatching {
+                val uriStr = displayUri ?: ""
+                val uri = Uri.parse(uriStr)
+                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                if (uri.scheme == "content") {
+                    context.contentResolver.openInputStream(uri)?.use { stream ->
+                        BitmapFactory.decodeStream(stream, null, options)
+                    }
+                } else {
+                    val path = uri.path ?: uriStr
+                    BitmapFactory.decodeFile(path, options)
+                }
+                if (options.outWidth > 0 && options.outHeight > 0) {
+                    options.outWidth.toFloat() / options.outHeight.toFloat()
+                } else 0f
+            }.getOrDefault(0f)
+        )
+    }
+
+    LaunchedEffect(pipPlayer, active.id) {
+        if (active.type == ClipType.VIDEO) {
+            val vSize = pipPlayer.videoSize
+            if (vSize.width > 0 && vSize.height > 0) {
+                mediaAspectRatio = vSize.width.toFloat() / vSize.height.toFloat()
+            }
         }
     }
 
@@ -616,8 +651,17 @@ private fun PipLayer(
         val baseCrop = active.crop ?: CropRect(0f, 0f, 1f, 1f)
         var liveCrop by remember(active.id, baseCrop) { mutableStateOf(baseCrop) }
 
-        val pipPixelW = (w * liveScale)
-        val pipPixelH = (h * liveScale)
+        // 🌟 பாக்ஸின் அளவை படத்தின் வடிவத்திற்கு ஏற்ப (Auto Aspect Ratio) அமைத்தல்
+        val canvasAspect = if (h > 0f) w / h else (16f / 9f)
+        val effectiveAspect = if (mediaAspectRatio > 0f) mediaAspectRatio else canvasAspect
+
+        val (pipPixelW, pipPixelH) = if (effectiveAspect >= canvasAspect) {
+            val pw = w * liveScale
+            pw to (pw / effectiveAspect)
+        } else {
+            val ph = h * liveScale
+            (ph * effectiveAspect) to ph
+        }
 
         val cL = pipPixelW * liveCrop.left
         val cT = pipPixelH * liveCrop.top
@@ -650,8 +694,6 @@ private fun PipLayer(
                         val curT = ph * liveCrop.top
                         val curR = pw * liveCrop.right
                         val curB = ph * liveCrop.bottom
-                        val curMidX = (curL + curR) / 2f
-                        val curMidY = (curT + curB) / 2f
 
                         val tx = down.position.x
                         val ty = down.position.y
@@ -660,29 +702,22 @@ private fun PipLayer(
                         val edgeRadius = 32f * density
                         val scaleRadius = 42f * density
 
-                        // 🌟 ULTRA-SMOOTH HIT TESTING LOGIC (Crop Mode-ல் துல்லியமாக இலக்கைத் தேர்வு செய்தல்)
                         val target = if (isCropModeActive) {
                             when {
-                                // 1. Corners (முன்னுரிமை: 4 மூலைகள்)
                                 hypot(tx - curL, ty - curT) < cornerRadius -> DragTarget.CORNER_TL
                                 hypot(tx - curR, ty - curT) < cornerRadius -> DragTarget.CORNER_TR
                                 hypot(tx - curL, ty - curB) < cornerRadius -> DragTarget.CORNER_BL
                                 hypot(tx - curR, ty - curB) < cornerRadius -> DragTarget.CORNER_BR
 
-                                // 2. Edges (கோட்டின் முழு நீளத்திற்கும் தொடும் எல்லை நீட்டிக்கப்பட்டுள்ளது)
                                 abs(ty - curT) < edgeRadius && tx in (curL - edgeRadius)..(curR + edgeRadius) -> DragTarget.EDGE_T
                                 abs(ty - curB) < edgeRadius && tx in (curL - edgeRadius)..(curR + edgeRadius) -> DragTarget.EDGE_B
                                 abs(tx - curL) < edgeRadius && ty in (curT - edgeRadius)..(curB + edgeRadius) -> DragTarget.EDGE_L
                                 abs(tx - curR) < edgeRadius && ty in (curT - edgeRadius)..(curB + edgeRadius) -> DragTarget.EDGE_R
 
-                                // 3. பயனர் Crop பாக்ஸின் மையப்பகுதியைத் தொட்டால் மட்டுமே நகரும் (Pan/Move)
                                 tx in curL..curR && ty in curT..curB -> DragTarget.MOVE_PIP
-
-                                // 4. வெளியே அல்லது கைப்பிடியை தவறவிட்டால் எதுவுமே நடக்காது (குதிக்காது!)
                                 else -> DragTarget.NONE
                             }
                         } else {
-                            // சாதாரண PIP எடிட்டிங் நிலை
                             when {
                                 hypot(tx - pw, ty - ph) < scaleRadius -> DragTarget.SCALE
                                 else -> DragTarget.MOVE_PIP
@@ -697,7 +732,6 @@ private fun PipLayer(
                             val pointers = event.changes.filter { it.pressed }
                             if (pointers.isEmpty()) break
 
-                            // Crop Mode-ல் 2 விரல் மோதல் தற்காலிகமாக தவிர்க்கப்படுகிறது
                             if (pointers.size >= 2 && !isCropModeActive) {
                                 val p1 = pointers[0].position
                                 val p2 = pointers[1].position
@@ -811,14 +845,13 @@ private fun PipLayer(
                         drawContext.canvas.restore()
                     },
             ) {
-                val displayUri = if (isAiCutoutOn && cutoutUri != null) cutoutUri else active.mediaUri
                 if (active.type == ClipType.VIDEO) {
                     AndroidView(
                         factory = { ctx ->
                             PlayerView(ctx).apply {
                                 useController = false
                                 this.player = pipPlayer
-                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
                             }
                         },
@@ -831,9 +864,18 @@ private fun PipLayer(
                     )
                 } else {
                     AsyncImage(
-                        model = displayUri,
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(displayUri)
+                            .crossfade(true)
+                            .build(),
                         contentDescription = null,
-                        contentScale = ContentScale.Crop,
+                        contentScale = ContentScale.Fit, // 🌟 முழு படமும் வெட்டப்படாமல் தெரிய Fit
+                        onSuccess = { state ->
+                            val d = state.result.drawable
+                            if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
+                                mediaAspectRatio = d.intrinsicWidth.toFloat() / d.intrinsicHeight.toFloat()
+                            }
+                        },
                         modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer {
@@ -945,7 +987,6 @@ private fun PipLayer(
                             },
                     )
                 } else {
-                    // சாதாரண PIP Scale Handle (Crop Mode ஆன் இல்லாத போது மட்டுமே தெரியும்)
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
@@ -1050,7 +1091,7 @@ private fun StickerImage(uri: String, widthPx: Float, modifier: Modifier = Modif
     ) {
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
-                android.graphics.BitmapFactory.decodeFile(android.net.Uri.parse(uri).path)?.asImageBitmap()
+                BitmapFactory.decodeFile(Uri.parse(uri).path)?.asImageBitmap()
             }.getOrNull()
         }
     }.value ?: return
