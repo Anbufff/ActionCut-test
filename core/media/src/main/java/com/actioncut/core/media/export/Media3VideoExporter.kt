@@ -109,6 +109,7 @@ class Media3VideoExporter @Inject constructor(
                     .filter { it.type == TrackType.OVERLAY }
                     .flatMap { it.clips }
 
+                // 🌟 PiP Overlays-ஐ எக்ஸ்போர்ட் கேன்வாஸில் பாதுகாப்பாகத் தயார் செய்தல்
                 val preparedPipOverlays = rawOverlayClips.map { ov ->
                     if (ov.type == ClipType.IMAGE && ov.mediaUri != null && ov.mediaUri?.contains("news_banner") != true) {
                         val processedUri = renderExactPipOverlayToCanvas(context, ov, targetWidth, targetHeight)
@@ -280,18 +281,25 @@ class Media3VideoExporter @Inject constructor(
     ): String = runCatching {
         val uriStr = clip.mediaUri ?: return@runCatching ""
 
-        // 🌟 AI Cutout ஃபைல் இருந்தால் அதை முன்னுரிமையுடன் எடுத்து Export செய்வது
+        // 🌟 AI Cutout ஃபைல் இருந்தால் அதை நேரடியாக (Direct File Access) எடுத்துப் பயன்படுத்துதல்
         val isAiCutout = clip.filter?.id?.contains("cutout") == true
         val cutoutFile = File(context.cacheDir, "cutout_${uriStr.hashCode()}.png")
-        val sourceUri = if (isAiCutout && cutoutFile.exists() && cutoutFile.length() > 0L) {
-            Uri.fromFile(cutoutFile)
+
+        val srcBmp: Bitmap? = if (isAiCutout && cutoutFile.exists() && cutoutFile.length() > 0L) {
+            BitmapFactory.decodeFile(cutoutFile.absolutePath)
         } else {
-            Uri.parse(uriStr)
+            val uri = Uri.parse(uriStr)
+            if (uri.scheme == "file") {
+                val f = File(uri.path ?: "")
+                if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
+            } else {
+                context.contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it)
+                }
+            }
         }
 
-        val srcBmp = context.contentResolver.openInputStream(sourceUri)?.use {
-            BitmapFactory.decodeStream(it)
-        } ?: return@runCatching uriStr
+        if (srcBmp == null) return@runCatching uriStr
 
         val fullCanvasBmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(fullCanvasBmp)
