@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -43,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -52,9 +52,11 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.actioncut.core.designsystem.component.clickableNoRipple
 import com.actioncut.core.designsystem.theme.LaneAudio
 import com.actioncut.core.designsystem.theme.LaneText
@@ -128,13 +130,12 @@ fun EditorTimeline(
                 val audioTrack = timeline.tracks.firstOrNull { it.type == TrackType.AUDIO }
                 val overlayTrack = timeline.tracks.firstOrNull { it.type == TrackType.OVERLAY }
 
-                // Overlay (PiP / News Alert) தேர்ந்தெடுக்கப்பட்டால் Audio மறைந்து Overlay பட்டை தோன்றும் லாஜிக்
                 val isOverlaySelected = overlayTrack?.clips?.any { it.id == selectedClipId } == true
 
                 val displayTracks = buildList {
                     if (videoTrack != null) add(videoTrack)
                     if (isOverlaySelected && overlayTrack != null) {
-                        add(overlayTrack) // Fty PiP & News Alert பட்டை!
+                        add(overlayTrack)
                     } else if (audioTrack != null) {
                         add(audioTrack)
                     } else if (overlayTrack != null && overlayTrack.clips.isNotEmpty()) {
@@ -238,6 +239,7 @@ private fun TrackLane(
             Box(modifier = Modifier.offset(x = xDp).fillMaxHeight()) {
                 ClipBlock(
                     clip = clip,
+                    trackType = track.type,
                     pxPerSecond = pxPerSecond,
                     selected = clip.id == selectedClipId,
                     onSelect = { onSelectClip(clip.id) },
@@ -263,22 +265,22 @@ private fun TrackLane(
                     .drawBehind {
                         val stroke = Stroke(
                             width = 2.dp.toPx(),
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f),
                         )
                         drawRoundRect(
                             color = Color(0xFFFFCC00),
                             cornerRadius = CornerRadius(8.dp.toPx()),
-                            style = stroke
+                            style = stroke,
                         )
                     }
                     .clickable { onAddMedia() },
-                contentAlignment = Alignment.Center
+                contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Filled.Add,
                     contentDescription = "Add Media",
                     tint = Color(0xFFFFCC00),
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(26.dp),
                 )
             }
         }
@@ -288,6 +290,7 @@ private fun TrackLane(
 @Composable
 private fun ClipBlock(
     clip: Clip,
+    trackType: TrackType,
     pxPerSecond: Float,
     selected: Boolean,
     onSelect: () -> Unit,
@@ -316,7 +319,7 @@ private fun ClipBlock(
             .width(widthDp)
             .fillMaxHeight()
             .clip(RoundedCornerShape(6.dp))
-            .background(laneColor(clip))
+            .background(laneColor(clip, trackType))
             .border(2.dp, borderColor, RoundedCornerShape(6.dp))
             .clickableNoRipple { onSelect() }
             .pointerInput(clip.id) {
@@ -337,6 +340,18 @@ private fun ClipBlock(
             },
         contentAlignment = Alignment.CenterStart,
     ) {
+        // Main Track மற்றும் PiP-ல் அசல் படத்தின் Thumbnail-ஐ டைம்லைனில் வரைதல்
+        if ((clip.type == ClipType.IMAGE || clip.type == ClipType.VIDEO) && clip.mediaUri != null && clip.mediaUri?.contains("news_banner") != true) {
+            AsyncImage(
+                model = clip.mediaUri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(0.65f),
+            )
+        }
+
         if (clip.type == ClipType.AUDIO && clip.mediaUri != null && onLoadWaveform != null) {
             AudioWaveform(
                 uri = clip.mediaUri!!,
@@ -344,19 +359,22 @@ private fun ClipBlock(
                 modifier = Modifier.matchParentSize(),
             )
         }
+
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp),
+            modifier = Modifier
+                .background(Color.Black.copy(alpha = 0.35f))
+                .padding(horizontal = 6.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
                 imageVector = clipIcon(clip),
                 contentDescription = null,
                 tint = Color.White.copy(alpha = 0.9f),
-                modifier = Modifier.size(14.dp),
+                modifier = Modifier.size(13.dp),
             )
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(4.dp))
             Text(
-                text = clipLabel(clip),
+                text = clipLabel(clip, trackType),
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White,
                 maxLines = 1,
@@ -364,8 +382,8 @@ private fun ClipBlock(
             )
         }
 
-        // Fty PiP Keyframe Diamond Markers (◆)
-        if (clip.keyframes.isNotEmpty()) {
+        // மஞ்சள் டைமண்ட் குறியீடுகள் (◆) OVERLAY / PiP ட்ராக்கில் மட்டுமே காட்டப்பட வேண்டும்!
+        if (trackType == TrackType.OVERLAY && clip.keyframes.isNotEmpty()) {
             clip.keyframes.forEach { kf ->
                 val kfOffsetDp = with(density) { (kf.timeMs / 1000f * pxPerSecond).toDp() }
                 val isCurrent = abs(playheadMs - (clip.timelineStartMs + kf.timeMs)) <= 150L
@@ -377,7 +395,7 @@ private fun ClipBlock(
                         .size(11.dp)
                         .graphicsLayer { rotationZ = 45f }
                         .background(if (isCurrent) Color(0xFFFF3B5C) else Color(0xFFFFD700))
-                        .border(1.dp, Color.Black, RoundedCornerShape(1.dp))
+                        .border(1.dp, Color.Black, RoundedCornerShape(1.dp)),
                 )
             }
         }
@@ -396,7 +414,7 @@ private fun ClipBlock(
                         .size(10.dp)
                         .graphicsLayer { rotationZ = 45f }
                         .background(if (isCurrent) Color(0xFFFF3B5C) else Color(0xFFFFE300))
-                        .border(1.dp, Color.Black, RoundedCornerShape(1.dp))
+                        .border(1.dp, Color.Black, RoundedCornerShape(1.dp)),
                 )
             }
         }
@@ -517,7 +535,7 @@ private fun DragHandle(
                 .fillMaxHeight()
                 .clip(
                     if (isLeft) RoundedCornerShape(topStart = 6.dp, bottomStart = 6.dp)
-                    else RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp)
+                    else RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp),
                 )
                 .background(MaterialTheme.colorScheme.primary),
             contentAlignment = Alignment.Center,
@@ -531,17 +549,16 @@ private fun DragHandle(
     }
 }
 
-private fun laneColor(clip: Clip): Color {
+private fun laneColor(clip: Clip, trackType: TrackType): Color {
     if (clip.mediaUri?.contains("news_banner") == true) {
         return Color(0xFF8E0614)
     }
     return when (clip.type) {
         ClipType.AUDIO -> LaneAudio
         ClipType.TEXT -> LaneText
-        ClipType.STICKER -> Color(0xFF7B1FA2) // Fty PiP Purple Track!
+        ClipType.STICKER -> Color(0xFF7B1FA2)
         ClipType.VIDEO, ClipType.IMAGE -> {
-            // PiP Overlay டிராக்கிற்கு Fty-ல் உள்ளது போன்ற ஊதா நிறம் (Purple)
-            Color(0xFF7B1FA2)
+            if (trackType == TrackType.VIDEO) LaneVideo else Color(0xFF7B1FA2)
         }
     }
 }
@@ -554,10 +571,10 @@ private fun clipIcon(clip: Clip) = when {
     else -> Icons.Filled.Image
 }
 
-private fun clipLabel(clip: Clip): String = when {
+private fun clipLabel(clip: Clip, trackType: TrackType): String = when {
     clip.mediaUri?.contains("news_banner") == true -> "NEWS ALERT"
     clip.type == ClipType.TEXT -> clip.text?.text ?: "Text"
     clip.type == ClipType.AUDIO -> "Audio"
-    clip.type == ClipType.VIDEO -> "PiP Video"
-    else -> "PiP Photo"
+    clip.type == ClipType.VIDEO -> if (trackType == TrackType.VIDEO) "Video" else "PiP Video"
+    else -> if (trackType == TrackType.VIDEO) "Photo" else "PiP Photo"
 }
