@@ -110,13 +110,13 @@ fun PreviewPlayer(
             val h = constraints.maxHeight.toFloat()
             val density = LocalDensity.current.density
 
-            // 🌟 4:5 TPL (Video + Image Template) லேஅவுட்
+            // 4:5 TPL (Video + Image Template) லேஅவுட்
             if (isTplMode) {
                 val vH = w * (9f / 16f)
                 val barH = h - 2 * vH
                 val bottomY = vH + barH
 
-                // 1. Top Section: 16:9 மெயின் வீடியோ
+                // 1. Top Section: 16:9 மெயின் வீடியோ / படம்
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -203,7 +203,7 @@ fun PreviewPlayer(
                 }
 
             } else {
-                // 16:9 அல்லது சாதாரண 4:5 இயல்பு நிலை
+                // 16:9 அல்லது சாதாரண 4:5 இயல்பு நிலை பின்னணி
                 if (currentMainClip != null && currentMainClip.mediaUri != null) {
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
@@ -252,6 +252,7 @@ fun PreviewPlayer(
                     )
                 }
 
+                // 🌟 MAIN TRACK IMAGE: Move & Two-finger Pinch-to-Zoom வசதியுடன்
                 if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                     val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                     val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
@@ -264,6 +265,22 @@ fun PreviewPlayer(
                         val p = ((timeInClip.toFloat() - halfDuration) / halfDuration).coerceIn(0f, 1f)
                         1.10f - (0.10f * p)
                     }
+
+                    val isMainSelected = currentMainClip.id == selectedClipId
+                    val mainTransform = currentMainClip.transform
+
+                    var mainLiveOffsetX by remember(currentMainClip.id, mainTransform.offsetX) {
+                        mutableFloatStateOf(mainTransform.offsetX)
+                    }
+                    var mainLiveOffsetY by remember(currentMainClip.id, mainTransform.offsetY) {
+                        mutableFloatStateOf(mainTransform.offsetY)
+                    }
+                    var mainLiveScale by remember(currentMainClip.id, mainTransform.scale) {
+                        mutableFloatStateOf(mainTransform.scale)
+                    }
+
+                    val currentIdx = mainClips.indexOfFirst { it.id == currentMainClip.id }
+                    val nextMainClip = if (currentIdx >= 0 && currentIdx + 1 < mainClips.size) mainClips[currentIdx + 1] else null
 
                     val transition = currentMainClip.transitionToNext
                     val trDuration = transition?.durationMs ?: 0L
@@ -282,8 +299,8 @@ fun PreviewPlayer(
                     val trType = transition?.type ?: TransitionType.NONE
 
                     var currentAlpha = 1.0f
-                    var currentTransX = (currentMainClip.transform.offsetX / 2f) * w
-                    var currentTransY = (currentMainClip.transform.offsetY / 2f) * h
+                    var currentTransX = (mainLiveOffsetX / 2f) * w
+                    var currentTransY = (mainLiveOffsetY / 2f) * h
                     var currentScaleFactor = 1.0f
 
                     var nextAlpha = 0f
@@ -342,7 +359,7 @@ fun PreviewPlayer(
                         }
                     }
 
-                    // 🌟 அடுத்த படம் ட்ரான்சிஷன் நேரத்தில் திரையில் சுலபமாகத் தெரியும் அனிமேஷன்
+                    // அடுத்த படம் ட்ரான்சிஷன் நேரத்தில் திரையில் தெரியும் அனிமேஷன்
                     if (isInTransition && nextMainClip != null && nextMainClip.mediaUri != null && nextAlpha > 0f) {
                         AsyncImage(
                             model = nextMainClip.mediaUri,
@@ -361,10 +378,8 @@ fun PreviewPlayer(
                         )
                     }
 
-                    // தற்போதைய படத்தின் அனிமேஷன்
-                    val isMainSelected = currentMainClip.id == selectedClipId
-                    val mainTransform = currentMainClip.transform
-                    val totalScale = autoZoomScale * mainTransform.scale * currentScaleFactor
+                    // 🌟 Main Track Image - தொட்டு நகர்த்தும் (Move) மற்றும் இரு விரல்களால் Zoom In / Out செய்யும் Pointer Input
+                    val totalScale = autoZoomScale * mainLiveScale * currentScaleFactor
 
                     AsyncImage(
                         model = currentMainClip.mediaUri,
@@ -379,6 +394,62 @@ fun PreviewPlayer(
                                 translationX = currentTransX
                                 translationY = currentTransY
                                 rotationZ = (currentMainClip.rotationDegrees + mainTransform.rotationDegrees).toFloat()
+                            }
+                            .pointerInput(currentMainClip.id, isMainSelected, w, h) {
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    if (!isMainSelected) {
+                                        onSelectOverlay(currentMainClip.id)
+                                    }
+
+                                    var prevPointers = 0
+                                    var prevDistance = 0f
+
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val pointers = event.changes.filter { it.pressed }
+                                        if (pointers.isEmpty()) break
+
+                                        // 🌟 இரண்டு விரல்களால் தொடும்போது: Zoom In / Zoom Out (Pinch Gesture)
+                                        if (pointers.size >= 2) {
+                                            val p1 = pointers[0].position
+                                            val p2 = pointers[1].position
+                                            val currentDistance = hypot(p1.x - p2.x, p1.y - p2.y)
+
+                                            if (prevPointers >= 2 && prevDistance > 10f) {
+                                                val rawZoom = currentDistance / prevDistance
+                                                val smoothZoom = rawZoom.coerceIn(0.80f, 1.25f)
+                                                mainLiveScale = (mainLiveScale * smoothZoom).coerceIn(0.2f, 5.0f)
+                                            }
+                                            prevDistance = currentDistance
+                                            prevPointers = 2
+
+                                            val centroid = (p1 + p2) / 2f
+                                            val prevCentroid = (pointers[0].previousPosition + pointers[1].previousPosition) / 2f
+                                            val pan = centroid - prevCentroid
+                                            mainLiveOffsetX = (mainLiveOffsetX + pan.x / (w / 2f)).coerceIn(-3.0f, 3.0f)
+                                            mainLiveOffsetY = (mainLiveOffsetY + pan.y / (h / 2f)).coerceIn(-3.0f, 3.0f)
+
+                                            pointers.forEach { it.consume() }
+                                        } else if (isMainSelected) {
+                                            // 🌟 ஒரு விரலால் தொடும்போது: Move (Pan Gesture)
+                                            prevPointers = 1
+                                            prevDistance = 0f
+                                            val pointer = pointers[0]
+                                            val dx = pointer.position.x - pointer.previousPosition.x
+                                            val dy = pointer.position.y - pointer.previousPosition.y
+
+                                            mainLiveOffsetX = (mainLiveOffsetX + dx / (w / 2f)).coerceIn(-3.0f, 3.0f)
+                                            mainLiveOffsetY = (mainLiveOffsetY + dy / (h / 2f)).coerceIn(-3.0f, 3.0f)
+                                            pointer.consume()
+                                        }
+                                    } while (true)
+
+                                    if (isMainSelected) {
+                                        onMoveOverlay(currentMainClip.id, mainLiveOffsetX, mainLiveOffsetY)
+                                        onScaleOverlay(currentMainClip.id, mainLiveScale)
+                                    }
+                                }
                             }
                             .then(
                                 if (isMainSelected) {
@@ -494,9 +565,17 @@ private fun PipLayer(
     } ?: return
 
     val context = LocalContext.current
-    var cutoutUri by remember(active.id, active.filter?.id) { mutableStateOf<String?>(null) }
     val isAiCutoutOn = active.filter?.id?.contains("cutout") == true
     val isFlipped = active.filter?.id?.contains("flip") == true
+
+    var cutoutUri by remember(active.id, active.filter?.id) {
+        mutableStateOf(
+            if (isAiCutoutOn && active.mediaUri != null) {
+                val f = java.io.File(context.cacheDir, "cutout_${active.mediaUri.hashCode()}.png")
+                if (f.exists() && f.length() > 0L) android.net.Uri.fromFile(f).toString() else null
+            } else null
+        )
+    }
 
     LaunchedEffect(active.id, active.mediaUri, isAiCutoutOn) {
         if (isAiCutoutOn && active.mediaUri != null && active.type == ClipType.IMAGE) {
