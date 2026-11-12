@@ -342,7 +342,6 @@ class EditorViewModel @Inject constructor(
     }
 
     // ------------------------------------------------------------------ Fty PiP (Picture-in-Picture)
-    /** Fty PiP: வீடியோ அல்லது போட்டோ இரண்டையுமே PiP-ஆகச் சேர்க்கும் செயல்பாடு */
     fun addPipAtPlayhead(uri: String) {
         viewModelScope.launch {
             val media = resolveAnyMedia(uri) ?: return@launch
@@ -355,9 +354,7 @@ class EditorViewModel @Inject constructor(
                 type = if (isVideo) ClipType.VIDEO else ClipType.IMAGE,
                 transform = Transform(offsetX = 0.0f, offsetY = 0.0f, scale = 0.5f),
                 crop = CropRect(0f, 0f, 1f, 1f),
-                keyframes = listOf(
-                    Keyframe(timeMs = 0L, offsetX = 0.0f, offsetY = 0.0f, scale = 0.5f),
-                ),
+                keyframes = emptyList(), // இயல்பாக எவ்வித லாக் கீபிரேமும் இல்லாமல் சேர்க்கப்படுகிறது
             )
             val track = _uiState.value.timeline.tracks
                 .firstOrNull { it.type == TrackType.OVERLAY }
@@ -373,7 +370,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** CLIP END: மெயின் வீடியோ கிளிப் முடியும் வரை PiP-ஐ நீட்டிக்கும் செயல்பாடு */
     fun setPipToClipEnd() = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
         val videoTrack = _uiState.value.timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
@@ -389,7 +385,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** VID END: முழு வீடியோ முடியும் இறுதி வரை PiP-ஐ நீட்டிக்கும் செயல்பாடு */
     fun setPipToVideoEnd() = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
         val totalMs = _uiState.value.timeline.durationMs
@@ -402,7 +397,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** FLIP: PiP-ஐ இடமிருந்து வலமாக மிரர் (Horizontal Flip) செய்யும் செயல்பாடு */
     fun flipSelectedPip() = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
         mutate(structural = false) { timeline ->
@@ -419,7 +413,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** Fty HTML MediaPipe பாணியில் Google AI Human Cutout இயக்குதல்/நிறுத்துதல் */
     fun togglePipCutout() = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
         mutate(structural = false) { timeline ->
@@ -684,17 +677,52 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(selectedClipId = clip.id) }
     }
 
+    /**
+     * PiP-ஐ நீங்கள் நகர்த்தி வைத்த இடத்தில் லாக் செய்யும் மெத்தட் (Keyframe இருந்தால் அதையும் சேர்த்து அப்டேட் செய்யும்)
+     */
     fun setOverlayPosition(clipId: String, offsetX: Float, offsetY: Float) {
         val clip = currentClip(clipId) ?: return
-        mutate(structural = false) {
-            TimelineEditor.setTransform(it, clipId, clip.transform.copy(offsetX = offsetX, offsetY = offsetY))
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, clipId) { c ->
+                val newTransform = c.transform.copy(offsetX = offsetX, offsetY = offsetY)
+                val updatedKfs = if (c.keyframes.isNotEmpty()) {
+                    val timeInClip = (_uiState.value.playheadMs - c.timelineStartMs).coerceAtLeast(0L)
+                    if (c.keyframes.size == 1) {
+                        c.keyframes.map { it.copy(offsetX = offsetX, offsetY = offsetY) }
+                    } else {
+                        val nearIdx = c.keyframes.indexOfFirst { abs(it.timeMs - timeInClip) <= 250L }
+                        if (nearIdx >= 0) {
+                            c.keyframes.mapIndexed { idx, kf ->
+                                if (idx == nearIdx) kf.copy(offsetX = offsetX, offsetY = offsetY) else kf
+                            }
+                        } else {
+                            c.keyframes
+                        }
+                    }
+                } else {
+                    c.keyframes
+                }
+                c.copy(transform = newTransform, keyframes = updatedKfs)
+            }
         }
     }
 
+    /**
+     * PiP அளவை (Scale) மாற்றிய இடத்தில் லாக் செய்யும் மெத்தட்
+     */
     fun setOverlayScale(clipId: String, scale: Float) {
         val clip = currentClip(clipId) ?: return
-        mutate(structural = false) {
-            TimelineEditor.setTransform(it, clipId, clip.transform.copy(scale = scale.coerceIn(0.1f, 4.0f)))
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, clipId) { c ->
+                val newScale = scale.coerceIn(0.1f, 4.0f)
+                val newTransform = c.transform.copy(scale = newScale)
+                val updatedKfs = if (c.keyframes.size == 1) {
+                    c.keyframes.map { it.copy(scale = newScale) }
+                } else {
+                    c.keyframes
+                }
+                c.copy(transform = newTransform, keyframes = updatedKfs)
+            }
         }
     }
 
@@ -709,7 +737,6 @@ class EditorViewModel @Inject constructor(
         scheduleSave()
     }
 
-    /** Fty Live On-Screen Free Crop மாற்றங்களை உடனுக்குடன் Timeline Clip-ல் சேமித்தல் */
     fun setCrop(clipId: String, crop: CropRect) {
         mutate(structural = false) {
             TimelineEditor.updateClip(it, clipId) { c -> c.copy(crop = crop) }
