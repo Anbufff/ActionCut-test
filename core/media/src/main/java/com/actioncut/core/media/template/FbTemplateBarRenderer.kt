@@ -12,6 +12,7 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.net.Uri
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -46,24 +47,34 @@ object FbTemplateBarRenderer {
         canvas.drawRect(0f, 0f, w, h, bgPaint)
 
         val cy = h / 2f
-        val cx = w * 0.105f
+        val cx = w * 0.118f
 
-        // 2. இடதுபுறம்: NEWS CRICK லோகோ
-        val logoH = h * 0.80f
-        val logoW = logoH * (4f / 3f)
-        val logoScale = if (t < 0.45f) {
-            val p = (t / 0.45f).coerceIn(0f, 1f)
-            (1f - (1f - p).pow(3)) * (1f + 0.12f * sin(p * Math.PI).toFloat())
-        } else if (tt < 0.5f) {
-            1f + 0.07f * sin((tt / 0.5f) * Math.PI).toFloat()
+        // 🌟 2. இடதுபுறம்: Fty அசல் NEWS CRICK லோகோ அனிமேஷன்
+        val logoH = h * 0.82f
+        val logoW = logoH * 1.36f
+
+        // (அ) தொடக்க Pop-in Bounce
+        val intro = if (t < 0.55f) {
+            val p = (t / 0.55f).coerceIn(0f, 1f)
+            (1f - (1f - p).pow(3)) * (1f + 0.16f * sin(p * Math.PI.toFloat()))
         } else {
             1f
         }
 
+        // (ஆ) வீடியோ ஓடும் போது தொடர்ச்சியாக 3.5 வினாடிக்கு ஒருமுறை துடிக்கும் Heartbeat Pulse
+        val pulseCycle = 3.5f
+        val pt = (t % pulseCycle)
+        val pulse = if (pt < 0.40f) {
+            val p = pt / 0.40f
+            sin(p * Math.PI.toFloat() * 2f) * 0.055f * (1f - p)
+        } else 0f
+
+        val logoScale = intro * (1f + pulse)
+
         canvas.save()
         canvas.translate(cx, cy)
         canvas.scale(logoScale, logoScale)
-        drawNewsCrickBadge(canvas, -logoW / 2f, -logoH / 2f, logoW, logoH)
+        drawNewsCrickBadge(canvas, -logoW / 2f, -logoH / 2f, logoW, logoH, t)
         canvas.restore()
 
         // 3. மூன்று பட்டன்கள்: Like, Message, Share
@@ -260,40 +271,166 @@ object FbTemplateBarRenderer {
         canvas.restore()
     }
 
-    private fun drawNewsCrickBadge(canvas: Canvas, x: Float, y: Float, w: Float, h: Float) {
-        val r = h * 0.12f
+    /**
+     * 🌟 Fty 100% அசல் NEWS CRICK பேட்ஜ்:
+     * - 3D Metallic Dark Navy Blue Gradient
+     * - Dual Gold Beveled Border
+     * - Red "• NEWS" Badge with Live Indicator
+     * - 3D Gold "CRiCK" Title
+     * - Shimmer Glint Beam Sweep Animation
+     */
+    private fun drawNewsCrickBadge(canvas: Canvas, x: Float, y: Float, w: Float, h: Float, t: Float) {
+        val r = h * 0.15f
+        val rect = RectF(x, y, x + w, y + h)
+
+        // 1. பேட்ஜின் கீழ் உள்ள 3D நிழல்
+        val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(120, 0, 0, 0)
+        }
+        canvas.drawRoundRect(RectF(x, y + h * 0.04f, x + w, y + h * 1.04f), r, r, shadowPaint)
+
+        // 2. 3D Metallic Dark Navy Blue Background Gradient
         val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#14294F")
+            shader = LinearGradient(
+                x, y, x, y + h,
+                intArrayOf(
+                    Color.parseColor("#122A54"),
+                    Color.parseColor("#1B3E7A"),
+                    Color.parseColor("#0A1C3B")
+                ),
+                floatArrayOf(0f, 0.45f, 1f),
+                Shader.TileMode.CLAMP
+            )
         }
-        canvas.drawRoundRect(RectF(x, y, x + w, y + h), r, r, bgPaint)
+        canvas.drawRoundRect(rect, r, r, bgPaint)
 
+        // 3. Dual Beveled Gold Border
+        val borderW = h * 0.045f
         val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#FFD700")
             style = Paint.Style.STROKE
-            strokeWidth = h * 0.04f
+            strokeWidth = borderW
+            shader = LinearGradient(
+                x, y, x + w, y + h,
+                intArrayOf(
+                    Color.parseColor("#FFF380"),
+                    Color.parseColor("#FFD700"),
+                    Color.parseColor("#FFA000"),
+                    Color.parseColor("#FFD700")
+                ),
+                floatArrayOf(0f, 0.35f, 0.7f, 1f),
+                Shader.TileMode.CLAMP
+            )
         }
-        canvas.drawRoundRect(RectF(x, y, x + w, y + h), r, r, borderPaint)
+        canvas.drawRoundRect(rect, r, r, borderPaint)
 
-        // NEWS Badge
-        val newsW = w * 0.70f
-        val newsH = h * 0.35f
-        val newsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#D10000")
+        // 4. "NEWS" Top Red Pill Badge
+        val newsW = w * 0.76f
+        val newsH = h * 0.34f
+        val newsX = x + (w - newsW) / 2f
+        val newsY = y + h * 0.09f
+        val newsR = newsH * 0.28f
+        val newsRect = RectF(newsX, newsY, newsX + newsW, newsY + newsH)
+
+        val newsBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = LinearGradient(
+                newsX, newsY, newsX, newsY + newsH,
+                intArrayOf(Color.parseColor("#FF172A"), Color.parseColor("#C4000C")),
+                null, Shader.TileMode.CLAMP
+            )
         }
-        canvas.drawRoundRect(RectF(x + (w - newsW) / 2f, y + h * 0.10f, x + (w + newsW) / 2f, y + h * 0.10f + newsH), 4f, 4f, newsPaint)
+        canvas.drawRoundRect(newsRect, newsR, newsR, newsBgPaint)
 
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        // NEWS Outline
+        val newsStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = h * 0.018f
+            color = Color.parseColor("#FF7A85")
+        }
+        canvas.drawRoundRect(newsRect, newsR, newsR, newsStrokePaint)
+
+        // Live Blinking Indicator Dot
+        val dotAlpha = (160 + 95 * sin(t * 8f)).roundToInt().coerceIn(0, 255)
+        val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(dotAlpha, 255, 255, 255)
+        }
+        val dotRadius = newsH * 0.13f
+        val dotX = newsX + newsW * 0.14f
+        val dotY = newsY + newsH * 0.50f
+        canvas.drawCircle(dotX, dotY, dotRadius, dotPaint)
+
+        // NEWS Text
+        val newsTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = newsH * 0.75f
+            textSize = newsH * 0.72f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             textAlign = Paint.Align.CENTER
+            letterSpacing = 0.06f
+            setShadowLayer(4f, 0f, 1.5f, Color.parseColor("#66000000"))
         }
-        canvas.drawText("NEWS", x + w / 2f, y + h * 0.10f + newsH * 0.75f, textPaint)
+        canvas.drawText("NEWS", newsX + newsW * 0.56f, newsY + newsH * 0.76f, newsTextPaint)
 
-        // CRICK Title
-        textPaint.color = Color.parseColor("#FFCC00")
-        textPaint.textSize = h * 0.35f
-        canvas.drawText("CRiCK", x + w / 2f, y + h * 0.85f, textPaint)
+        // 5. "CRiCK" Main Title with 3D Drop Shadow & Gold Gradient
+        val crickTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = h * 0.38f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+            letterSpacing = 0.08f
+        }
+
+        val crickX = x + w / 2f
+        val crickY = y + h * 0.86f
+
+        // 3D Black Outline
+        crickTextPaint.style = Paint.Style.STROKE
+        crickTextPaint.strokeWidth = h * 0.045f
+        crickTextPaint.color = Color.BLACK
+        canvas.drawText("CRiCK", crickX, crickY, crickTextPaint)
+
+        // Bright Metallic Gold Gradient Fill
+        crickTextPaint.style = Paint.Style.FILL
+        crickTextPaint.shader = LinearGradient(
+            x, crickY - h * 0.38f, x, crickY,
+            intArrayOf(
+                Color.parseColor("#FFFFFF"),
+                Color.parseColor("#FFE853"),
+                Color.parseColor("#FFC400"),
+                Color.parseColor("#FFA000")
+            ),
+            floatArrayOf(0f, 0.25f, 0.7f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawText("CRiCK", crickX, crickY, crickTextPaint)
+        crickTextPaint.shader = null
+
+        // 6. 🌟 Shimmer / Glint Beam Sweep Animation (ஒவ்வொரு 4 வினாடிக்கும் ஒளிரும் வெள்ளைக்கற்றை)
+        val shimmerPeriod = 4.0f
+        val shimmerDuration = 0.85f
+        val st = (t % shimmerPeriod)
+        if (st < shimmerDuration) {
+            val progress = st / shimmerDuration
+            canvas.save()
+            val clipPath = Path().apply {
+                addRoundRect(rect, r, r, Path.Direction.CW)
+            }
+            canvas.clipPath(clipPath)
+
+            val beamX = x - w * 0.4f + (w * 1.8f) * progress
+            val beamW = w * 0.35f
+            val glintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = LinearGradient(
+                    beamX, y, beamX + beamW, y + h,
+                    intArrayOf(
+                        Color.argb(0, 255, 255, 255),
+                        Color.argb(120, 255, 255, 255),
+                        Color.argb(0, 255, 255, 255)
+                    ),
+                    floatArrayOf(0f, 0.5f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+            }
+            canvas.drawRect(x, y, x + w, y + h, glintPaint)
+            canvas.restore()
+        }
     }
 
     /**
