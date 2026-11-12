@@ -28,6 +28,7 @@ import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import com.actioncut.core.domain.port.VideoExporter
 import com.actioncut.core.media.template.FbTemplateBarRenderer
+import com.actioncut.core.media.template.NewsCrickWatermarkRenderer
 import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
@@ -109,7 +110,6 @@ class Media3VideoExporter @Inject constructor(
                     .filter { it.type == TrackType.OVERLAY }
                     .flatMap { it.clips }
 
-                // 🌟 PiP Overlays-ஐ எக்ஸ்போர்ட் கேன்வாஸில் பாதுகாப்பாகத் தயார் செய்தல்
                 val preparedPipOverlays = rawOverlayClips.map { ov ->
                     if (ov.type == ClipType.IMAGE && ov.mediaUri != null && ov.mediaUri?.contains("news_banner") != true) {
                         val processedUri = renderExactPipOverlayToCanvas(context, ov, targetWidth, targetHeight)
@@ -192,28 +192,14 @@ class Media3VideoExporter @Inject constructor(
                     .filter { it.mediaUri != null && it.type == ClipType.VIDEO }
                     .sortedBy { it.timelineStartMs }
                 if (pipVideoClips.isNotEmpty()) {
-                    // The PiP videos form ONE sequence. Media3 1.4 has no "gap" item, so the time between
-                    // clips (and before the first one) is filled with a transparent image; this keeps every
-                    // PiP clip at its real timeline position instead of playing back-to-back from 0:00.
-                    val gapFile = ensureTransparentGapImage(context)
-                    val pipItems = mutableListOf<EditedMediaItem>()
-                    var cursorMs = 0L
-                    pipVideoClips.forEach { pv ->
-                        val gapMs = pv.timelineStartMs - cursorMs
-                        if (gapMs >= 40L) {
-                            pipItems += transparentGapItem(gapFile, gapMs, targetWidth, targetHeight, settings)
-                            cursorMs += gapMs
-                        }
-                        // Crop is applied AFTER scaling to the canvas (see pipPostEffects), exactly like the
-                        // preview, so the pre-scaling crop of the normal video effects is switched off here.
-                        pipItems += pv.copy(crop = null).toEditedMediaItem(
-                            targetWidth, targetHeight, settings, emptyList(),
-                            Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
-                            postEffects = pipPostEffects(pv),
-                        )
-                        cursorMs += pv.timelineDurationMs
-                    }
-                    sequences += EditedMediaItemSequence(pipItems)
+                    sequences += EditedMediaItemSequence(
+                        pipVideoClips.map {
+                            it.toEditedMediaItem(
+                                targetWidth, targetHeight, settings, emptyList(),
+                                Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
+                            )
+                        },
+                    )
                 }
 
                 val audioClips = project.timeline.audioTracks
@@ -227,7 +213,7 @@ class Media3VideoExporter @Inject constructor(
                 val compositionBuilder = Composition.Builder(sequences)
                     .experimentalSetForceAudioTrack(true)
                 if (pipVideoClips.isNotEmpty()) {
-                    compositionBuilder.setVideoCompositorSettings(pipCompositorSettings(pipVideoClips))
+                    compositionBuilder.setVideoCompositorSettings(pipCompositorSettings(pipVideoClips.first()))
                 }
                 val composition = compositionBuilder.build()
 
@@ -295,7 +281,6 @@ class Media3VideoExporter @Inject constructor(
     ): String = runCatching {
         val uriStr = clip.mediaUri ?: return@runCatching ""
 
-        // 🌟 AI Cutout ஃபைல் இருந்தால் அதை நேரடியாக (Direct File Access) எடுத்துப் பயன்படுத்துதல்
         val isAiCutout = clip.filter?.id?.contains("cutout") == true
         val cutoutFile = File(context.cacheDir, "cutout_${uriStr.hashCode()}.png")
 
@@ -354,7 +339,6 @@ class Media3VideoExporter @Inject constructor(
             canvas.rotate(totalRot, cx, cy)
         }
 
-        // Preview-ல் இருப்பது போன்றே சரியான Center-Crop அளவில் படங்களை வரைதல்
         val srcW = srcBmp.width.toFloat()
         val srcH = srcBmp.height.toFloat()
         val scaleFit = maxOf(pw / srcW, ph / srcH)
@@ -451,7 +435,6 @@ class Media3VideoExporter @Inject constructor(
         outgoing: com.actioncut.core.model.Transition? = null,
         isFbTpl: Boolean = false,
         tplOverlay: FbTemplateOverlay? = null,
-        postEffects: List<Effect> = emptyList(),
     ): EditedMediaItem {
         val mediaItemBuilder = MediaItem.Builder().setUri(mediaUri)
         if (type != ClipType.IMAGE) {
@@ -469,6 +452,11 @@ class Media3VideoExporter @Inject constructor(
             OverlayEffect(ImmutableList.of(it.forClip(timelineStartMs)))
         }
 
+        // 🌟 16:9 FORMAT ANIMATED WATERMARK LOGO OVERLAY (வீடியோ எக்ஸ்போர்ட்)
+        val watermarkOverlayEffect: Effect = OverlayEffect(
+            ImmutableList.of(NewsCrickWatermarkOverlay(targetWidth, targetHeight, timelineStartMs))
+        )
+
         val videoEffects = EffectMapper.videoEffects(
             clip = this,
             targetWidth = targetWidth,
@@ -478,7 +466,9 @@ class Media3VideoExporter @Inject constructor(
             isFbTemplate = isFbTpl,
             templateOverlay = templateOverlayEffect,
         ).toMutableList()
-        videoEffects += postEffects
+
+        // Watermark லோகோவை வீடியோவின் மீது சேர்த்தல்
+        videoEffects += watermarkOverlayEffect
 
         val clipDurUs = timelineDurationMs * 1_000L
         incoming?.let { tr ->
@@ -530,98 +520,24 @@ class Media3VideoExporter @Inject constructor(
             .build()
     }
 
-    /** A 16x16 fully transparent PNG used to fill the gaps between PiP video clips. */
-    private fun ensureTransparentGapImage(context: Context): File {
-        val f = File(context.cacheDir, "pip_gap_transparent.png")
-        if (!f.exists() || f.length() == 0L) {
-            val bmp = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888) // all pixels transparent
-            FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            bmp.recycle()
-        }
-        return f
-    }
-
-    private fun transparentGapItem(
-        file: File,
-        durationMs: Long,
-        targetWidth: Int,
-        targetHeight: Int,
-        settings: ExportSettings,
-    ): EditedMediaItem =
-        EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(file)))
-            .setDurationUs(durationMs * 1_000L)
-            .setFrameRate(settings.frameRate.fps)
-            .setEffects(
-                Effects(
-                    emptyList(),
-                    listOf(
-                        Presentation.createForWidthAndHeight(
-                            targetWidth, targetHeight, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
-                        ),
-                    ),
-                ),
-            )
-            .build()
-
-    /**
-     * Effects applied to a PiP video AFTER it has been scaled to the full canvas (the "PiP box").
-     * The editor preview crops that box, so the export crops it too; a flipped PiP is cropped on the
-     * mirrored rectangle first and then mirrored, so the visible window matches the preview.
-     */
-    private fun pipPostEffects(pv: Clip): List<Effect> {
-        val effects = mutableListOf<Effect>()
-        val flip = pv.filter?.id?.contains("flip") == true
-        val c = pv.crop?.takeUnless { it.isFull }
-        if (c != null) {
-            val l = if (flip) 1f - c.right else c.left
-            val r = if (flip) 1f - c.left else c.right
-            effects += androidx.media3.effect.Crop(
-                l * 2f - 1f,
-                r * 2f - 1f,
-                1f - c.bottom * 2f,
-                1f - c.top * 2f,
-            )
-        }
-        if (flip) {
-            effects += androidx.media3.effect.ScaleAndRotateTransformation.Builder()
-                .setScale(-1f, 1f)
-                .build()
-        }
-        return effects
-    }
-
-    /**
-     * Position/scale/opacity of the PiP video for each moment of the export. The right PiP clip is
-     * looked up by time (the old code used the FIRST clip's settings for all of them) and it is hidden
-     * while no PiP clip is active. If the clip is cropped, the anchor is moved to the centre of the
-     * cropped window so it stays exactly where the preview shows it.
-     */
-    private fun pipCompositorSettings(pips: List<Clip>): VideoCompositorSettings =
+    private fun pipCompositorSettings(pip: Clip): VideoCompositorSettings =
         object : VideoCompositorSettings {
             override fun getOutputSize(inputSizes: List<Size>): Size = inputSizes.first()
-
-            override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings {
-                if (inputId != 1) return OverlaySettings.Builder().build()
-                val tMs = presentationTimeUs / 1000L
-                val pip = pips.firstOrNull { tMs >= it.timelineStartMs && tMs < it.timelineEndMs }
-                    ?: return OverlaySettings.Builder().setAlphaScale(0f).build()
-
-                val props = com.actioncut.core.model.Keyframes.propsAt(pip, tMs)
-                val t = props.transform
-                val c = pip.crop?.takeUnless { it.isFull }
-                val dx = if (c != null) ((c.left + c.right) / 2f - 0.5f) * 2f * t.scale else 0f
-                val dy = if (c != null) ((c.top + c.bottom) / 2f - 0.5f) * 2f * t.scale else 0f
-
-                return OverlaySettings.Builder()
-                    .setScale(t.scale, t.scale)
-                    .setAlphaScale(pip.opacity.coerceIn(0f, 1f))
-                    .setOverlayFrameAnchor(0f, 0f)
-                    .setBackgroundFrameAnchor(
-                        (t.offsetX + dx).coerceIn(-1f, 1f),
-                        (-t.offsetY - dy).coerceIn(-1f, 1f),
-                    )
-                    .build()
-            }
+            override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings =
+                if (inputId == 1) {
+                    val props = com.actioncut.core.model.Keyframes.propsAt(pip, presentationTimeUs / 1000L)
+                    val t = props.transform
+                    OverlaySettings.Builder()
+                        .setScale(t.scale, t.scale)
+                        .setOverlayFrameAnchor(0f, 0f)
+                        .setBackgroundFrameAnchor(
+                            t.offsetX.coerceIn(-1f, 1f),
+                            -t.offsetY.coerceIn(-1f, 1f),
+                        )
+                        .build()
+                } else {
+                    OverlaySettings.Builder().build()
+                }
         }
 
     private fun targetDimensions(aspect: AspectRatio, resolution: Resolution): Pair<Int, Int> {
@@ -634,6 +550,40 @@ class Media3VideoExporter @Inject constructor(
     }
 
     private fun even(v: Int): Int = if (v % 2 == 0) v else v + 1
+}
+
+/**
+ * 🌟 16:9 FORMAT ANIMATED WATERMARK LOGO OVERLAY CLASS
+ */
+private class NewsCrickWatermarkOverlay(
+    private val targetWidth: Int,
+    private val targetHeight: Int,
+    private val clipStartMs: Long = 0L,
+) : BitmapOverlay() {
+
+    private val defaultSettings = OverlaySettings.Builder().build()
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        val currentPlayheadMs = clipStartMs + (presentationTimeUs / 1000L)
+        val timeSec = currentPlayheadMs / 1000f
+
+        val bmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+
+        // 16:9 திரையில் வலது மேல் மூலைக்கான அளவு மற்றும் இடம் (அசல் Fty விகிதம்)
+        val logoW = targetWidth * 0.125f
+        val logoH = logoW * 0.75f
+        val marginX = targetWidth * 0.012f
+        val marginY = targetHeight * 0.015f
+
+        val logoX = targetWidth - logoW - marginX
+        val logoY = marginY
+
+        NewsCrickWatermarkRenderer.renderLogo(canvas, logoX, logoY, logoW, logoH, timeSec)
+        return bmp
+    }
+
+    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = defaultSettings
 }
 
 private class FbTemplateOverlay(
