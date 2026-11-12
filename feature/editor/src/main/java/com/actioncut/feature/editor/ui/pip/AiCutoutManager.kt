@@ -10,94 +10,135 @@ import com.google.mlkit.vision.segmentation.Segmentation
 import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import kotlin.coroutines.resume
 
+/**
+ * On-device human cutout (ML Kit Selfie Segmentation).
+ *
+ * IMPORTANT: the output file name `cutout_<uri.hashCode()>.png` is also computed by
+ * PreviewPlayer.kt and Media3VideoExporter.kt, so do NOT change [cutoutFile]'s naming.
+ *
+ * Improvements over the previous version:
+ *  - Result is found on disk even after the app restarts (old code re-ran the AI every launch).
+ *  - Only one segmentation runs at a time (ViewModel + PreviewPlayer both trigger it).
+ *  - File is written to a temp file and renamed, so the exporter / preview can never read a
+ *    half-written PNG.
+ *  - Segmenter is closed if the coroutine is cancelled; bitmaps are recycled.
+ */
 object AiCutoutManager {
-    private val cutoutCache = mutableMapOf<String, String>()
+    private val mutex = Mutex()
 
-    suspend fun getOrCreateCutoutUri(context: Context, imageUriStr: String): String? = withContext(Dispatchers.IO) {
-        if (cutoutCache.containsKey(imageUriStr)) {
-            val cachedPath = cutoutCache[imageUriStr]
-            if (cachedPath != null && File(cachedPath).exists() && File(cachedPath).length() > 0L) {
-                return@withContext Uri.fromFile(File(cachedPath)).toString()
+    private fun cutoutFile(context: Context, imageUriStr: String): File =
+        File(context.cacheDir, "cutout_${imageUriStr.hashCode()}.png")
+
+    suspend fun getOrCreateCutoutUri(context: Context, imageUriStr: String): String? =
+        withContext(Dispatchers.IO) {
+            val outFile = cutoutFile(context, imageUriStr)
+            if (outFile.exists() && outFile.length() > 0L) {
+                return@withContext Uri.fromFile(outFile).toString()
+            }
+
+            mutex.withLock {
+                // Another caller may have finished while we waited for the lock.
+                if (outFile.exists() && outFile.length() > 0L) {
+                    return@withLock Uri.fromFile(outFile).toString()
+                }
+
+                val originalBmp = decodeUriToBitmap(context, imageUriStr)
+                    ?: return@withLock null
+
+                val cutoutBmp = try {
+                    runSelfieSegmentation(originalBmp)
+                } finally {
+                    originalBmp.recycle()
+                } ?: return@withLock null
+
+                val tmpFile = File(context.cacheDir, "cutout_${imageUriStr.hashCode()}.png.tmp")
+                val saved = runCatching {
+                    FileOutputStream(tmpFile).use { out ->
+                        cutoutBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+                    }
+                }.getOrDefault(false)
+                cutoutBmp.recycle()
+
+                if (!saved || !tmpFile.renameTo(outFile)) {
+                    tmpFile.delete()
+                    return@withLock null
+                }
+                Uri.fromFile(outFile).toString()
             }
         }
 
-        val originalBmp = decodeUriToBitmap(context, imageUriStr) ?: return@withContext null
+    private suspend fun runSelfieSegmentation(sourceBmp: Bitmap): Bitmap? =
+        suspendCancellableCoroutine { continuation ->
+            try {
+                val options = SelfieSegmenterOptions.Builder()
+                    .setDetectorMode(SelfieSegmenterOptions.SINGLE_IMAGE_MODE)
+                    .build()
+                val segmenter = Segmentation.getClient(options)
+                continuation.invokeOnCancellation { runCatching { segmenter.close() } }
 
-        val cutoutBmp = runSelfieSegmentation(originalBmp) ?: return@withContext null
+                val inputImage = InputImage.fromBitmap(sourceBmp, 0)
 
-        val outFile = File(context.cacheDir, "cutout_${imageUriStr.hashCode()}.png")
-        FileOutputStream(outFile).use { out ->
-            cutoutBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-        }
-        cutoutCache[imageUriStr] = outFile.absolutePath
-        return@withContext Uri.fromFile(outFile).toString()
-    }
+                segmenter.process(inputImage)
+                    .addOnSuccessListener { mask ->
+                        var result: Bitmap? = null
+                        try {
+                            val maskBuffer: ByteBuffer = mask.buffer
+                            val maskWidth = mask.width
+                            val maskHeight = mask.height
 
-    private suspend fun runSelfieSegmentation(sourceBmp: Bitmap): Bitmap? = suspendCancellableCoroutine { continuation ->
-        try {
-            val options = SelfieSegmenterOptions.Builder()
-                .setDetectorMode(SelfieSegmenterOptions.SINGLE_IMAGE_MODE)
-                .build()
-            val segmenter = Segmentation.getClient(options)
-            val inputImage = InputImage.fromBitmap(sourceBmp, 0)
+                            val scaledSrc =
+                                if (sourceBmp.width != maskWidth || sourceBmp.height != maskHeight) {
+                                    Bitmap.createScaledBitmap(sourceBmp, maskWidth, maskHeight, true)
+                                } else sourceBmp
 
-            segmenter.process(inputImage)
-                .addOnSuccessListener { mask ->
-                    try {
-                        val maskBuffer: ByteBuffer = mask.buffer
-                        val maskWidth = mask.width
-                        val maskHeight = mask.height
+                            val pixels = IntArray(maskWidth * maskHeight)
+                            scaledSrc.getPixels(pixels, 0, maskWidth, 0, 0, maskWidth, maskHeight)
+                            if (scaledSrc !== sourceBmp) scaledSrc.recycle()
 
-                        val resultBitmap = Bitmap.createBitmap(maskWidth, maskHeight, Bitmap.Config.ARGB_8888)
-                        val pixels = IntArray(maskWidth * maskHeight)
-                        val scaledSrc = if (sourceBmp.width != maskWidth || sourceBmp.height != maskHeight) {
-                            Bitmap.createScaledBitmap(sourceBmp, maskWidth, maskHeight, true)
-                        } else sourceBmp
-
-                        scaledSrc.getPixels(pixels, 0, maskWidth, 0, 0, maskWidth, maskHeight)
-
-                        maskBuffer.rewind()
-                        for (i in pixels.indices) {
-                            val confidence = maskBuffer.float
-                            if (confidence < 0.40f) {
-                                pixels[i] = Color.TRANSPARENT
-                            } else if (confidence < 0.85f) {
-                                val alpha = ((confidence - 0.40f) / 0.45f * 255).toInt().coerceIn(0, 255)
-                                val origColor = pixels[i]
-                                pixels[i] = Color.argb(
-                                    alpha,
-                                    Color.red(origColor),
-                                    Color.green(origColor),
-                                    Color.blue(origColor),
-                                )
+                            maskBuffer.rewind()
+                            for (i in pixels.indices) {
+                                val confidence = maskBuffer.float
+                                if (confidence < 0.40f) {
+                                    pixels[i] = Color.TRANSPARENT
+                                } else if (confidence < 0.85f) {
+                                    val alpha = ((confidence - 0.40f) / 0.45f * 255).toInt().coerceIn(0, 255)
+                                    val orig = pixels[i]
+                                    pixels[i] = Color.argb(
+                                        alpha,
+                                        Color.red(orig),
+                                        Color.green(orig),
+                                        Color.blue(orig),
+                                    )
+                                }
                             }
+                            val bmp = Bitmap.createBitmap(maskWidth, maskHeight, Bitmap.Config.ARGB_8888)
+                            bmp.setPixels(pixels, 0, maskWidth, 0, 0, maskWidth, maskHeight)
+                            result = bmp
+                        } catch (t: Throwable) {
+                            result = null
+                        } finally {
+                            runCatching { segmenter.close() }
                         }
-                        resultBitmap.setPixels(pixels, 0, maskWidth, 0, 0, maskWidth, maskHeight)
-                        segmenter.close()
-                        if (continuation.isActive) continuation.resume(resultBitmap)
-                    } catch (t: Throwable) {
-                        segmenter.close()
+                        if (continuation.isActive) continuation.resume(result)
+                    }
+                    .addOnFailureListener {
+                        runCatching { segmenter.close() }
                         if (continuation.isActive) continuation.resume(null)
                     }
-                }
-                .addOnFailureListener {
-                    segmenter.close()
-                    if (continuation.isActive) continuation.resume(null)
-                }
-        } catch (t: Throwable) {
-            if (continuation.isActive) continuation.resume(null)
+            } catch (t: Throwable) {
+                if (continuation.isActive) continuation.resume(null)
+            }
         }
-    }
 
-    /**
-     * OOM (Memory Full) பிழை வராமல் இருக்க படத்தை அதிகபட்சம் 1280px அளவுக்கு Safe Downsample செய்து எடுக்கும் மெத்தட்
-     */
+    /** Decodes the image, down-sampled to at most ~1280px to avoid OutOfMemory. */
     private fun decodeUriToBitmap(context: Context, uriStr: String): Bitmap? = runCatching {
         val uri = Uri.parse(uriStr)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
