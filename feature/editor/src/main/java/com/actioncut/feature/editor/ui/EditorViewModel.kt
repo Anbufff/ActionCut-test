@@ -354,7 +354,8 @@ class EditorViewModel @Inject constructor(
                 type = if (isVideo) ClipType.VIDEO else ClipType.IMAGE,
                 transform = Transform(offsetX = 0.0f, offsetY = 0.0f, scale = 0.5f),
                 crop = CropRect(0f, 0f, 1f, 1f),
-                keyframes = emptyList(), // இயல்பாக எவ்வித லாக் கீபிரேமும் இல்லாமல் சேர்க்கப்படுகிறது
+                effects = emptyList(),   // PiP-ல் எவ்வித ஆட்டோ-ஜூம் எஃபெக்ட்டும் இருக்காது
+                keyframes = emptyList(), // PiP-ல் எவ்வித ஆட்டோ-கீபிரேமும் இருக்காது
             )
             val track = _uiState.value.timeline.tracks
                 .firstOrNull { it.type == TrackType.OVERLAY }
@@ -678,29 +679,27 @@ class EditorViewModel @Inject constructor(
     }
 
     /**
-     * PiP-ஐ நீங்கள் நகர்த்தி வைத்த இடத்தில் லாக் செய்யும் மெத்தட் (Keyframe இருந்தால் அதையும் சேர்த்து அப்டேட் செய்யும்)
+     * PiP நகர்த்திய இடத்தை லாக் செய்தல்
      */
     fun setOverlayPosition(clipId: String, offsetX: Float, offsetY: Float) {
         val clip = currentClip(clipId) ?: return
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, clipId) { c ->
                 val newTransform = c.transform.copy(offsetX = offsetX, offsetY = offsetY)
-                val updatedKfs = if (c.keyframes.isNotEmpty()) {
-                    val timeInClip = (_uiState.value.playheadMs - c.timelineStartMs).coerceAtLeast(0L)
-                    if (c.keyframes.size == 1) {
-                        c.keyframes.map { it.copy(offsetX = offsetX, offsetY = offsetY) }
-                    } else {
-                        val nearIdx = c.keyframes.indexOfFirst { abs(it.timeMs - timeInClip) <= 250L }
-                        if (nearIdx >= 0) {
-                            c.keyframes.mapIndexed { idx, kf ->
-                                if (idx == nearIdx) kf.copy(offsetX = offsetX, offsetY = offsetY) else kf
-                            }
-                        } else {
-                            c.keyframes
-                        }
-                    }
+                val updatedKfs = if (c.keyframes.size <= 1) {
+                    c.keyframes.map { it.copy(offsetX = offsetX, offsetY = offsetY) }
                 } else {
-                    c.keyframes
+                    val timeInClip = (_uiState.value.playheadMs - c.timelineStartMs).coerceAtLeast(0L)
+                    val nearIdx = c.keyframes.indexOfFirst { abs(it.timeMs - timeInClip) <= 300L }
+                    if (nearIdx >= 0) {
+                        c.keyframes.mapIndexed { idx, kf ->
+                            if (idx == nearIdx) kf.copy(offsetX = offsetX, offsetY = offsetY) else kf
+                        }
+                    } else {
+                        val dx = offsetX - c.transform.offsetX
+                        val dy = offsetY - c.transform.offsetY
+                        c.keyframes.map { it.copy(offsetX = it.offsetX + dx, offsetY = it.offsetY + dy) }
+                    }
                 }
                 c.copy(transform = newTransform, keyframes = updatedKfs)
             }
@@ -708,19 +707,16 @@ class EditorViewModel @Inject constructor(
     }
 
     /**
-     * PiP அளவை (Scale) மாற்றிய இடத்தில் லாக் செய்யும் மெத்தட்
+     * 🌟 நீங்கள் Pinch செய்து வைக்கும் Zoom அளவை நிரந்தரமாக லாக் செய்து, சிறிதாக மாறாமல் தடுக்கும் மெத்தட்
      */
     fun setOverlayScale(clipId: String, scale: Float) {
         val clip = currentClip(clipId) ?: return
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, clipId) { c ->
-                val newScale = scale.coerceIn(0.1f, 4.0f)
+                val newScale = scale.coerceIn(0.15f, 4.0f)
                 val newTransform = c.transform.copy(scale = newScale)
-                val updatedKfs = if (c.keyframes.size == 1) {
-                    c.keyframes.map { it.copy(scale = newScale) }
-                } else {
-                    c.keyframes
-                }
+                // அனைத்து கீபிரேம்களையும் புதிய Zoom அளவிற்கு மாற்றி சுருங்குவதைத் தடுத்தல்
+                val updatedKfs = c.keyframes.map { it.copy(scale = newScale) }
                 c.copy(transform = newTransform, keyframes = updatedKfs)
             }
         }
