@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.Rect
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Handler
@@ -28,11 +27,13 @@ import com.actioncut.core.domain.port.VideoExporter
 import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
+import com.actioncut.core.model.CropRect
 import com.actioncut.core.model.ExportSettings
 import com.actioncut.core.model.ExportState
 import com.actioncut.core.model.Project
 import com.actioncut.core.model.Resolution
 import com.actioncut.core.model.TrackType
+import com.actioncut.core.model.Transform
 import com.actioncut.core.model.TransitionType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
@@ -93,16 +94,21 @@ class Media3VideoExporter @Inject constructor(
 
         handler.post {
             runCatching {
-                // OVERLAY டிராக்கில் உள்ள PiP Photo, Text மற்றும் Stickers அனைத்தையும் சேகரித்தல்
+                // OVERLAY டிராக்கில் உள்ள PiP Photo, Text மற்றும் Stickers அனைத்தையும் எடுத்தல்
                 val rawOverlayClips = project.timeline.tracks
                     .filter { it.type == TrackType.OVERLAY }
                     .flatMap { it.clips }
 
-                // PiP Photo-க்களை Crop மற்றும் Cutout உடன் எக்ஸ்போர்ட் செய்யத் தயார் செய்தல்
+                // Preview திரையில் நீங்கள் வைத்த அதே Position, Crop மற்றும் AI Cutout-ஐ எக்ஸ்போர்ட் கேன்வாஸில் 1:1 ஆகப் பொருத்துதல்
                 val preparedPipOverlays = rawOverlayClips.map { ov ->
                     if (ov.type == ClipType.IMAGE && ov.mediaUri != null && ov.mediaUri?.contains("news_banner") != true) {
-                        val processedUri = prepareExportOverlayImage(context, ov)
-                        ov.copy(mediaUri = processedUri, type = ClipType.STICKER)
+                        val processedUri = renderExactPipOverlayToCanvas(context, ov, targetWidth, targetHeight)
+                        ov.copy(
+                            mediaUri = processedUri,
+                            type = ClipType.STICKER,
+                            transform = Transform(offsetX = 0f, offsetY = 0f, scale = 1f, rotationDegrees = 0f),
+                            crop = null,
+                        )
                     } else {
                         ov
                     }
@@ -243,39 +249,80 @@ class Media3VideoExporter @Inject constructor(
     }
 
     /**
-     * PiP Photo-வின் Crop மற்றும் AI Cutout-ஐப் பயன்படுத்தி எக்ஸ்போர்ட் செய்வதற்கான பிம்பத்தை உருவாக்குதல்
+     * Preview திரையில் நீங்கள் வைத்த அதே இடத்தில், அதே அளவில், AI Cutout மற்றும் Crop செய்யப்பட்ட
+     * முழுமையான Overlay PNG-ஐ உருவாக்கி 1:1 ஆக வீடியோவில் பொருந்த வைக்கும் மெத்தட்.
      */
-    private fun prepareExportOverlayImage(context: Context, clip: Clip): String = runCatching {
+    private fun renderExactPipOverlayToCanvas(
+        context: Context,
+        clip: Clip,
+        targetWidth: Int,
+        targetHeight: Int,
+    ): String = runCatching {
         val uriStr = clip.mediaUri ?: return@runCatching ""
-        val uri = Uri.parse(uriStr)
 
-        val srcBmp = context.contentResolver.openInputStream(uri)?.use {
+        // 1. AI Cutout செயலில் இருந்தால், பின்னணி நீக்கப்பட்ட Transparent பிம்பத்தை எடுத்தல்
+        val isAiCutout = clip.filter?.id?.contains("cutout") == true
+        val cutoutFile = File(context.cacheDir, "cutout_${uriStr.hashCode()}.png")
+        val sourceUri = if (isAiCutout && cutoutFile.exists()) {
+            Uri.fromFile(cutoutFile)
+        } else {
+            Uri.parse(uriStr)
+        }
+
+        val srcBmp = context.contentResolver.openInputStream(sourceUri)?.use {
             BitmapFactory.decodeStream(it)
         } ?: return@runCatching uriStr
 
-        val crop = clip.crop
-        val croppedBmp = if (crop != null && !crop.isFull) {
-            val cL = (srcBmp.width * crop.left).roundToInt().coerceIn(0, srcBmp.width - 1)
-            val cT = (srcBmp.height * crop.top).roundToInt().coerceIn(0, srcBmp.height - 1)
-            val cR = (srcBmp.width * crop.right).roundToInt().coerceIn(cL + 1, srcBmp.width)
-            val cB = (srcBmp.height * crop.bottom).roundToInt().coerceIn(cT + 1, srcBmp.height)
-            Bitmap.createBitmap(srcBmp, cL, cT, cR - cL, cB - cT)
-        } else {
-            srcBmp
-        }
+        // 2. முழு 1920x1080 கேன்வாஸில் Preview-ன் அதே கணக்கீட்டில் வரைதல்
+        val fullCanvasBmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(fullCanvasBmp)
+
+        val t = clip.transform
+        val cx = targetWidth / 2f + (t.offsetX / 2f) * targetWidth
+        val cy = targetHeight / 2f + (t.offsetY / 2f) * targetHeight
+        val pw = targetWidth * t.scale
+        val ph = targetHeight * t.scale
+
+        val left = cx - pw / 2f
+        val top = cy - ph / 2f
+        val right = cx + pw / 2f
+        val bottom = cy + ph / 2f
+
+        val crop = clip.crop ?: CropRect(0f, 0f, 1f, 1f)
+        val cropRect = RectF(
+            left + pw * crop.left,
+            top + ph * crop.top,
+            left + pw * crop.right,
+            top + ph * crop.bottom,
+        )
+
+        canvas.save()
+        canvas.clipRect(cropRect)
 
         val isFlipped = clip.filter?.id?.contains("flip") == true
-        val finalBmp = if (isFlipped) {
-            val matrix = android.graphics.Matrix().apply { preScale(-1f, 1f) }
-            Bitmap.createBitmap(croppedBmp, 0, 0, croppedBmp.width, croppedBmp.height, matrix, true)
-        } else {
-            croppedBmp
+        if (isFlipped) {
+            canvas.scale(-1f, 1f, cx, cy)
+        }
+        val totalRot = clip.rotationDegrees + clip.transform.rotationDegrees
+        if (totalRot != 0f) {
+            canvas.rotate(totalRot, cx, cy)
         }
 
-        val outFile = File(context.cacheDir, "pip_export_${clip.id}.png")
-        FileOutputStream(outFile).use { out ->
-            finalBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+        canvas.drawBitmap(
+            srcBmp,
+            null,
+            RectF(left, top, right, bottom),
+            Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG),
+        )
+        canvas.restore()
+        srcBmp.recycle()
+
+        val outFile = File(context.cacheDir, "pip_rendered_${clip.id}.png")
+        FileOutputStream(outFile).use { fos ->
+            fullCanvasBmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
         }
+        fullCanvasBmp.recycle()
+
         Uri.fromFile(outFile).toString()
     }.getOrDefault(clip.mediaUri ?: "")
 
