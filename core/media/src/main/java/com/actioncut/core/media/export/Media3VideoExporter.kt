@@ -94,12 +94,11 @@ class Media3VideoExporter @Inject constructor(
 
         handler.post {
             runCatching {
-                // OVERLAY டிராக்கில் உள்ள PiP Photo, Text மற்றும் Stickers அனைத்தையும் எடுத்தல்
                 val rawOverlayClips = project.timeline.tracks
                     .filter { it.type == TrackType.OVERLAY }
                     .flatMap { it.clips }
 
-                // Preview திரையில் நீங்கள் வைத்த அதே Position, Crop மற்றும் AI Cutout-ஐ எக்ஸ்போர்ட் கேன்வாஸில் 1:1 ஆகப் பொருத்துதல்
+                // Preview-ன் அதே கணக்கீட்டில் 1:1 ஆகப் பொருத்துதல்
                 val preparedPipOverlays = rawOverlayClips.map { ov ->
                     if (ov.type == ClipType.IMAGE && ov.mediaUri != null && ov.mediaUri?.contains("news_banner") != true) {
                         val processedUri = renderExactPipOverlayToCanvas(context, ov, targetWidth, targetHeight)
@@ -248,10 +247,6 @@ class Media3VideoExporter @Inject constructor(
         }
     }
 
-    /**
-     * Preview திரையில் நீங்கள் வைத்த அதே இடத்தில், அதே அளவில், AI Cutout மற்றும் Crop செய்யப்பட்ட
-     * முழுமையான Overlay PNG-ஐ உருவாக்கி 1:1 ஆக வீடியோவில் பொருந்த வைக்கும் மெத்தட்.
-     */
     private fun renderExactPipOverlayToCanvas(
         context: Context,
         clip: Clip,
@@ -260,7 +255,6 @@ class Media3VideoExporter @Inject constructor(
     ): String = runCatching {
         val uriStr = clip.mediaUri ?: return@runCatching ""
 
-        // 1. AI Cutout செயலில் இருந்தால், பின்னணி நீக்கப்பட்ட Transparent பிம்பத்தை எடுத்தல்
         val isAiCutout = clip.filter?.id?.contains("cutout") == true
         val cutoutFile = File(context.cacheDir, "cutout_${uriStr.hashCode()}.png")
         val sourceUri = if (isAiCutout && cutoutFile.exists()) {
@@ -273,11 +267,16 @@ class Media3VideoExporter @Inject constructor(
             BitmapFactory.decodeStream(it)
         } ?: return@runCatching uriStr
 
-        // 2. முழு 1920x1080 கேன்வாஸில் Preview-ன் அதே கணக்கீட்டில் வரைதல்
         val fullCanvasBmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(fullCanvasBmp)
 
-        val t = clip.transform
+        // Keyframe அல்லது Transform இரண்டையும் துல்லியமாக எடுத்தல்
+        val t = if (clip.keyframes.isNotEmpty()) {
+            com.actioncut.core.model.Keyframes.propsAt(clip, 0L).transform
+        } else {
+            clip.transform
+        }
+
         val cx = targetWidth / 2f + (t.offsetX / 2f) * targetWidth
         val cy = targetHeight / 2f + (t.offsetY / 2f) * targetHeight
         val pw = targetWidth * t.scale
@@ -303,7 +302,7 @@ class Media3VideoExporter @Inject constructor(
         if (isFlipped) {
             canvas.scale(-1f, 1f, cx, cy)
         }
-        val totalRot = clip.rotationDegrees + clip.transform.rotationDegrees
+        val totalRot = clip.rotationDegrees + t.rotationDegrees
         if (totalRot != 0f) {
             canvas.rotate(totalRot, cx, cy)
         }
