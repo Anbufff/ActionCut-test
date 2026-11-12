@@ -38,7 +38,15 @@ import coil.request.ImageRequest
 import com.actioncut.core.model.*
 import com.actioncut.feature.editor.ui.pip.AiCutoutManager
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
+import kotlin.math.hypot
 import kotlin.math.roundToInt
+
+private enum class DragTarget {
+    NONE, MOVE_PIP, SCALE,
+    CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR,
+    EDGE_T, EDGE_B, EDGE_L, EDGE_R,
+    PAN_CROP
+}
 
 @Composable
 fun PreviewPlayer(
@@ -191,14 +199,13 @@ fun PreviewPlayer(
                 )
             }
 
-            // 3. அதிவேக மென்மையான PiP லேயர் (Zero-Recomposition Smooth Drag & Crop)
+            // 3. Fty பாணியில் PiP லேயர் (அதிவேக 120fps Smooth Gesture Controller)
             if (pipPlayer != null) {
                 PipLayer(
                     pipPlayer = pipPlayer,
                     pipClips = pipClips,
                     playheadMs = playheadMs,
                     selectedClipId = selectedClipId,
-                    isCropModeActive = isCropModeActive,
                     onSelect = onSelectOverlay,
                     onMove = onMoveOverlay,
                     onScale = onScaleOverlay,
@@ -279,13 +286,16 @@ fun PreviewPlayer(
     }
 }
 
+/**
+ * Buttery Smooth 120fps Gesture Controller:
+ * ஒரே ஒரு Unified PointerInput மூலம் மோதலின்றி உடனுக்குடன் இயங்கும் Move & Crop அமைப்பு.
+ */
 @Composable
 private fun PipLayer(
     pipPlayer: ExoPlayer,
     pipClips: List<Clip>,
     playheadMs: Long,
     selectedClipId: String?,
-    isCropModeActive: Boolean,
     onSelect: (String) -> Unit,
     onMove: (String, Float, Float) -> Unit,
     onScale: (String, Float) -> Unit,
@@ -318,7 +328,6 @@ private fun PipLayer(
         val isSelected = active.id == selectedClipId
         val cyanColor = Color(0xFF00E5FF)
 
-        // 120fps அதிகபட்ச மென்மைக்கான லோக்கல் ஸ்டேட்ஸ் (Zero-Jank Local States)
         var liveOffsetX by remember(active.id, t.offsetX) { mutableFloatStateOf(t.offsetX) }
         var liveOffsetY by remember(active.id, t.offsetY) { mutableFloatStateOf(t.offsetY) }
         var liveScale by remember(active.id, t.scale) { mutableFloatStateOf(t.scale) }
@@ -328,6 +337,17 @@ private fun PipLayer(
 
         val pipPixelW = (w * liveScale)
         val pipPixelH = (h * liveScale)
+
+        val cL = pipPixelW * liveCrop.left
+        val cT = pipPixelH * liveCrop.top
+        val cR = pipPixelW * liveCrop.right
+        val cB = pipPixelH * liveCrop.bottom
+        val cW = (cR - cL).coerceAtLeast(10f)
+        val cH = (cB - cT).coerceAtLeast(10f)
+        val cCenterX = (cL + cR) / 2f
+        val cCenterY = (cT + cB) / 2f
+
+        var currentDragTarget by remember { mutableStateOf(DragTarget.NONE) }
 
         Box(
             modifier = Modifier
@@ -340,21 +360,128 @@ private fun PipLayer(
                     rotationZ = t.rotationDegrees
                     alpha = props.opacity
                 }
-                .pointerInput(active.id) {
-                    // PiP பாக்ஸை நகர்த்தும் போது 120fps-ல் உடனடி ரெண்டரிங், விரல் எடுத்ததும் ViewModel update
+                .pointerInput(active.id, pipPixelW, pipPixelH, isSelected) {
                     detectDragGestures(
-                        onDragStart = { onSelect(active.id) },
+                        onDragStart = { offset ->
+                            onSelect(active.id)
+                            if (!isSelected) {
+                                currentDragTarget = DragTarget.MOVE_PIP
+                                return@detectDragGestures
+                            }
+
+                            val tx = offset.x
+                            val ty = offset.y
+                            val cornerTouchRadius = 40f * density
+                            val edgeTouchRadius = 32f * density
+
+                            currentDragTarget = when {
+                                // 1. நான்கு மூலைகளின் தொடுதல் (4 Corners)
+                                hypot(tx - cL, ty - cT) < cornerTouchRadius -> DragTarget.CORNER_TL
+                                hypot(tx - cR, ty - cT) < cornerTouchRadius -> DragTarget.CORNER_TR
+                                hypot(tx - cL, ty - cB) < cornerTouchRadius -> DragTarget.CORNER_BL
+                                hypot(tx - cR, ty - cB) < cornerTouchRadius -> DragTarget.CORNER_BR
+
+                                // 2. நான்கு பக்க விளிம்பு வட்டங்கள் (4 Edge Handles)
+                                hypot(tx - cCenterX, ty - cT) < edgeTouchRadius -> DragTarget.EDGE_T
+                                hypot(tx - cCenterX, ty - cB) < edgeTouchRadius -> DragTarget.EDGE_B
+                                hypot(tx - cL, ty - cCenterY) < edgeTouchRadius -> DragTarget.EDGE_L
+                                hypot(tx - cR, ty - cCenterY) < edgeTouchRadius -> DragTarget.EDGE_R
+
+                                // 3. வலது கீழ் மூலை ஸ்கேலிங் கைப்பிடி (White Scale Circle)
+                                hypot(tx - pipPixelW, ty - pipPixelH) < 42f * density -> DragTarget.SCALE
+
+                                // 4. நடுப்பகுதி Crop Pan Zone
+                                tx in (cL..cR) && ty in (cT..cB) -> DragTarget.PAN_CROP
+
+                                // 5. பிற பகுதிகள் - PiP நகர்த்துதல் (Move PiP)
+                                else -> DragTarget.MOVE_PIP
+                            }
+                        },
                         onDrag = { change, dragAmount ->
                             change.consume()
-                            liveOffsetX = (liveOffsetX + dragAmount.x / (w / 2f)).coerceIn(-1.8f, 1.8f)
-                            liveOffsetY = (liveOffsetY + dragAmount.y / (h / 2f)).coerceIn(-1.8f, 1.8f)
+                            val dx = dragAmount.x
+                            val dy = dragAmount.y
+                            val dxFrac = dx / pipPixelW
+                            val dyFrac = dy / pipPixelH
+
+                            when (currentDragTarget) {
+                                DragTarget.CORNER_TL -> {
+                                    val newL = (liveCrop.left + dxFrac).coerceIn(0f, liveCrop.right - 0.05f)
+                                    val newT = (liveCrop.top + dyFrac).coerceIn(0f, liveCrop.bottom - 0.05f)
+                                    liveCrop = liveCrop.copy(left = newL, top = newT)
+                                }
+                                DragTarget.CORNER_TR -> {
+                                    val newR = (liveCrop.right + dxFrac).coerceIn(liveCrop.left + 0.05f, 1f)
+                                    val newT = (liveCrop.top + dyFrac).coerceIn(0f, liveCrop.bottom - 0.05f)
+                                    liveCrop = liveCrop.copy(right = newR, top = newT)
+                                }
+                                DragTarget.CORNER_BL -> {
+                                    val newL = (liveCrop.left + dxFrac).coerceIn(0f, liveCrop.right - 0.05f)
+                                    val newB = (liveCrop.bottom + dyFrac).coerceIn(liveCrop.top + 0.05f, 1f)
+                                    liveCrop = liveCrop.copy(left = newL, bottom = newB)
+                                }
+                                DragTarget.CORNER_BR -> {
+                                    val newR = (liveCrop.right + dxFrac).coerceIn(liveCrop.left + 0.05f, 1f)
+                                    val newB = (liveCrop.bottom + dyFrac).coerceIn(liveCrop.top + 0.05f, 1f)
+                                    liveCrop = liveCrop.copy(right = newR, bottom = newB)
+                                }
+                                DragTarget.EDGE_T -> {
+                                    val newT = (liveCrop.top + dyFrac).coerceIn(0f, liveCrop.bottom - 0.05f)
+                                    liveCrop = liveCrop.copy(top = newT)
+                                }
+                                DragTarget.EDGE_B -> {
+                                    val newB = (liveCrop.bottom + dyFrac).coerceIn(liveCrop.top + 0.05f, 1f)
+                                    liveCrop = liveCrop.copy(bottom = newB)
+                                }
+                                DragTarget.EDGE_L -> {
+                                    val newL = (liveCrop.left + dxFrac).coerceIn(0f, liveCrop.right - 0.05f)
+                                    liveCrop = liveCrop.copy(left = newL)
+                                }
+                                DragTarget.EDGE_R -> {
+                                    val newR = (liveCrop.right + dxFrac).coerceIn(liveCrop.left + 0.05f, 1f)
+                                    liveCrop = liveCrop.copy(right = newR)
+                                }
+                                DragTarget.PAN_CROP -> {
+                                    val cropWidth = liveCrop.right - liveCrop.left
+                                    val cropHeight = liveCrop.bottom - liveCrop.top
+                                    val newL = (liveCrop.left + dxFrac).coerceIn(0f, 1f - cropWidth)
+                                    val newT = (liveCrop.top + dyFrac).coerceIn(0f, 1f - cropHeight)
+                                    liveCrop = CropRect(newL, newT, newL + cropWidth, newT + cropHeight)
+                                }
+                                DragTarget.SCALE -> {
+                                    liveScale = (liveScale + dx / w).coerceIn(0.15f, 2.5f)
+                                }
+                                DragTarget.MOVE_PIP -> {
+                                    liveOffsetX = (liveOffsetX + dx / (w / 2f)).coerceIn(-1.8f, 1.8f)
+                                    liveOffsetY = (liveOffsetY + dy / (h / 2f)).coerceIn(-1.8f, 1.8f)
+                                }
+                                DragTarget.NONE -> {}
+                            }
                         },
-                        onDragEnd = { onMove(active.id, liveOffsetX, liveOffsetY) },
-                        onDragCancel = { onMove(active.id, liveOffsetX, liveOffsetY) },
+                        onDragEnd = {
+                            when (currentDragTarget) {
+                                DragTarget.CORNER_TL, DragTarget.CORNER_TR, DragTarget.CORNER_BL, DragTarget.CORNER_BR,
+                                DragTarget.EDGE_T, DragTarget.EDGE_B, DragTarget.EDGE_L, DragTarget.EDGE_R,
+                                DragTarget.PAN_CROP -> onCropChange(active.id, liveCrop)
+
+                                DragTarget.SCALE -> onScale(active.id, liveScale)
+
+                                DragTarget.MOVE_PIP -> onMove(active.id, liveOffsetX, liveOffsetY)
+
+                                DragTarget.NONE -> {}
+                            }
+                            currentDragTarget = DragTarget.NONE
+                        },
+                        onDragCancel = {
+                            onCropChange(active.id, liveCrop)
+                            onScale(active.id, liveScale)
+                            onMove(active.id, liveOffsetX, liveOffsetY)
+                            currentDragTarget = DragTarget.NONE
+                        },
                     )
                 },
         ) {
-            // 1. கத்தரிக்கப்பட்ட பிம்பம் வரைதல்
+            // 1. பிம்பம் - Crop செய்யப்பட்டு வரைதல்
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -396,23 +523,13 @@ private fun PipLayer(
                 }
             }
 
-            // 2. Fty பாணி 8-புள்ளிகள் கொண்ட அதிவேக Live Free Crop Bounding Box & Handles
+            // 2. Fty பாணி சியான் டாஷ்ட் பார்டர், Brackets & Handles
             if (isSelected) {
-                val cL = pipPixelW * liveCrop.left
-                val cT = pipPixelH * liveCrop.top
-                val cR = pipPixelW * liveCrop.right
-                val cB = pipPixelH * liveCrop.bottom
-                val cW = (cR - cL).coerceAtLeast(10f)
-                val cH = (cB - cT).coerceAtLeast(10f)
-                val cCenterX = (cL + cR) / 2f
-                val cCenterY = (cT + cB) / 2f
-
-                // சியான் நிற டாஷ்ட் பார்டர்
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .drawBehind {
-                            val dashStroke = Stroke(
+                            val stroke = Stroke(
                                 width = 2.5f * density,
                                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f),
                             )
@@ -421,272 +538,109 @@ private fun PipLayer(
                                 topLeft = Offset(cL, cT),
                                 size = Size(cW, cH),
                                 cornerRadius = CornerRadius(2f * density),
-                                style = dashStroke,
+                                style = stroke,
                             )
                         },
                 )
 
-                // Top Edge Handle (48.dp தொடு பரப்பு)
+                // Top Edge Dot
                 Box(
                     modifier = Modifier
-                        .offset { IntOffset((cCenterX - 24 * density).roundToInt(), (cT - 24 * density).roundToInt()) }
-                        .size(48.dp)
-                        .pointerInput(active.id) {
-                            detectDragGestures(
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    val dy = dragAmount.y / pipPixelH
-                                    val newTop = (liveCrop.top + dy).coerceIn(0f, liveCrop.bottom - 0.05f)
-                                    liveCrop = liveCrop.copy(top = newTop)
-                                },
-                                onDragEnd = { onCropChange(active.id, liveCrop) },
-                            )
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clip(CircleShape)
-                            .background(cyanColor)
-                            .border(2.dp, Color.White, CircleShape),
-                    )
-                }
+                        .offset { IntOffset((cCenterX - 9 * density).roundToInt(), (cT - 9 * density).roundToInt()) }
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(cyanColor)
+                        .border(2.dp, Color.White, CircleShape),
+                )
 
-                // Bottom Edge Handle (48.dp தொடு பரப்பு)
+                // Bottom Edge Dot
                 Box(
                     modifier = Modifier
-                        .offset { IntOffset((cCenterX - 24 * density).roundToInt(), (cB - 24 * density).roundToInt()) }
-                        .size(48.dp)
-                        .pointerInput(active.id) {
-                            detectDragGestures(
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    val dy = dragAmount.y / pipPixelH
-                                    val newBottom = (liveCrop.bottom + dy).coerceIn(liveCrop.top + 0.05f, 1f)
-                                    liveCrop = liveCrop.copy(bottom = newBottom)
-                                },
-                                onDragEnd = { onCropChange(active.id, liveCrop) },
-                            )
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clip(CircleShape)
-                            .background(cyanColor)
-                            .border(2.dp, Color.White, CircleShape),
-                    )
-                }
+                        .offset { IntOffset((cCenterX - 9 * density).roundToInt(), (cB - 9 * density).roundToInt()) }
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(cyanColor)
+                        .border(2.dp, Color.White, CircleShape),
+                )
 
-                // Left Edge Handle (48.dp தொடு பரப்பு)
+                // Left Edge Dot
                 Box(
                     modifier = Modifier
-                        .offset { IntOffset((cL - 24 * density).roundToInt(), (cCenterY - 24 * density).roundToInt()) }
-                        .size(48.dp)
-                        .pointerInput(active.id) {
-                            detectDragGestures(
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    val dx = dragAmount.x / pipPixelW
-                                    val newLeft = (liveCrop.left + dx).coerceIn(0f, liveCrop.right - 0.05f)
-                                    liveCrop = liveCrop.copy(left = newLeft)
-                                },
-                                onDragEnd = { onCropChange(active.id, liveCrop) },
-                            )
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clip(CircleShape)
-                            .background(cyanColor)
-                            .border(2.dp, Color.White, CircleShape),
-                    )
-                }
+                        .offset { IntOffset((cL - 9 * density).roundToInt(), (cCenterY - 9 * density).roundToInt()) }
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(cyanColor)
+                        .border(2.dp, Color.White, CircleShape),
+                )
 
-                // Right Edge Handle (48.dp தொடு பரப்பு)
+                // Right Edge Dot
                 Box(
                     modifier = Modifier
-                        .offset { IntOffset((cR - 24 * density).roundToInt(), (cCenterY - 24 * density).roundToInt()) }
-                        .size(48.dp)
-                        .pointerInput(active.id) {
-                            detectDragGestures(
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    val dx = dragAmount.x / pipPixelW
-                                    val newRight = (liveCrop.right + dx).coerceIn(liveCrop.left + 0.05f, 1f)
-                                    liveCrop = liveCrop.copy(right = newRight)
-                                },
-                                onDragEnd = { onCropChange(active.id, liveCrop) },
-                            )
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clip(CircleShape)
-                            .background(cyanColor)
-                            .border(2.dp, Color.White, CircleShape),
-                    )
-                }
+                        .offset { IntOffset((cR - 9 * density).roundToInt(), (cCenterY - 9 * density).roundToInt()) }
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(cyanColor)
+                        .border(2.dp, Color.White, CircleShape),
+                )
 
-                // Top-Left Corner Bracket (48.dp Touch)
+                // Top-Left Bracket
                 Box(
                     modifier = Modifier
-                        .offset { IntOffset((cL - 16 * density).roundToInt(), (cT - 16 * density).roundToInt()) }
-                        .size(48.dp)
-                        .pointerInput(active.id) {
-                            detectDragGestures(
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    val dx = dragAmount.x / pipPixelW
-                                    val dy = dragAmount.y / pipPixelH
-                                    val newLeft = (liveCrop.left + dx).coerceIn(0f, liveCrop.right - 0.05f)
-                                    val newTop = (liveCrop.top + dy).coerceIn(0f, liveCrop.bottom - 0.05f)
-                                    liveCrop = liveCrop.copy(left = newLeft, top = newTop)
-                                },
-                                onDragEnd = { onCropChange(active.id, liveCrop) },
-                            )
+                        .offset { IntOffset((cL - 4 * density).roundToInt(), (cT - 4 * density).roundToInt()) }
+                        .size(20.dp)
+                        .drawBehind {
+                            val strokeW = 4f * density
+                            drawLine(cyanColor, Offset(0f, 0f), Offset(size.width, 0f), strokeW)
+                            drawLine(cyanColor, Offset(0f, 0f), Offset(0f, size.height), strokeW)
                         },
-                    contentAlignment = Alignment.TopStart,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .padding(12.dp)
-                            .size(20.dp)
-                            .drawBehind {
-                                val strokeW = 4f * density
-                                drawLine(cyanColor, Offset(0f, 0f), Offset(size.width, 0f), strokeW)
-                                drawLine(cyanColor, Offset(0f, 0f), Offset(0f, size.height), strokeW)
-                            },
-                    )
-                }
+                )
 
-                // Top-Right Corner Bracket (48.dp Touch)
+                // Top-Right Bracket
                 Box(
                     modifier = Modifier
-                        .offset { IntOffset((cR - 32 * density).roundToInt(), (cT - 16 * density).roundToInt()) }
-                        .size(48.dp)
-                        .pointerInput(active.id) {
-                            detectDragGestures(
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    val dx = dragAmount.x / pipPixelW
-                                    val dy = dragAmount.y / pipPixelH
-                                    val newRight = (liveCrop.right + dx).coerceIn(liveCrop.left + 0.05f, 1f)
-                                    val newTop = (liveCrop.top + dy).coerceIn(0f, liveCrop.bottom - 0.05f)
-                                    liveCrop = liveCrop.copy(right = newRight, top = newTop)
-                                },
-                                onDragEnd = { onCropChange(active.id, liveCrop) },
-                            )
+                        .offset { IntOffset((cR - 16 * density).roundToInt(), (cT - 4 * density).roundToInt()) }
+                        .size(20.dp)
+                        .drawBehind {
+                            val strokeW = 4f * density
+                            drawLine(cyanColor, Offset(0f, 0f), Offset(size.width, 0f), strokeW)
+                            drawLine(cyanColor, Offset(size.width, 0f), Offset(size.width, size.height), strokeW)
                         },
-                    contentAlignment = Alignment.TopEnd,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .padding(12.dp)
-                            .size(20.dp)
-                            .drawBehind {
-                                val strokeW = 4f * density
-                                drawLine(cyanColor, Offset(0f, 0f), Offset(size.width, 0f), strokeW)
-                                drawLine(cyanColor, Offset(size.width, 0f), Offset(size.width, size.height), strokeW)
-                            },
-                    )
-                }
+                )
 
-                // Bottom-Left Corner Bracket (48.dp Touch)
+                // Bottom-Left Bracket
                 Box(
                     modifier = Modifier
-                        .offset { IntOffset((cL - 16 * density).roundToInt(), (cB - 32 * density).roundToInt()) }
-                        .size(48.dp)
-                        .pointerInput(active.id) {
-                            detectDragGestures(
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    val dx = dragAmount.x / pipPixelW
-                                    val dy = dragAmount.y / pipPixelH
-                                    val newLeft = (liveCrop.left + dx).coerceIn(0f, liveCrop.right - 0.05f)
-                                    val newBottom = (liveCrop.bottom + dy).coerceIn(liveCrop.top + 0.05f, 1f)
-                                    liveCrop = liveCrop.copy(left = newLeft, bottom = newBottom)
-                                },
-                                onDragEnd = { onCropChange(active.id, liveCrop) },
-                            )
+                        .offset { IntOffset((cL - 4 * density).roundToInt(), (cB - 16 * density).roundToInt()) }
+                        .size(20.dp)
+                        .drawBehind {
+                            val strokeW = 4f * density
+                            drawLine(cyanColor, Offset(0f, size.height), Offset(size.width, size.height), strokeW)
+                            drawLine(cyanColor, Offset(0f, 0f), Offset(0f, size.height), strokeW)
                         },
-                    contentAlignment = Alignment.BottomStart,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .padding(12.dp)
-                            .size(20.dp)
-                            .drawBehind {
-                                val strokeW = 4f * density
-                                drawLine(cyanColor, Offset(0f, size.height), Offset(size.width, size.height), strokeW)
-                                drawLine(cyanColor, Offset(0f, 0f), Offset(0f, size.height), strokeW)
-                            },
-                    )
-                }
+                )
 
-                // Bottom-Right Corner Bracket (48.dp Touch)
+                // Bottom-Right Bracket
                 Box(
                     modifier = Modifier
-                        .offset { IntOffset((cR - 32 * density).roundToInt(), (cB - 32 * density).roundToInt()) }
-                        .size(48.dp)
-                        .pointerInput(active.id) {
-                            detectDragGestures(
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    val dx = dragAmount.x / pipPixelW
-                                    val dy = dragAmount.y / pipPixelH
-                                    val newRight = (liveCrop.right + dx).coerceIn(liveCrop.left + 0.05f, 1f)
-                                    val newBottom = (liveCrop.bottom + dy).coerceIn(liveCrop.top + 0.05f, 1f)
-                                    liveCrop = liveCrop.copy(right = newRight, bottom = newBottom)
-                                },
-                                onDragEnd = { onCropChange(active.id, liveCrop) },
-                            )
+                        .offset { IntOffset((cR - 16 * density).roundToInt(), (cB - 16 * density).roundToInt()) }
+                        .size(20.dp)
+                        .drawBehind {
+                            val strokeW = 4f * density
+                            drawLine(cyanColor, Offset(0f, size.height), Offset(size.width, size.height), strokeW)
+                            drawLine(cyanColor, Offset(size.width, 0f), Offset(size.width, size.height), strokeW)
                         },
-                    contentAlignment = Alignment.BottomEnd,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .padding(12.dp)
-                            .size(20.dp)
-                            .drawBehind {
-                                val strokeW = 4f * density
-                                drawLine(cyanColor, Offset(0f, size.height), Offset(size.width, size.height), strokeW)
-                                drawLine(cyanColor, Offset(size.width, 0f), Offset(size.width, size.height), strokeW)
-                            },
-                    )
-                }
+                )
 
-                // Fty Scaling Handle
+                // Fty Scale Circle (White with Cyan border)
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .offset(x = 10.dp, y = 10.dp)
-                        .size(48.dp)
-                        .pointerInput(active.id) {
-                            detectDragGestures(
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    liveScale = (liveScale + dragAmount.x / w).coerceIn(0.15f, 2.5f)
-                                },
-                                onDragEnd = { onScale(active.id, liveScale) },
-                            )
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(26.dp)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                            .border(3.dp, cyanColor, CircleShape),
-                    )
-                }
+                        .offset(x = 6.dp, y = 6.dp)
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .border(3.dp, cyanColor, CircleShape),
+                )
             }
         }
     }
