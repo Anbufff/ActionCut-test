@@ -41,6 +41,7 @@ import com.actioncut.core.model.TransitionType
 import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.VisualEffectType
 import com.actioncut.feature.editor.ui.newsalert.NewsBannerRenderer
+import com.actioncut.feature.editor.ui.pip.AiCutoutManager
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -136,6 +137,15 @@ class EditorViewModel @Inject constructor(
                 )
             }
             playerController.setTimeline(initialTimeline, preservePositionMs = initialTimeline.playheadMs)
+
+            // Cache Cutout for any existing PiP clips
+            initialTimeline.allClips.forEach { c ->
+                if (c.type == ClipType.IMAGE && c.mediaUri != null && c.filter?.id?.contains("cutout") == true) {
+                    launch(Dispatchers.IO) {
+                        AiCutoutManager.getOrCreateCutoutUri(context, c.mediaUri)
+                    }
+                }
+            }
         }
     }
 
@@ -400,7 +410,7 @@ class EditorViewModel @Inject constructor(
             ?: videoTrack?.clips?.firstOrNull { it.timelineEndMs > clip.timelineStartMs }
         val targetEndMs = mainClip?.timelineEndMs ?: _uiState.value.timeline.durationMs
         if (targetEndMs > clip.timelineStartMs) {
-            mutate(structural = false) { timeline ->
+            mutate(structural = true) { timeline ->
                 TimelineEditor.updateClip(timeline, id) { c ->
                     c.copy(timelineEndMs = targetEndMs)
                 }
@@ -412,7 +422,7 @@ class EditorViewModel @Inject constructor(
         val clip = currentClip(id) ?: return@withSelected
         val totalMs = _uiState.value.timeline.durationMs
         if (totalMs > clip.timelineStartMs) {
-            mutate(structural = false) { timeline ->
+            mutate(structural = true) { timeline ->
                 TimelineEditor.updateClip(timeline, id) { c ->
                     c.copy(timelineEndMs = totalMs)
                 }
@@ -438,16 +448,24 @@ class EditorViewModel @Inject constructor(
 
     fun togglePipCutout() = withSelected { id ->
         val clip = currentClip(id) ?: return@withSelected
+        val isNowCutout = clip.filter?.id?.contains("cutout") != true
+
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, id) { c ->
                 val curId = c.filter?.id.orEmpty()
-                val newId = when {
-                    curId.contains("cutout") && curId.contains("flip") -> "flip"
-                    curId.contains("cutout") -> ""
-                    curId.contains("flip") -> "ai_cutout_flip"
-                    else -> "ai_cutout"
+                val newId = if (isNowCutout) {
+                    if (curId.contains("flip")) "ai_cutout_flip" else "ai_cutout"
+                } else {
+                    if (curId.contains("flip")) "flip" else ""
                 }
                 c.copy(filter = if (newId.isEmpty()) null else Filter(newId, "AI Cutout", FilterCategory.NONE))
+            }
+        }
+
+        // 🌟 உடனே Background-ல் Cutout ஃபைலை உருவாக்கி வைக்கிறது (Export-ல் தவறாமல் வர)
+        if (isNowCutout && clip.mediaUri != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                AiCutoutManager.getOrCreateCutoutUri(context, clip.mediaUri)
             }
         }
     }
@@ -806,8 +824,14 @@ class EditorViewModel @Inject constructor(
         mutate(structural = false) { TimelineEditor.updateClip(it, id) { clip -> clip.copy(text = text) } }
     }
 
-    fun setTransition(transition: Transition?) = withSelected { id ->
-        mutate(structural = true) { TimelineEditor.setTransition(it, id, transition) }
+    fun setTransition(transition: Transition?) {
+        val targetId = _uiState.value.selectedClipId
+            ?: clipAtPlayhead()?.id
+            ?: _uiState.value.timeline.videoTracks.firstOrNull()?.clips?.firstOrNull()?.id
+        if (targetId != null) {
+            mutate(structural = true) { TimelineEditor.setTransition(it, targetId, transition) }
+            _uiState.update { it.copy(selectedClipId = targetId) }
+        }
     }
 
     fun applyTransitionToAll(transition: Transition) {
