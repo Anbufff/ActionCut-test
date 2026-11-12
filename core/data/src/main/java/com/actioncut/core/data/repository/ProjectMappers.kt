@@ -9,7 +9,6 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/** Entity <-> domain mapping. The timeline is (de)serialized via kotlinx.serialization. */
 internal object ProjectMappers {
 
     fun ProjectEntity.toSummary(): ProjectSummary = ProjectSummary(
@@ -21,16 +20,20 @@ internal object ProjectMappers {
         updatedAtEpochMs = updatedAtEpochMs,
     )
 
-    fun ProjectEntity.toDomain(json: Json): Project = Project(
-        id = id,
-        name = name,
-        aspectRatio = aspectRatio.toAspectRatio(),
-        timeline = runCatching { json.decodeFromString<Timeline>(timelineJson) }
-            .getOrDefault(Timeline.empty()),
-        thumbnailUri = thumbnailUri,
-        createdAtEpochMs = createdAtEpochMs,
-        updatedAtEpochMs = updatedAtEpochMs,
-    )
+    fun ProjectEntity.toDomain(json: Json): Project {
+        val tl = runCatching { json.decodeFromString<Timeline>(timelineJson) }
+            .getOrDefault(Timeline.empty())
+        return Project(
+            id = id,
+            name = name,
+            aspectRatio = aspectRatio.toAspectRatio(),
+            timeline = tl,
+            canvas = tl.canvas, // 🌟 சேமிக்கப்பட்ட TPL செட்டிங்ஸை லோடு செய்ய
+            thumbnailUri = thumbnailUri,
+            createdAtEpochMs = createdAtEpochMs,
+            updatedAtEpochMs = updatedAtEpochMs,
+        )
+    }
 
     fun Project.toEntity(json: Json): ProjectEntity = ProjectEntity(
         id = id,
@@ -40,7 +43,7 @@ internal object ProjectMappers {
         durationMs = durationMs,
         createdAtEpochMs = createdAtEpochMs,
         updatedAtEpochMs = updatedAtEpochMs,
-        timelineJson = json.encodeToString(timeline),
+        timelineJson = json.encodeToString(timeline.copy(canvas = canvas)), // 🌟 TPL செட்டிங்ஸை உள்ளடக்க
     )
 
     private fun String.toAspectRatio(): AspectRatio =
