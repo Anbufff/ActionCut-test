@@ -1,6 +1,7 @@
 package com.actioncut.feature.editor.ui.preview
 
 import android.os.Build
+import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -11,6 +12,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Image as ImageIcon
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -24,10 +26,13 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.*
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -36,6 +41,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.actioncut.core.media.template.FbTemplateBarRenderer
 import com.actioncut.core.model.*
 import com.actioncut.feature.editor.ui.pip.AiCutoutManager
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
@@ -68,6 +74,9 @@ fun PreviewPlayer(
     backgroundColorArgb: Int = 0xFF000000.toInt(),
     allClips: List<Clip> = emptyList(),
     onScorecardRowTapped: (String, Int) -> Unit = { _, _ -> },
+    isFbTemplateEnabled: Boolean = false,
+    fbTemplateImageUri: String? = null,
+    onPickTplImage: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val resizeMode = when (fitMode) {
@@ -75,6 +84,8 @@ fun PreviewPlayer(
         FitMode.FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
         FitMode.STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
+
+    val isTplMode = aspectRatio == AspectRatio.RATIO_4_5 && isFbTemplateEnabled
 
     val mainClips = allClips.filter { it.type == ClipType.VIDEO || it.type == ClipType.IMAGE }
         .sortedBy { it.timelineStartMs }
@@ -95,173 +106,259 @@ fun PreviewPlayer(
         ) {
             val w = constraints.maxWidth.toFloat()
             val h = constraints.maxHeight.toFloat()
+            val density = LocalDensity.current.density
 
-            // 1. பின்னணியில் Blur Effect
-            if (currentMainClip != null && currentMainClip.mediaUri != null) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(currentMainClip.mediaUri)
-                        .size(64, 36)
-                        .crossfade(true)
-                        .build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .then(
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                Modifier.graphicsLayer {
-                                    renderEffect = android.graphics.RenderEffect.createBlurEffect(
-                                        45f, 45f, android.graphics.Shader.TileMode.CLAMP,
-                                    ).asComposeRenderEffect()
-                                }
-                            } else {
-                                Modifier
-                            },
-                        ),
-                )
+            // 🌟 4:5 TPL (Video + Image Template) லேஅவுட்
+            if (isTplMode) {
+                val vH = w * (9f / 16f)
+                val barH = h - 2 * vH
+                val bottomY = vH + barH
+
+                // 1. Top Section: 16:9 மெயின் வீடியோ
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.35f)),
-                )
-            }
-
-            if (currentMainClip?.type == ClipType.VIDEO) {
-                AndroidView(
-                    factory = { context ->
-                        PlayerView(context).apply {
-                            useController = false
-                            this.player = player
-                            this.resizeMode = resizeMode
-                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                        }
-                    },
-                    update = {
-                        it.player = player
-                        it.resizeMode = resizeMode
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-
-            // 2. Main Track Image
-            if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
-                val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
-                val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
-                val halfDuration = duration / 2f
-
-                val autoZoomScale = if (timeInClip <= halfDuration) {
-                    val p = (timeInClip.toFloat() / halfDuration).coerceIn(0f, 1f)
-                    1.0f + (0.10f * p)
-                } else {
-                    val p = ((timeInClip.toFloat() - halfDuration) / halfDuration).coerceIn(0f, 1f)
-                    1.10f - (0.10f * p)
-                }
-
-                val transition = currentMainClip.transitionToNext
-                val trDuration = transition?.durationMs ?: 0L
-                val remainingTime = currentMainClip.timelineEndMs - playheadMs
-
-                val alphaVal = if (transition != null && transition.type != TransitionType.SEAMLESS_MERGE &&
-                    transition.type != TransitionType.NONE && remainingTime in 1..trDuration
+                        .fillMaxWidth()
+                        .height((vH / density).dp)
+                        .align(Alignment.TopCenter),
                 ) {
-                    (remainingTime.toFloat() / trDuration.toFloat()).coerceIn(0f, 1f)
-                } else {
-                    1.0f
+                    if (currentMainClip?.type == ClipType.VIDEO) {
+                        AndroidView(
+                            factory = { context ->
+                                PlayerView(context).apply {
+                                    useController = false
+                                    this.player = player
+                                    this.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                    setBackgroundColor(android.graphics.Color.BLACK)
+                                }
+                            },
+                            update = {
+                                it.player = player
+                                it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else if (currentMainClip != null && currentMainClip.mediaUri != null) {
+                        AsyncImage(
+                            model = currentMainClip.mediaUri,
+                            contentDescription = null,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
 
-                val isMainSelected = currentMainClip.id == selectedClipId
-                val mainTransform = currentMainClip.transform
-                val totalScale = autoZoomScale * mainTransform.scale
-
-                AsyncImage(
-                    model = currentMainClip.mediaUri,
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
+                // 2. Middle Section: Like / Message / Share பார்
+                Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            scaleX = totalScale
-                            scaleY = totalScale
-                            alpha = alphaVal
-                            translationX = (mainTransform.offsetX / 2f) * w
-                            translationY = (mainTransform.offsetY / 2f) * h
-                            rotationZ = (currentMainClip.rotationDegrees + mainTransform.rotationDegrees).toFloat()
+                        .fillMaxWidth()
+                        .height((barH / density).dp)
+                        .offset(y = (vH / density).dp)
+                        .align(Alignment.TopCenter),
+                ) {
+                    ComposeCanvas(modifier = Modifier.fillMaxSize()) {
+                        drawIntoCanvas { canvas ->
+                            val timeSeconds = playheadMs / 1000f
+                            FbTemplateBarRenderer.drawTplBar(canvas.nativeCanvas, size.width, size.height, timeSeconds)
                         }
-                        .then(
-                            if (isMainSelected) {
-                                Modifier.border(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.8f))
-                            } else {
-                                Modifier
-                            },
-                        ),
-                )
-            }
+                    }
+                }
 
-            // 3. PiP லேயர்
-            if (pipPlayer != null) {
-                PipLayer(
-                    pipPlayer = pipPlayer,
-                    pipClips = pipClips,
+                // 3. Bottom Section: 16:9 புகைப்படம் (தொட்டவுடன் கேலரி திறக்கும்)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height((vH / density).dp)
+                        .offset(y = (bottomY / density).dp)
+                        .align(Alignment.TopCenter)
+                        .background(Color(0xFF0B0B0B))
+                        .clickable { onPickTplImage() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (!fbTemplateImageUri.isNullOrBlank()) {
+                        AsyncImage(
+                            model = fbTemplateImageUri,
+                            contentDescription = null,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(ImageIcon, contentDescription = null, tint = Color(0xFF7FB8D8), modifier = Modifier.size(32.dp))
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = "படம் சேர்க்க (16:9)",
+                                color = Color(0xFF7FB8D8),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                }
+
+            } else {
+                // 16:9 அல்லது சாதாரண 4:5 இயல்பு நிலை
+                if (currentMainClip != null && currentMainClip.mediaUri != null) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(currentMainClip.mediaUri)
+                            .size(64, 36)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                    Modifier.graphicsLayer {
+                                        renderEffect = android.graphics.RenderEffect.createBlurEffect(
+                                            45f, 45f, android.graphics.Shader.TileMode.CLAMP,
+                                        ).asComposeRenderEffect()
+                                    }
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.35f)),
+                    )
+                }
+
+                if (currentMainClip?.type == ClipType.VIDEO) {
+                    AndroidView(
+                        factory = { context ->
+                            PlayerView(context).apply {
+                                useController = false
+                                this.player = player
+                                this.resizeMode = resizeMode
+                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                            }
+                        },
+                        update = {
+                            it.player = player
+                            it.resizeMode = resizeMode
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+
+                if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
+                    val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
+                    val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
+                    val halfDuration = duration / 2f
+
+                    val autoZoomScale = if (timeInClip <= halfDuration) {
+                        val p = (timeInClip.toFloat() / halfDuration).coerceIn(0f, 1f)
+                        1.0f + (0.10f * p)
+                    } else {
+                        val p = ((timeInClip.toFloat() - halfDuration) / halfDuration).coerceIn(0f, 1f)
+                        1.10f - (0.10f * p)
+                    }
+
+                    val transition = currentMainClip.transitionToNext
+                    val trDuration = transition?.durationMs ?: 0L
+                    val remainingTime = currentMainClip.timelineEndMs - playheadMs
+
+                    val alphaVal = if (transition != null && transition.type != TransitionType.SEAMLESS_MERGE &&
+                        transition.type != TransitionType.NONE && remainingTime in 1..trDuration
+                    ) {
+                        (remainingTime.toFloat() / trDuration.toFloat()).coerceIn(0f, 1f)
+                    } else {
+                        1.0f
+                    }
+
+                    val isMainSelected = currentMainClip.id == selectedClipId
+                    val mainTransform = currentMainClip.transform
+                    val totalScale = autoZoomScale * mainTransform.scale
+
+                    AsyncImage(
+                        model = currentMainClip.mediaUri,
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = totalScale
+                                scaleY = totalScale
+                                alpha = alphaVal
+                                translationX = (mainTransform.offsetX / 2f) * w
+                                translationY = (mainTransform.offsetY / 2f) * h
+                                rotationZ = (currentMainClip.rotationDegrees + mainTransform.rotationDegrees).toFloat()
+                            }
+                            .then(
+                                if (isMainSelected) {
+                                    Modifier.border(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.8f))
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                    )
+                }
+
+                if (pipPlayer != null) {
+                    PipLayer(
+                        pipPlayer = pipPlayer,
+                        pipClips = pipClips,
+                        playheadMs = playheadMs,
+                        selectedClipId = selectedClipId,
+                        onSelect = onSelectOverlay,
+                        onMove = onMoveOverlay,
+                        onScale = onScaleOverlay,
+                        onCropChange = onCropChange,
+                        isCropModeActive = isCropModeActive,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+
+                OverlayLayer(
+                    overlays = overlays,
                     playheadMs = playheadMs,
                     selectedClipId = selectedClipId,
                     onSelect = onSelectOverlay,
                     onMove = onMoveOverlay,
-                    onScale = onScaleOverlay,
-                    onCropChange = onCropChange,
-                    isCropModeActive = isCropModeActive,
                     modifier = Modifier.fillMaxSize(),
                 )
-            }
 
-            // Overlays Layer (News Alert)
-            OverlayLayer(
-                overlays = overlays,
-                playheadMs = playheadMs,
-                selectedClipId = selectedClipId,
-                onSelect = onSelectOverlay,
-                onMove = onMoveOverlay,
-                modifier = Modifier.fillMaxSize(),
-            )
+                val activeScoreClip = allClips.firstOrNull {
+                    it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
+                }
 
-            // Dynamic Scorecard Layer
-            val activeScoreClip = allClips.firstOrNull {
-                it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
-            }
+                if (activeScoreClip != null) {
+                    val sc = activeScoreClip.scorecard
+                    if (sc != null) {
+                        val currentPlayheadMs by rememberUpdatedState(playheadMs)
+                        val timeInClip = (playheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
+                        val activeBmp = ScorecardManager.getActiveBitmap(activeScoreClip.id, sc, timeInClip)
 
-            if (activeScoreClip != null) {
-                val sc = activeScoreClip.scorecard
-                if (sc != null) {
-                    val currentPlayheadMs by rememberUpdatedState(playheadMs)
-                    val timeInClip = (playheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
-                    val activeBmp = ScorecardManager.getActiveBitmap(activeScoreClip.id, sc, timeInClip)
-
-                    if (activeBmp != null) {
-                        Image(
-                            bitmap = activeBmp.asImageBitmap(),
-                            contentDescription = "Scorecard",
-                            contentScale = ContentScale.FillBounds,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(activeScoreClip.id) {
-                                    detectTapGestures { offset ->
-                                        val curTimeInClip = (currentPlayheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
-                                        val touchYFraction = offset.y / size.height
-                                        val touchXFraction = offset.x / size.width
-                                        val hitRow = ScorecardManager.hitTestRow(
-                                            activeScoreClip.id,
-                                            sc,
-                                            curTimeInClip,
-                                            touchYFraction,
-                                            touchXFraction,
-                                        )
-                                        if (hitRow >= 0) {
-                                            onScorecardRowTapped(activeScoreClip.id, hitRow)
+                        if (activeBmp != null) {
+                            Image(
+                                bitmap = activeBmp.asImageBitmap(),
+                                contentDescription = "Scorecard",
+                                contentScale = ContentScale.FillBounds,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .pointerInput(activeScoreClip.id) {
+                                        detectTapGestures { offset ->
+                                            val curTimeInClip = (currentPlayheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
+                                            val touchYFraction = offset.y / size.height
+                                            val touchXFraction = offset.x / size.width
+                                            val hitRow = ScorecardManager.hitTestRow(
+                                                activeScoreClip.id,
+                                                sc,
+                                                curTimeInClip,
+                                                touchYFraction,
+                                                touchXFraction,
+                                            )
+                                            if (hitRow >= 0) {
+                                                onScorecardRowTapped(activeScoreClip.id, hitRow)
+                                            }
                                         }
-                                    }
-                                },
-                        )
+                                    },
+                            )
+                        }
                     }
                 }
             }
@@ -287,9 +384,6 @@ fun PreviewPlayer(
     }
 }
 
-/**
- * 2-விரல் ஸ்மூத் Pinch Zoom மற்றும் கார்னர் கிராப் கண்ட்ரோலர்
- */
 @Composable
 private fun PipLayer(
     pipPlayer: ExoPlayer,
@@ -362,7 +456,6 @@ private fun PipLayer(
                         val down = awaitFirstDown(requireUnconsumed = false)
                         onSelect(active.id)
 
-                        // 50dp பெரிய தொடுவட்டம் - விரல் மிஸ் ஆகாது
                         val cornerTouchRadius = 50f * density
                         val edgeTouchRadius = 40f * density
                         val scaleTouchRadius = 55f * density
@@ -386,7 +479,6 @@ private fun PipLayer(
                             else -> DragTarget.MOVE_PIP
                         }
 
-                        // பழைய Pinch Distance-ஐ முழுமையாக ரீசெட் செய்தல்
                         var prevPointers = 0
                         var prevDistance = 0f
 
@@ -396,7 +488,6 @@ private fun PipLayer(
                             if (pointers.isEmpty()) break
 
                             if (pointers.size >= 2) {
-                                // 🌟 இரண்டு விரல் Pinch Zoom (சுருங்கும் பிழை நீக்கப்பட்டது)
                                 val p1 = pointers[0].position
                                 val p2 = pointers[1].position
                                 val currentDistance = hypot(p1.x - p2.x, p1.y - p2.y)
@@ -484,7 +575,6 @@ private fun PipLayer(
                             }
                         } while (true)
 
-                        // அளவை அப்படியே லாக் செய்தல்
                         onMove(active.id, liveOffsetX, liveOffsetY)
                         onScale(active.id, liveScale)
                         if (isCropModeActive) {
@@ -493,7 +583,6 @@ private fun PipLayer(
                     }
                 },
         ) {
-            // 1. படம் (மிரர் செய்யப்பட்டாலும் கார்னர் திசை மாறாமல் இருக்க Inner graphicsLayer மட்டும்)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -543,7 +632,6 @@ private fun PipLayer(
                 }
             }
 
-            // 2. சியான் டாஷ்ட் பார்டர் & Handles
             if (isSelected) {
                 Box(
                     modifier = Modifier
@@ -564,7 +652,6 @@ private fun PipLayer(
                 )
 
                 if (isCropModeActive) {
-                    // Top Edge Dot
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cCenterX - 11 * density).roundToInt(), (cT - 11 * density).roundToInt()) }
@@ -574,7 +661,6 @@ private fun PipLayer(
                             .border(2.5.dp, Color.White, CircleShape),
                     )
 
-                    // Bottom Edge Dot
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cCenterX - 11 * density).roundToInt(), (cB - 11 * density).roundToInt()) }
@@ -584,7 +670,6 @@ private fun PipLayer(
                             .border(2.5.dp, Color.White, CircleShape),
                     )
 
-                    // Left Edge Dot
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cL - 11 * density).roundToInt(), (cCenterY - 11 * density).roundToInt()) }
@@ -594,7 +679,6 @@ private fun PipLayer(
                             .border(2.5.dp, Color.White, CircleShape),
                     )
 
-                    // Right Edge Dot
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cR - 11 * density).roundToInt(), (cCenterY - 11 * density).roundToInt()) }
@@ -604,7 +688,6 @@ private fun PipLayer(
                             .border(2.5.dp, Color.White, CircleShape),
                     )
 
-                    // Top-Left Bracket
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cL - 5 * density).roundToInt(), (cT - 5 * density).roundToInt()) }
@@ -616,7 +699,6 @@ private fun PipLayer(
                             },
                     )
 
-                    // Top-Right Bracket
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cR - 19 * density).roundToInt(), (cT - 5 * density).roundToInt()) }
@@ -628,7 +710,6 @@ private fun PipLayer(
                             },
                     )
 
-                    // Bottom-Left Bracket
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cL - 5 * density).roundToInt(), (cB - 19 * density).roundToInt()) }
@@ -640,7 +721,6 @@ private fun PipLayer(
                             },
                     )
 
-                    // Bottom-Right Bracket
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cR - 19 * density).roundToInt(), (cB - 19 * density).roundToInt()) }
@@ -653,7 +733,6 @@ private fun PipLayer(
                     )
                 }
 
-                // Fty Scale Circle
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
