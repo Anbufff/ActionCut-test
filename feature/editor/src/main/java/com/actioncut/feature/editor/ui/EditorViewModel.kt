@@ -183,6 +183,16 @@ class EditorViewModel @Inject constructor(
         scheduleSave()
     }
 
+    fun toggleFbTemplate() {
+        val cur = _uiState.value.canvas
+        val newOn = !cur.isFbTemplateEnabled
+        updateCanvas { it.copy(isFbTemplateEnabled = newOn) }
+    }
+
+    fun setFbTemplateImage(uri: String) {
+        updateCanvas { it.copy(fbTemplateImageUri = uri, isFbTemplateEnabled = true) }
+    }
+
     fun renameProject(name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
@@ -354,8 +364,8 @@ class EditorViewModel @Inject constructor(
                 type = if (isVideo) ClipType.VIDEO else ClipType.IMAGE,
                 transform = Transform(offsetX = 0.0f, offsetY = 0.0f, scale = 0.5f),
                 crop = CropRect(0f, 0f, 1f, 1f),
-                effects = emptyList(),   // PiP-ல் எவ்வித ஆட்டோ-ஜூம் எஃபெக்ட்டும் இருக்காது
-                keyframes = emptyList(), // PiP-ல் எவ்வித ஆட்டோ-கீபிரேமும் இருக்காது
+                effects = emptyList(),
+                keyframes = emptyList(),
             )
             val track = _uiState.value.timeline.tracks
                 .firstOrNull { it.type == TrackType.OVERLAY }
@@ -678,9 +688,6 @@ class EditorViewModel @Inject constructor(
         _uiState.update { it.copy(selectedClipId = clip.id) }
     }
 
-    /**
-     * PiP நகர்த்திய இடத்தை லாக் செய்தல்
-     */
     fun setOverlayPosition(clipId: String, offsetX: Float, offsetY: Float) {
         val clip = currentClip(clipId) ?: return
         mutate(structural = false) { timeline ->
@@ -706,16 +713,12 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /**
-     * 🌟 நீங்கள் Pinch செய்து வைக்கும் Zoom அளவை நிரந்தரமாக லாக் செய்து, சிறிதாக மாறாமல் தடுக்கும் மெத்தட்
-     */
     fun setOverlayScale(clipId: String, scale: Float) {
         val clip = currentClip(clipId) ?: return
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, clipId) { c ->
                 val newScale = scale.coerceIn(0.15f, 4.0f)
                 val newTransform = c.transform.copy(scale = newScale)
-                // அனைத்து கீபிரேம்களையும் புதிய Zoom அளவிற்கு மாற்றி சுருங்குவதைத் தடுத்தல்
                 val updatedKfs = c.keyframes.map { it.copy(scale = newScale) }
                 c.copy(transform = newTransform, keyframes = updatedKfs)
             }
@@ -816,96 +819,95 @@ class EditorViewModel @Inject constructor(
         val clip = currentClip(id) ?: return@withSelected
         val existingIndex = clip.effects.indexOfFirst { it.type == type }
         mutate(structural = false) { timeline ->
-            if (existingIndex >= 0) {
-                TimelineEditor.removeEffect(timeline, id, existingIndex)
-            } else {
-                TimelineEditor.addEffect(timeline, id, VisualEffect(type))
+            TimelineEditor.updateClip(timeline, id) { c ->
+                val newEffects = if (existingIndex >= 0) {
+                    c.effects.filterIndexed { index, _ -> index != existingIndex }
+                } else {
+                    c.effects + VisualEffect(type, 1f)
+                }
+                c.copy(effects = newEffects)
             }
         }
     }
 
     fun undo() {
-        if (undoStack.isEmpty()) return
-        redoStack.addLast(_uiState.value.timeline)
-        val previous = undoStack.removeLast()
-        applyTimeline(previous, structural = true)
+        val prev = undoStack.removeLastOrNull() ?: return
+        val current = _uiState.value.timeline
+        redoStack.addLast(current)
+        _uiState.update {
+            it.copy(
+                timeline = prev,
+                canUndo = undoStack.isNotEmpty(),
+                canRedo = redoStack.isNotEmpty(),
+            )
+        }
+        loadedProject = loadedProject?.copy(timeline = prev)
+        playerController.setTimeline(prev, preservePositionMs = _uiState.value.playheadMs)
+        scheduleSave()
     }
 
     fun redo() {
-        if (redoStack.isEmpty()) return
-        undoStack.addLast(_uiState.value.timeline)
-        val next = redoStack.removeLast()
-        applyTimeline(next, structural = true)
-    }
-
-    private inline fun withSelected(action: (String) -> Unit) {
-        _uiState.value.selectedClipId?.let(action)
-    }
-
-    private fun currentClip(id: String) = _uiState.value.timeline.allClips.firstOrNull { it.id == id }
-
-    private fun clipAtPlayhead(): Clip? {
-        val playhead = _uiState.value.playheadMs
-        return _uiState.value.timeline.videoTracks.firstOrNull()?.clipAt(playhead)
-    }
-
-    private fun mutate(structural: Boolean, op: (Timeline) -> Timeline) {
+        val next = redoStack.removeLastOrNull() ?: return
         val current = _uiState.value.timeline
-        val updated = op(current)
-        if (updated == current) return
         undoStack.addLast(current)
-        if (undoStack.size > MAX_UNDO) undoStack.removeFirst()
-        redoStack.clear()
-        applyTimeline(updated, structural)
-    }
-
-    private fun applyTimeline(timeline: Timeline, structural: Boolean) {
-        val currentPlayhead = _uiState.value.playheadMs
         _uiState.update {
             it.copy(
-                timeline = timeline,
+                timeline = next,
                 canUndo = undoStack.isNotEmpty(),
                 canRedo = redoStack.isNotEmpty(),
-                playheadMs = currentPlayhead.coerceIn(0, timeline.durationMs),
             )
         }
+        loadedProject = loadedProject?.copy(timeline = next)
+        playerController.setTimeline(next, preservePositionMs = _uiState.value.playheadMs)
+        scheduleSave()
+    }
+
+    private inline fun withSelected(crossinline block: (String) -> Unit) {
+        _uiState.value.selectedClipId?.let(block)
+    }
+
+    private fun currentClip(id: String): Clip? =
+        _uiState.value.timeline.allClips.firstOrNull { it.id == id }
+
+    private fun clipAtPlayhead(): Clip? {
+        val pos = _uiState.value.playheadMs
+        return _uiState.value.timeline.tracks
+            .firstOrNull { it.type == TrackType.VIDEO }
+            ?.clips?.firstOrNull { it.contains(pos) }
+    }
+
+    private fun mutate(structural: Boolean = false, transform: (Timeline) -> Timeline) {
+        val currentTimeline = _uiState.value.timeline
+        val newTimeline = transform(currentTimeline)
+        if (newTimeline == currentTimeline) return
+
+        undoStack.addLast(currentTimeline)
+        redoStack.clear()
+
+        _uiState.update {
+            it.copy(
+                timeline = newTimeline,
+                canUndo = undoStack.isNotEmpty(),
+                canRedo = redoStack.isNotEmpty(),
+            )
+        }
+        loadedProject = loadedProject?.copy(timeline = newTimeline)
+
         if (structural) {
-            playerController.setTimeline(timeline, preservePositionMs = currentPlayhead)
-            playerController.seekTo(currentPlayhead)
-        } else {
-            playerController.updateVolumes(timeline)
-            playerController.refreshPreviewEffects(timeline)
+            playerController.setTimeline(newTimeline, preservePositionMs = _uiState.value.playheadMs)
         }
         scheduleSave()
     }
 
     private fun scheduleSave() {
-        val project = loadedProject ?: return
         saveJob?.cancel()
         saveJob = viewModelScope.launch {
-            delay(600)
-            val updated = project.copy(timeline = _uiState.value.timeline)
-            loadedProject = updated
-            saveProject(updated)
+            delay(500L)
+            loadedProject?.let { saveProject(it) }
         }
-    }
-
-    fun saveNow() {
-        val project = loadedProject ?: return
-        viewModelScope.launch {
-            saveProject(project.copy(timeline = _uiState.value.timeline))
-        }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        saveNow()
-        voiceRecorder.cancel()
-        playerController.release()
     }
 
     companion object {
         const val ARG_PROJECT_ID = "projectId"
-        private const val MAX_UNDO = 50
     }
 }
