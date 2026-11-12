@@ -117,7 +117,7 @@ object EffectMapper {
             presentationLayout,
         )
 
-        // 🌟 4:5 TPL-ல் மெயின் வீடியோ / போட்டோவை துல்லியமாக மேலே உள்ள 16:9 பாக்ஸிற்கு நகர்த்துதல்
+        // 🌟 4:5 TPL-ல் மெயின் வீடியோ / போட்டோவை மேலே உள்ள 16:9 பாக்ஸிற்கு (0 to 608px) நகர்த்துதல்
         if (isFbTemplate) {
             effects += MatrixTransformation { _ ->
                 android.graphics.Matrix().apply {
