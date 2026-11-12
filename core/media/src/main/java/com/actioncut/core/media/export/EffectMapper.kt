@@ -39,6 +39,7 @@ import com.actioncut.core.model.SpeedRamps
 import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.VisualEffectType
 import com.google.common.collect.ImmutableList
+import java.io.File
 
 object ScorecardBridge {
     var bitmapProvider: ((clipId: String, data: ScorecardClipData, timeInClipMs: Long) -> Bitmap?)? = null
@@ -117,7 +118,7 @@ object EffectMapper {
             presentationLayout,
         )
 
-        // 🌟 4:5 TPL-ல் மெயின் வீடியோ / போட்டோவை மேலே உள்ள 16:9 பாக்ஸிற்கு (0 to 608px) நகர்த்துதல்
+        // 🌟 4:5 TPL-ல் மெயின் வீடியோ / போட்டோவை மேலே உள்ள 16:9 பாக்ஸிற்கு நகர்த்துதல்
         if (isFbTemplate) {
             effects += MatrixTransformation { _ ->
                 android.graphics.Matrix().apply {
@@ -131,7 +132,6 @@ object EffectMapper {
             effects += OverlayEffect(ImmutableList.of(scOverlay))
         }
 
-        // 🌟 Facebook 4:5 TPL நடுப்பகுதி Like/Share Bar + அடியில் உள்ள படத்தை வீடியோ மீது சேர்த்தல்
         if (templateOverlay != null) {
             effects += templateOverlay
         }
@@ -169,9 +169,17 @@ object EffectMapper {
         return OverlayEffect(ImmutableList.copyOf(textureOverlays))
     }
 
+    // 🌟 PiP Overlay-ஐ ஃபைல் பாத்திலிருந்து பாதுகாப்பாக எடுத்து எக்ஸ்போர்ட் செய்வது
     private fun imageOverlay(ov: Clip, clip: Clip, targetWidth: Int): TextureOverlay? {
-        val path = ov.mediaUri?.let { Uri.parse(it).path } ?: return null
-        val bitmap = BitmapFactory.decodeFile(path) ?: return null
+        val uriStr = ov.mediaUri ?: return null
+        val uri = Uri.parse(uriStr)
+        val file = if (uri.scheme == "file") File(uri.path ?: "") else File(uriStr)
+        val bitmap = if (file.exists()) {
+            BitmapFactory.decodeFile(file.absolutePath)
+        } else {
+            BitmapFactory.decodeFile(uri.path ?: uriStr)
+        } ?: return null
+
         val factor = (targetWidth * ov.transform.scale) / bitmap.width.toFloat()
         val visible = OverlaySettings.Builder()
             .setBackgroundFrameAnchor(
