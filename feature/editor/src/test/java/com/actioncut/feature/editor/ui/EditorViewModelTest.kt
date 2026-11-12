@@ -1,5 +1,6 @@
 package com.actioncut.feature.editor.ui
 
+import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import com.actioncut.core.domain.usecase.GetProjectUseCase
 import com.actioncut.core.media.player.PlaybackState
@@ -78,7 +79,9 @@ class EditorViewModelTest {
         every { player.positionFlow(any()) } returns emptyFlow()
         val getProject = mockk<GetProjectUseCase>()
         coEvery { getProject(any()) } returns sampleProject()
+        val context = mockk<Context>(relaxed = true)
         return EditorViewModel(
+            context = context,
             savedStateHandle = SavedStateHandle(mapOf("projectId" to "p1")),
             getProject = getProject,
             saveProject = mockk(relaxed = true),
