@@ -88,7 +88,7 @@ fun PreviewPlayer(
             val w = constraints.maxWidth.toFloat()
             val h = constraints.maxHeight.toFloat()
 
-            // 1. பின்னணியில் அதே படத்தின் Blur Effect
+            // 1. பின்னணியில் Blur Effect
             if (currentMainClip != null && currentMainClip.mediaUri != null) {
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
@@ -165,7 +165,6 @@ fun PreviewPlayer(
 
                 val isMainSelected = currentMainClip.id == selectedClipId
                 val mainTransform = currentMainClip.transform
-
                 val totalScale = autoZoomScale * mainTransform.scale
 
                 AsyncImage(
@@ -192,7 +191,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // 3. Fty HTML Video Editor பாணியில் PiP Layer
+            // 3. அதிவேக மென்மையான PiP லேயர் (Smooth Drag & Crop)
             if (pipPlayer != null) {
                 PipLayer(
                     pipPlayer = pipPlayer,
@@ -281,14 +280,7 @@ fun PreviewPlayer(
 }
 
 /**
- * Fty Video Editor பாணியில்:
- * 1. 48.dp தொடு பரப்புடைய கைப்பிடிகள்
- * 2. சியான் டாஷ்ட் பார்டர் (Cyan Dashed Border)
- * 3. 4 மூலைகளில் Corner Brackets
- * 4. 4 பக்கங்களில் Edge Handles
- * 5. நடுவில் உள்ள Center Pan Zone
- * 6. வலது கீழ் மூலையில் Scale Handle
- * 7. Google AI Human Cutout
+ * Buttery Smooth 60fps/120fps PiP Drag & Live On-Screen Free Crop
  */
 @Composable
 private fun PipLayer(
@@ -314,8 +306,7 @@ private fun PipLayer(
 
     LaunchedEffect(active.id, active.mediaUri, isAiCutoutOn) {
         if (isAiCutoutOn && active.mediaUri != null && active.type == ClipType.IMAGE) {
-            val res = AiCutoutManager.getOrCreateCutoutUri(context, active.mediaUri!!)
-            cutoutUri = res
+            cutoutUri = AiCutoutManager.getOrCreateCutoutUri(context, active.mediaUri!!)
         } else {
             cutoutUri = null
         }
@@ -332,33 +323,45 @@ private fun PipLayer(
         val isSelected = active.id == selectedClipId
         val cyanColor = Color(0xFF00E5FF)
 
-        val currentCrop = active.crop ?: CropRect(0f, 0f, 1f, 1f)
+        // Live Smooth Dragging States (Recomposition-ஐத் தடுத்து அதிவேகமாக இயங்க வைக்கும் லோக்கல் ஸ்டேட்ஸ்)
+        var liveOffsetX by remember(active.id, t.offsetX) { mutableFloatStateOf(t.offsetX) }
+        var liveOffsetY by remember(active.id, t.offsetY) { mutableFloatStateOf(t.offsetY) }
+        var liveScale by remember(active.id, t.scale) { mutableFloatStateOf(t.scale) }
+
+        val baseCrop = active.crop ?: CropRect(0f, 0f, 1f, 1f)
+        var liveCrop by remember(active.id, baseCrop) { mutableStateOf(baseCrop) }
+
+        val pipPixelW = (w * liveScale)
+        val pipPixelH = (h * liveScale)
 
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
-                .size(pipW.dp, pipH.dp)
+                .size((w * liveScale / density).dp, (h * liveScale / density).dp)
                 .graphicsLayer {
-                    translationX = (t.offsetX / 2f) * w
-                    translationY = (t.offsetY / 2f) * h
+                    translationX = (liveOffsetX / 2f) * w
+                    translationY = (liveOffsetY / 2f) * h
                     scaleX = if (isFlipped) -1f else 1f
                     rotationZ = t.rotationDegrees
                     alpha = props.opacity
                 }
-                .pointerInput(active.id, w, h, isCropModeActive) {
-                    if (!isCropModeActive) {
-                        var ox = t.offsetX
-                        var oy = t.offsetY
-                        detectDragGestures(
-                            onDragStart = { onSelect(active.id); ox = active.transform.offsetX; oy = active.transform.offsetY },
-                            onDrag = { change, drag ->
-                                change.consume()
-                                ox = (ox + drag.x / (w / 2f)).coerceIn(-1.5f, 1.5f)
-                                oy = (oy + drag.y / (h / 2f)).coerceIn(-1.5f, 1.5f)
-                                onMove(active.id, ox, oy)
-                            },
-                        )
-                    }
+                .pointerInput(active.id) {
+                    detectDragGestures(
+                        onDragStart = {
+                            onSelect(active.id)
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            liveOffsetX = (liveOffsetX + dragAmount.x / (w / 2f)).coerceIn(-1.8f, 1.8f)
+                            liveOffsetY = (liveOffsetY + dragAmount.y / (h / 2f)).coerceIn(-1.8f, 1.8f)
+                        },
+                        onDragEnd = {
+                            onMove(active.id, liveOffsetX, liveOffsetY)
+                        },
+                        onDragCancel = {
+                            onMove(active.id, liveOffsetX, liveOffsetY)
+                        }
+                    )
                 },
         ) {
             // 1. படம் - Crop விளிம்புகளுக்குள் கத்தரிக்கப்பட்டு வரைதல்
@@ -366,7 +369,7 @@ private fun PipLayer(
                 modifier = Modifier
                     .fillMaxSize()
                     .drawWithContent {
-                        val crop = currentCrop
+                        val crop = liveCrop
                         val clipRect = Rect(
                             left = size.width * crop.left,
                             top = size.height * crop.top,
@@ -403,17 +406,14 @@ private fun PipLayer(
                 }
             }
 
-            // 2. Live On-Screen Free Crop Bounding Box & 48.dp Handles
+            // 2. அதிவேக Live On-Screen Free Crop Bounding Box & 48.dp Touch Handles
             if (isSelected) {
-                val pipPixelW = pipW * density
-                val pipPixelH = pipH * density
-
-                val cL = pipPixelW * currentCrop.left
-                val cT = pipPixelH * currentCrop.top
-                val cR = pipPixelW * currentCrop.right
-                val cB = pipPixelH * currentCrop.bottom
-                val cW = cR - cL
-                val cH = cB - cT
+                val cL = pipPixelW * liveCrop.left
+                val cT = pipPixelH * liveCrop.top
+                val cR = pipPixelW * liveCrop.right
+                val cB = pipPixelH * liveCrop.bottom
+                val cW = (cR - cL).coerceAtLeast(10f)
+                val cH = (cB - cT).coerceAtLeast(10f)
                 val cCenterX = (cL + cR) / 2f
                 val cCenterY = (cT + cB) / 2f
 
@@ -436,40 +436,21 @@ private fun PipLayer(
                         },
                 )
 
-                // Center Crop Pan Zone (நடுப்பகுதியை இழுத்து Crop பாக்ஸை நகர்த்துதல்)
-                Box(
-                    modifier = Modifier
-                        .offset { IntOffset(cL.roundToInt(), cT.roundToInt()) }
-                        .size((cW / density).dp, (cH / density).dp)
-                        .pointerInput(active.id, currentCrop) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                val dx = drag.x / pipPixelW
-                                val dy = drag.y / pipPixelH
-                                val cropW = currentCrop.right - currentCrop.left
-                                val cropH = currentCrop.bottom - currentCrop.top
-                                val newLeft = (currentCrop.left + dx).coerceIn(0f, 1f - cropW)
-                                val newTop = (currentCrop.top + dy).coerceIn(0f, 1f - cropH)
-                                onCropChange(
-                                    active.id,
-                                    CropRect(newLeft, newTop, newLeft + cropW, newTop + cropH),
-                                )
-                            }
-                        },
-                )
-
-                // Top Edge Handle (48.dp Touch)
+                // 48.dp தொடு பரப்புடைய Top Edge Handle
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cCenterX - 24 * density).roundToInt(), (cT - 24 * density).roundToInt()) }
                         .size(48.dp)
-                        .pointerInput(active.id, currentCrop) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                val dy = drag.y / pipPixelH
-                                val newTop = (currentCrop.top + dy).coerceIn(0f, currentCrop.bottom - 0.05f)
-                                onCropChange(active.id, currentCrop.copy(top = newTop))
-                            }
+                        .pointerInput(active.id) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val dy = dragAmount.y / pipPixelH
+                                    val newTop = (liveCrop.top + dy).coerceIn(0f, liveCrop.bottom - 0.05f)
+                                    liveCrop = liveCrop.copy(top = newTop)
+                                },
+                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                            )
                         },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -482,18 +463,21 @@ private fun PipLayer(
                     )
                 }
 
-                // Bottom Edge Handle (48.dp Touch)
+                // 48.dp தொடு பரப்புடைய Bottom Edge Handle
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cCenterX - 24 * density).roundToInt(), (cB - 24 * density).roundToInt()) }
                         .size(48.dp)
-                        .pointerInput(active.id, currentCrop) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                val dy = drag.y / pipPixelH
-                                val newBottom = (currentCrop.bottom + dy).coerceIn(currentCrop.top + 0.05f, 1f)
-                                onCropChange(active.id, currentCrop.copy(bottom = newBottom))
-                            }
+                        .pointerInput(active.id) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val dy = dragAmount.y / pipPixelH
+                                    val newBottom = (liveCrop.bottom + dy).coerceIn(liveCrop.top + 0.05f, 1f)
+                                    liveCrop = liveCrop.copy(bottom = newBottom)
+                                },
+                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                            )
                         },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -506,18 +490,21 @@ private fun PipLayer(
                     )
                 }
 
-                // Left Edge Handle (48.dp Touch)
+                // 48.dp தொடு பரப்புடைய Left Edge Handle
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cL - 24 * density).roundToInt(), (cCenterY - 24 * density).roundToInt()) }
                         .size(48.dp)
-                        .pointerInput(active.id, currentCrop) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                val dx = drag.x / pipPixelW
-                                val newLeft = (currentCrop.left + dx).coerceIn(0f, currentCrop.right - 0.05f)
-                                onCropChange(active.id, currentCrop.copy(left = newLeft))
-                            }
+                        .pointerInput(active.id) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val dx = dragAmount.x / pipPixelW
+                                    val newLeft = (liveCrop.left + dx).coerceIn(0f, liveCrop.right - 0.05f)
+                                    liveCrop = liveCrop.copy(left = newLeft)
+                                },
+                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                            )
                         },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -530,18 +517,21 @@ private fun PipLayer(
                     )
                 }
 
-                // Right Edge Handle (48.dp Touch)
+                // 48.dp தொடு பரப்புடைய Right Edge Handle
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cR - 24 * density).roundToInt(), (cCenterY - 24 * density).roundToInt()) }
                         .size(48.dp)
-                        .pointerInput(active.id, currentCrop) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                val dx = drag.x / pipPixelW
-                                val newRight = (currentCrop.right + dx).coerceIn(currentCrop.left + 0.05f, 1f)
-                                onCropChange(active.id, currentCrop.copy(right = newRight))
-                            }
+                        .pointerInput(active.id) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val dx = dragAmount.x / pipPixelW
+                                    val newRight = (liveCrop.right + dx).coerceIn(liveCrop.left + 0.05f, 1f)
+                                    liveCrop = liveCrop.copy(right = newRight)
+                                },
+                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                            )
                         },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -559,15 +549,18 @@ private fun PipLayer(
                     modifier = Modifier
                         .offset { IntOffset((cL - 16 * density).roundToInt(), (cT - 16 * density).roundToInt()) }
                         .size(48.dp)
-                        .pointerInput(active.id, currentCrop) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                val dx = drag.x / pipPixelW
-                                val dy = drag.y / pipPixelH
-                                val newLeft = (currentCrop.left + dx).coerceIn(0f, currentCrop.right - 0.05f)
-                                val newTop = (currentCrop.top + dy).coerceIn(0f, currentCrop.bottom - 0.05f)
-                                onCropChange(active.id, currentCrop.copy(left = newLeft, top = newTop))
-                            }
+                        .pointerInput(active.id) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val dx = dragAmount.x / pipPixelW
+                                    val dy = dragAmount.y / pipPixelH
+                                    val newLeft = (liveCrop.left + dx).coerceIn(0f, liveCrop.right - 0.05f)
+                                    val newTop = (liveCrop.top + dy).coerceIn(0f, liveCrop.bottom - 0.05f)
+                                    liveCrop = liveCrop.copy(left = newLeft, top = newTop)
+                                },
+                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                            )
                         },
                     contentAlignment = Alignment.TopStart,
                 ) {
@@ -588,15 +581,18 @@ private fun PipLayer(
                     modifier = Modifier
                         .offset { IntOffset((cR - 32 * density).roundToInt(), (cT - 16 * density).roundToInt()) }
                         .size(48.dp)
-                        .pointerInput(active.id, currentCrop) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                val dx = drag.x / pipPixelW
-                                val dy = drag.y / pipPixelH
-                                val newRight = (currentCrop.right + dx).coerceIn(currentCrop.left + 0.05f, 1f)
-                                val newTop = (currentCrop.top + dy).coerceIn(0f, currentCrop.bottom - 0.05f)
-                                onCropChange(active.id, currentCrop.copy(right = newRight, top = newTop))
-                            }
+                        .pointerInput(active.id) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val dx = dragAmount.x / pipPixelW
+                                    val dy = dragAmount.y / pipPixelH
+                                    val newRight = (liveCrop.right + dx).coerceIn(liveCrop.left + 0.05f, 1f)
+                                    val newTop = (liveCrop.top + dy).coerceIn(0f, liveCrop.bottom - 0.05f)
+                                    liveCrop = liveCrop.copy(right = newRight, top = newTop)
+                                },
+                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                            )
                         },
                     contentAlignment = Alignment.TopEnd,
                 ) {
@@ -617,15 +613,18 @@ private fun PipLayer(
                     modifier = Modifier
                         .offset { IntOffset((cL - 16 * density).roundToInt(), (cB - 32 * density).roundToInt()) }
                         .size(48.dp)
-                        .pointerInput(active.id, currentCrop) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                val dx = drag.x / pipPixelW
-                                val dy = drag.y / pipPixelH
-                                val newLeft = (currentCrop.left + dx).coerceIn(0f, currentCrop.right - 0.05f)
-                                val newBottom = (currentCrop.bottom + dy).coerceIn(currentCrop.top + 0.05f, 1f)
-                                onCropChange(active.id, currentCrop.copy(left = newLeft, bottom = newBottom))
-                            }
+                        .pointerInput(active.id) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val dx = dragAmount.x / pipPixelW
+                                    val dy = dragAmount.y / pipPixelH
+                                    val newLeft = (liveCrop.left + dx).coerceIn(0f, liveCrop.right - 0.05f)
+                                    val newBottom = (liveCrop.bottom + dy).coerceIn(liveCrop.top + 0.05f, 1f)
+                                    liveCrop = liveCrop.copy(left = newLeft, bottom = newBottom)
+                                },
+                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                            )
                         },
                     contentAlignment = Alignment.BottomStart,
                 ) {
@@ -646,15 +645,18 @@ private fun PipLayer(
                     modifier = Modifier
                         .offset { IntOffset((cR - 32 * density).roundToInt(), (cB - 32 * density).roundToInt()) }
                         .size(48.dp)
-                        .pointerInput(active.id, currentCrop) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                val dx = drag.x / pipPixelW
-                                val dy = drag.y / pipPixelH
-                                val newRight = (currentCrop.right + dx).coerceIn(currentCrop.left + 0.05f, 1f)
-                                val newBottom = (currentCrop.bottom + dy).coerceIn(currentCrop.top + 0.05f, 1f)
-                                onCropChange(active.id, currentCrop.copy(right = newRight, bottom = newBottom))
-                            }
+                        .pointerInput(active.id) {
+                            detectDragGestures(
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val dx = dragAmount.x / pipPixelW
+                                    val dy = dragAmount.y / pipPixelH
+                                    val newRight = (liveCrop.right + dx).coerceIn(liveCrop.left + 0.05f, 1f)
+                                    val newBottom = (liveCrop.bottom + dy).coerceIn(liveCrop.top + 0.05f, 1f)
+                                    liveCrop = liveCrop.copy(right = newRight, bottom = newBottom)
+                                },
+                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                            )
                         },
                     contentAlignment = Alignment.BottomEnd,
                 ) {
@@ -676,15 +678,13 @@ private fun PipLayer(
                         .align(Alignment.BottomEnd)
                         .offset(x = 10.dp, y = 10.dp)
                         .size(48.dp)
-                        .pointerInput(active.id, w) {
-                            var s = t.scale
+                        .pointerInput(active.id) {
                             detectDragGestures(
-                                onDragStart = { onSelect(active.id); s = active.transform.scale },
-                                onDrag = { change, drag ->
+                                onDrag = { change, dragAmount ->
                                     change.consume()
-                                    s = (s + drag.x / w).coerceIn(0.15f, 2.0f)
-                                    onScale(active.id, s)
+                                    liveScale = (liveScale + dragAmount.x / w).coerceIn(0.15f, 2.5f)
                                 },
+                                onDragEnd = { onScale(active.id, liveScale) }
                             )
                         },
                     contentAlignment = Alignment.Center,
