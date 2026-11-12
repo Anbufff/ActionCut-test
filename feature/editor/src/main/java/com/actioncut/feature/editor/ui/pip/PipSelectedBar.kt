@@ -19,8 +19,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -57,10 +55,8 @@ import com.actioncut.core.model.CropRect
 import kotlin.math.min
 
 /**
- * Fty HTML Video Editor ஸ்கிரீன்ஷாட்டில் உள்ளபடியே PiP தேர்ந்தெடுக்கப்படும் போது தோன்றும் முழுமையான Toolbar:
- * [ KF +/- ] [ CLIP END ] [ VID END ] [ FLIP ] [ CROP ] [ TRIM R ] [ CUTOUT ] [ DELETE ] [ SETTINGS ]
- *
- * அனைத்து Parameters-க்கும் Default Values கொடுக்கப்பட்டுள்ளதால் எவ்வித compile பிழையுமின்றி 100% பில்ட் ஆகும்.
+ * PiP Selected Toolbar:
+ * CLIP END மற்றும் FLIP நீக்கப்பட்டு, தேவையான முக்கிய டூல்கள் மட்டும் தெளிவாகக் காட்டப்பட்டுள்ளன.
  */
 @Composable
 fun PipSelectedBar(
@@ -89,7 +85,7 @@ fun PipSelectedBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 1. Keyframe +/- (HTML எடிட்டரின் kf-tool)
+            // 1. Keyframe +/-
             item {
                 ToolItem(
                     label = "KF +/-",
@@ -98,15 +94,7 @@ fun PipSelectedBar(
                     onClick = onKeyframeToggle,
                 )
             }
-            // 2. CLIP END (HTML எடிட்டரின் setPipToClipEnd)
-            item {
-                ToolItem(
-                    label = "CLIP END",
-                    icon = Icons.Filled.SkipNext,
-                    onClick = onClipEnd,
-                )
-            }
-            // 3. VID END (HTML எடிட்டரின் setPipToVideoEnd)
+            // 2. VID END
             item {
                 ToolItem(
                     label = "VID END",
@@ -114,15 +102,7 @@ fun PipSelectedBar(
                     onClick = onVidEnd,
                 )
             }
-            // 4. FLIP (HTML எடிட்டரின் flipActiveArrow / Horizontal Flip)
-            item {
-                ToolItem(
-                    label = "FLIP",
-                    icon = Icons.Filled.SwapHoriz,
-                    onClick = onFlip,
-                )
-            }
-            // 5. CROP (Fty Live Freeform Crop)
+            // 3. CROP
             item {
                 ToolItem(
                     label = "CROP",
@@ -131,7 +111,7 @@ fun PipSelectedBar(
                     onClick = onCrop,
                 )
             }
-            // 6. TRIM R (Trim Right at playhead)
+            // 4. TRIM R (Trim Right at playhead)
             item {
                 ToolItem(
                     label = "TRIM R",
@@ -139,7 +119,7 @@ fun PipSelectedBar(
                     onClick = onTrimRight,
                 )
             }
-            // 7. CUTOUT (Google AI Selfie Human Cutout)
+            // 5. CUTOUT (Google AI Selfie Human Cutout)
             item {
                 ToolItem(
                     label = "CUTOUT",
@@ -148,7 +128,7 @@ fun PipSelectedBar(
                     onClick = onCutout,
                 )
             }
-            // 8. DELETE
+            // 6. DELETE
             item {
                 ToolItem(
                     label = "DELETE",
@@ -156,7 +136,7 @@ fun PipSelectedBar(
                     onClick = onDelete,
                 )
             }
-            // 9. SETTINGS
+            // 7. SETTINGS
             item {
                 ToolItem(
                     label = "SETTINGS",
@@ -169,7 +149,7 @@ fun PipSelectedBar(
 }
 
 /**
- * Fty HTML PWA எடிட்டரில் உள்ளவாறு 100% Freeform 8-புள்ளிகள் கொண்ட Interactive Crop Box
+ * 8-புள்ளிகள் கொண்ட Interactive Crop Box
  */
 @Composable
 fun FreeCropDialog(
