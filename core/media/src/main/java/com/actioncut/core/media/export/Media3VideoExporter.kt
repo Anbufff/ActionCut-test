@@ -10,8 +10,11 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.C
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.Size
+import androidx.media3.effect.BitmapOverlay
+import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.VideoCompositorSettings
@@ -24,6 +27,7 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import com.actioncut.core.domain.port.VideoExporter
+import com.actioncut.core.media.template.FbTemplateBarRenderer
 import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
@@ -35,6 +39,7 @@ import com.actioncut.core.model.Resolution
 import com.actioncut.core.model.TrackType
 import com.actioncut.core.model.Transform
 import com.actioncut.core.model.TransitionType
+import com.google.common.collect.ImmutableList
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -65,6 +70,7 @@ class Media3VideoExporter @Inject constructor(
 
         val aspect = settings.aspectRatio ?: project.aspectRatio
         val (targetWidth, targetHeight) = targetDimensions(aspect, settings.resolution)
+        val isFbTpl = project.canvas.isFbTemplateEnabled && aspect == AspectRatio.RATIO_4_5
 
         val clips = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             rawClips.map { clip ->
@@ -76,11 +82,16 @@ class Media3VideoExporter @Inject constructor(
                         clip
                     }
                 } else if (clip.type == ClipType.IMAGE && clip.mediaUri != null) {
-                    val blurredFrameUri = createBlurredBackdropImage(context, clip, targetWidth, targetHeight)
-                    if (blurredFrameUri != null) {
-                        clip.copy(mediaUri = blurredFrameUri)
-                    } else {
+                    if (isFbTpl) {
+                        // 🌟 4:5 TPL மோடில் அசல் போட்டோ அப்படியே மேலே 16:9 section-ல் பொருந்த வேண்டும்
                         clip
+                    } else {
+                        val blurredFrameUri = createBlurredBackdropImage(context, clip, targetWidth, targetHeight)
+                        if (blurredFrameUri != null) {
+                            clip.copy(mediaUri = blurredFrameUri)
+                        } else {
+                            clip
+                        }
                     }
                 } else {
                     clip
@@ -98,7 +109,6 @@ class Media3VideoExporter @Inject constructor(
                     .filter { it.type == TrackType.OVERLAY }
                     .flatMap { it.clips }
 
-                // Preview-ன் அதே கணக்கீட்டில் 1:1 ஆகப் பொருத்துதல்
                 val preparedPipOverlays = rawOverlayClips.map { ov ->
                     if (ov.type == ClipType.IMAGE && ov.mediaUri != null && ov.mediaUri?.contains("news_banner") != true) {
                         val processedUri = renderExactPipOverlayToCanvas(context, ov, targetWidth, targetHeight)
@@ -116,10 +126,14 @@ class Media3VideoExporter @Inject constructor(
                 val textOverlays = project.timeline.allClips.filter { it.type == ClipType.TEXT }
                 val overlayClips = preparedPipOverlays + textOverlays
 
-                val presentationLayout = when (project.canvas.fitMode) {
-                    com.actioncut.core.model.FitMode.FIT -> Presentation.LAYOUT_SCALE_TO_FIT
-                    com.actioncut.core.model.FitMode.FILL -> Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
-                    com.actioncut.core.model.FitMode.STRETCH -> Presentation.LAYOUT_STRETCH_TO_FIT
+                val presentationLayout = if (isFbTpl) {
+                    Presentation.LAYOUT_SCALE_TO_FIT
+                } else {
+                    when (project.canvas.fitMode) {
+                        com.actioncut.core.model.FitMode.FIT -> Presentation.LAYOUT_SCALE_TO_FIT
+                        com.actioncut.core.model.FitMode.FILL -> Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
+                        com.actioncut.core.model.FitMode.STRETCH -> Presentation.LAYOUT_STRETCH_TO_FIT
+                    }
                 }
 
                 val totalTimelineMs = project.timeline.durationMs
@@ -145,6 +159,11 @@ class Media3VideoExporter @Inject constructor(
                     clips
                 }
 
+                // 🌟 Facebook 4:5 TPL மேலடுக்கு (Like Bar + Bottom Photo)
+                val tplOverlay = if (isFbTpl) {
+                    FbTemplateOverlay(context, targetWidth, targetHeight, project.canvas.fbTemplateImageUri)
+                } else null
+
                 val editedItems = exportClips.mapIndexed { index, clip ->
                     val incoming = exportClips.getOrNull(index - 1)?.transitionToNext
                         ?.takeIf { it.type != TransitionType.NONE && it.type != TransitionType.SEAMLESS_MERGE }
@@ -152,8 +171,15 @@ class Media3VideoExporter @Inject constructor(
                         ?.takeIf { it.type != TransitionType.NONE && it.type != TransitionType.SEAMLESS_MERGE }
 
                     clip.toEditedMediaItem(
-                        targetWidth, targetHeight, settings, overlayClips, presentationLayout,
-                        incoming, outgoing,
+                        targetWidth = targetWidth,
+                        targetHeight = targetHeight,
+                        settings = settings,
+                        overlays = overlayClips,
+                        presentationLayout = presentationLayout,
+                        incoming = incoming,
+                        outgoing = outgoing,
+                        isFbTpl = isFbTpl,
+                        tplOverlay = tplOverlay,
                     )
                 }
                 val videoSequence = EditedMediaItemSequence(editedItems)
@@ -270,7 +296,6 @@ class Media3VideoExporter @Inject constructor(
         val fullCanvasBmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(fullCanvasBmp)
 
-        // Keyframe அல்லது Transform இரண்டையும் துல்லியமாக எடுத்தல்
         val t = if (clip.keyframes.isNotEmpty()) {
             com.actioncut.core.model.Keyframes.propsAt(clip, 0L).transform
         } else {
@@ -392,6 +417,8 @@ class Media3VideoExporter @Inject constructor(
         presentationLayout: Int,
         incoming: com.actioncut.core.model.Transition? = null,
         outgoing: com.actioncut.core.model.Transition? = null,
+        isFbTpl: Boolean = false,
+        tplOverlay: FbTemplateOverlay? = null,
     ): EditedMediaItem {
         val mediaItemBuilder = MediaItem.Builder().setUri(mediaUri)
         if (type != ClipType.IMAGE) {
@@ -405,8 +432,19 @@ class Media3VideoExporter @Inject constructor(
             )
         }
 
-        val videoEffects = EffectMapper.videoEffects(this, targetWidth, targetHeight, overlays, presentationLayout)
-            .toMutableList()
+        val templateOverlayEffect: Effect? = tplOverlay?.let {
+            OverlayEffect(ImmutableList.of(it.forClip(timelineStartMs)))
+        }
+
+        val videoEffects = EffectMapper.videoEffects(
+            clip = this,
+            targetWidth = targetWidth,
+            targetHeight = targetHeight,
+            overlays = overlays,
+            presentationLayout = presentationLayout,
+            isFbTemplate = isFbTpl,
+            templateOverlay = templateOverlayEffect,
+        ).toMutableList()
 
         val clipDurUs = timelineDurationMs * 1_000L
         incoming?.let { tr ->
@@ -488,4 +526,85 @@ class Media3VideoExporter @Inject constructor(
     }
 
     private fun even(v: Int): Int = if (v % 2 == 0) v else v + 1
+}
+
+/**
+ * 4:5 Facebook TPL மேலடுக்கை (Animated Like Bar + Bottom Image) வீடியோ மீது வரைந்து எக்ஸ்போர்ட் செய்யும் Overlay
+ */
+private class FbTemplateOverlay(
+    private val context: Context,
+    private val targetWidth: Int,
+    private val targetHeight: Int,
+    private val bottomImageUriStr: String?,
+    private val clipStartMs: Long = 0L,
+) : BitmapOverlay() {
+
+    private val defaultSettings = OverlaySettings.Builder().build()
+    private var cachedBottomBitmap: Bitmap? = null
+    private var reusableBitmap: Bitmap? = null
+    private var reusableCanvas: Canvas? = null
+
+    init {
+        if (!bottomImageUriStr.isNullOrBlank()) {
+            runCatching {
+                val uri = Uri.parse(bottomImageUriStr)
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    cachedBottomBitmap = BitmapFactory.decodeStream(stream)
+                }
+            }
+        }
+    }
+
+    fun forClip(startMs: Long): FbTemplateOverlay {
+        val copy = FbTemplateOverlay(context, targetWidth, targetHeight, bottomImageUriStr, startMs)
+        copy.cachedBottomBitmap = this.cachedBottomBitmap
+        return copy
+    }
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        val currentPlayheadMs = clipStartMs + (presentationTimeUs / 1000L)
+        val timeSeconds = currentPlayheadMs / 1000f
+
+        if (reusableBitmap == null) {
+            reusableBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+            reusableCanvas = Canvas(reusableBitmap!!)
+        }
+
+        val outBmp = reusableBitmap!!
+        val canvas = reusableCanvas!!
+        canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+
+        val vH = (targetWidth * (9f / 16f)).roundToInt()
+        val barH = targetHeight - 2 * vH
+        val bottomY = vH + barH
+
+        // 1. நடுவில் உள்ள Like / Message / Share Bar
+        canvas.save()
+        canvas.translate(0f, vH.toFloat())
+        FbTemplateBarRenderer.drawTplBar(canvas, targetWidth.toFloat(), barH.toFloat(), timeSeconds)
+        canvas.restore()
+
+        // 2. அடியில் உள்ள 16:9 புகைப்படம்
+        val bottomRect = RectF(0f, bottomY.toFloat(), targetWidth.toFloat(), targetHeight.toFloat())
+        val bgPaint = Paint().apply { color = android.graphics.Color.parseColor("#0B0B0B") }
+        canvas.drawRect(bottomRect, bgPaint)
+
+        val src = cachedBottomBitmap
+        if (src != null && !src.isRecycled) {
+            val iw = src.width.toFloat()
+            val ih = src.height.toFloat()
+            val sc = minOf(targetWidth.toFloat() / iw, vH.toFloat() / ih)
+            val dw = iw * sc
+            val dh = ih * sc
+            val dx = (targetWidth - dw) / 2f
+            val dy = bottomY + (vH - dh) / 2f
+
+            val imgPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+            canvas.drawBitmap(src, null, RectF(dx, dy, dx + dw, dy + dh), imgPaint)
+        }
+
+        return outBmp
+    }
+
+    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = defaultSettings
 }
