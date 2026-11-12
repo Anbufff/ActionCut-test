@@ -192,14 +192,28 @@ class Media3VideoExporter @Inject constructor(
                     .filter { it.mediaUri != null && it.type == ClipType.VIDEO }
                     .sortedBy { it.timelineStartMs }
                 if (pipVideoClips.isNotEmpty()) {
-                    sequences += EditedMediaItemSequence(
-                        pipVideoClips.map {
-                            it.toEditedMediaItem(
-                                targetWidth, targetHeight, settings, emptyList(),
-                                Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
-                            )
-                        },
-                    )
+                    // The PiP videos form ONE sequence. Media3 1.4 has no "gap" item, so the time between
+                    // clips (and before the first one) is filled with a transparent image; this keeps every
+                    // PiP clip at its real timeline position instead of playing back-to-back from 0:00.
+                    val gapFile = ensureTransparentGapImage(context)
+                    val pipItems = mutableListOf<EditedMediaItem>()
+                    var cursorMs = 0L
+                    pipVideoClips.forEach { pv ->
+                        val gapMs = pv.timelineStartMs - cursorMs
+                        if (gapMs >= 40L) {
+                            pipItems += transparentGapItem(gapFile, gapMs, targetWidth, targetHeight, settings)
+                            cursorMs += gapMs
+                        }
+                        // Crop is applied AFTER scaling to the canvas (see pipPostEffects), exactly like the
+                        // preview, so the pre-scaling crop of the normal video effects is switched off here.
+                        pipItems += pv.copy(crop = null).toEditedMediaItem(
+                            targetWidth, targetHeight, settings, emptyList(),
+                            Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
+                            postEffects = pipPostEffects(pv),
+                        )
+                        cursorMs += pv.timelineDurationMs
+                    }
+                    sequences += EditedMediaItemSequence(pipItems)
                 }
 
                 val audioClips = project.timeline.audioTracks
@@ -213,7 +227,7 @@ class Media3VideoExporter @Inject constructor(
                 val compositionBuilder = Composition.Builder(sequences)
                     .experimentalSetForceAudioTrack(true)
                 if (pipVideoClips.isNotEmpty()) {
-                    compositionBuilder.setVideoCompositorSettings(pipCompositorSettings(pipVideoClips.first()))
+                    compositionBuilder.setVideoCompositorSettings(pipCompositorSettings(pipVideoClips))
                 }
                 val composition = compositionBuilder.build()
 
@@ -437,6 +451,7 @@ class Media3VideoExporter @Inject constructor(
         outgoing: com.actioncut.core.model.Transition? = null,
         isFbTpl: Boolean = false,
         tplOverlay: FbTemplateOverlay? = null,
+        postEffects: List<Effect> = emptyList(),
     ): EditedMediaItem {
         val mediaItemBuilder = MediaItem.Builder().setUri(mediaUri)
         if (type != ClipType.IMAGE) {
@@ -463,6 +478,7 @@ class Media3VideoExporter @Inject constructor(
             isFbTemplate = isFbTpl,
             templateOverlay = templateOverlayEffect,
         ).toMutableList()
+        videoEffects += postEffects
 
         val clipDurUs = timelineDurationMs * 1_000L
         incoming?.let { tr ->
@@ -514,24 +530,98 @@ class Media3VideoExporter @Inject constructor(
             .build()
     }
 
-    private fun pipCompositorSettings(pip: Clip): VideoCompositorSettings =
+    /** A 16x16 fully transparent PNG used to fill the gaps between PiP video clips. */
+    private fun ensureTransparentGapImage(context: Context): File {
+        val f = File(context.cacheDir, "pip_gap_transparent.png")
+        if (!f.exists() || f.length() == 0L) {
+            val bmp = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888) // all pixels transparent
+            FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            bmp.recycle()
+        }
+        return f
+    }
+
+    private fun transparentGapItem(
+        file: File,
+        durationMs: Long,
+        targetWidth: Int,
+        targetHeight: Int,
+        settings: ExportSettings,
+    ): EditedMediaItem =
+        EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(file)))
+            .setDurationUs(durationMs * 1_000L)
+            .setFrameRate(settings.frameRate.fps)
+            .setEffects(
+                Effects(
+                    emptyList(),
+                    listOf(
+                        Presentation.createForWidthAndHeight(
+                            targetWidth, targetHeight, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
+                        ),
+                    ),
+                ),
+            )
+            .build()
+
+    /**
+     * Effects applied to a PiP video AFTER it has been scaled to the full canvas (the "PiP box").
+     * The editor preview crops that box, so the export crops it too; a flipped PiP is cropped on the
+     * mirrored rectangle first and then mirrored, so the visible window matches the preview.
+     */
+    private fun pipPostEffects(pv: Clip): List<Effect> {
+        val effects = mutableListOf<Effect>()
+        val flip = pv.filter?.id?.contains("flip") == true
+        val c = pv.crop?.takeUnless { it.isFull }
+        if (c != null) {
+            val l = if (flip) 1f - c.right else c.left
+            val r = if (flip) 1f - c.left else c.right
+            effects += androidx.media3.effect.Crop(
+                l * 2f - 1f,
+                r * 2f - 1f,
+                1f - c.bottom * 2f,
+                1f - c.top * 2f,
+            )
+        }
+        if (flip) {
+            effects += androidx.media3.effect.ScaleAndRotateTransformation.Builder()
+                .setScale(-1f, 1f)
+                .build()
+        }
+        return effects
+    }
+
+    /**
+     * Position/scale/opacity of the PiP video for each moment of the export. The right PiP clip is
+     * looked up by time (the old code used the FIRST clip's settings for all of them) and it is hidden
+     * while no PiP clip is active. If the clip is cropped, the anchor is moved to the centre of the
+     * cropped window so it stays exactly where the preview shows it.
+     */
+    private fun pipCompositorSettings(pips: List<Clip>): VideoCompositorSettings =
         object : VideoCompositorSettings {
             override fun getOutputSize(inputSizes: List<Size>): Size = inputSizes.first()
-            override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings =
-                if (inputId == 1) {
-                    val props = com.actioncut.core.model.Keyframes.propsAt(pip, presentationTimeUs / 1000L)
-                    val t = props.transform
-                    OverlaySettings.Builder()
-                        .setScale(t.scale, t.scale)
-                        .setOverlayFrameAnchor(0f, 0f)
-                        .setBackgroundFrameAnchor(
-                            t.offsetX.coerceIn(-1f, 1f),
-                            -t.offsetY.coerceIn(-1f, 1f),
-                        )
-                        .build()
-                } else {
-                    OverlaySettings.Builder().build()
-                }
+
+            override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings {
+                if (inputId != 1) return OverlaySettings.Builder().build()
+                val tMs = presentationTimeUs / 1000L
+                val pip = pips.firstOrNull { tMs >= it.timelineStartMs && tMs < it.timelineEndMs }
+                    ?: return OverlaySettings.Builder().setAlphaScale(0f).build()
+
+                val props = com.actioncut.core.model.Keyframes.propsAt(pip, tMs)
+                val t = props.transform
+                val c = pip.crop?.takeUnless { it.isFull }
+                val dx = if (c != null) ((c.left + c.right) / 2f - 0.5f) * 2f * t.scale else 0f
+                val dy = if (c != null) ((c.top + c.bottom) / 2f - 0.5f) * 2f * t.scale else 0f
+
+                return OverlaySettings.Builder()
+                    .setScale(t.scale, t.scale)
+                    .setAlphaScale(pip.opacity.coerceIn(0f, 1f))
+                    .setOverlayFrameAnchor(0f, 0f)
+                    .setBackgroundFrameAnchor(
+                        (t.offsetX + dx).coerceIn(-1f, 1f),
+                        (-t.offsetY - dy).coerceIn(-1f, 1f),
+                    )
+                    .build()
+            }
         }
 
     private fun targetDimensions(aspect: AspectRatio, resolution: Resolution): Pair<Int, Int> {
