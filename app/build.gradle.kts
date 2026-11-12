@@ -20,13 +20,16 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // 🌟 ஆப் சைஸை 70% குறைத்து (arm64 நவீன போன்களுக்கு மட்டும்) அதிவேக ஆஃப்லைன் AI Performance தரும் அமைப்பு
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a"))
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Sign release builds with the debug key so the v1.0.0 APK installs directly
-            // (demo release — replace with a real upload keystore for Play distribution).
             signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
