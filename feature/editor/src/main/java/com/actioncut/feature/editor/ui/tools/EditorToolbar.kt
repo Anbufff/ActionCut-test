@@ -37,7 +37,9 @@ import androidx.compose.ui.unit.dp
 import com.actioncut.core.designsystem.component.ToolItem
 import com.actioncut.feature.editor.ui.EditorTool
 
-/** Default ordering of tools in the bottom bar. */
+/** 
+ * நீங்கள் கேட்ட 7 டூல்களும் நீக்கப்பட்ட கிளீன் டூல்பார் வரிசை
+ */
 val MainTools: List<EditorTool> = listOf(
     EditorTool.SPLIT,
     EditorTool.CRIC,
@@ -46,21 +48,14 @@ val MainTools: List<EditorTool> = listOf(
     EditorTool.SPEED,
     EditorTool.VOLUME,
     EditorTool.AUDIO,
-    EditorTool.NEWS_ALERT, // Fty NEWS ALERT Button
+    EditorTool.NEWS_ALERT,
     EditorTool.VOICEOVER,
     EditorTool.PIP,
-    EditorTool.EXTRACT_AUDIO,
     EditorTool.MUTE,
-    EditorTool.FILTERS,
-    EditorTool.ADJUST,
     EditorTool.CROP,
-    EditorTool.CANVAS,
     EditorTool.TEXT,
     EditorTool.STICKER,
     EditorTool.TRANSITIONS,
-    EditorTool.EFFECTS,
-    EditorTool.KEYFRAME,
-    EditorTool.REVERSE,
     EditorTool.ROTATE,
     EditorTool.DELETE,
 )
