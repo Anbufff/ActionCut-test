@@ -46,6 +46,7 @@ import com.actioncut.core.media.template.NewsCrickWatermarkRenderer
 import com.actioncut.core.model.*
 import com.actioncut.feature.editor.ui.pip.AiCutoutManager
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
@@ -637,32 +638,55 @@ private fun PipLayer(
                     rotationZ = t.rotationDegrees
                     alpha = active.opacity
                 }
-                .pointerInput(active.id, pipPixelW, pipPixelH, isSelected, isCropModeActive) {
+                .pointerInput(active.id, isSelected, isCropModeActive) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         onSelect(active.id)
 
-                        val cornerTouchRadius = 50f * density
-                        val edgeTouchRadius = 40f * density
-                        val scaleTouchRadius = 55f * density
+                        val pw = size.width.toFloat()
+                        val ph = size.height.toFloat()
+
+                        val curL = pw * liveCrop.left
+                        val curT = ph * liveCrop.top
+                        val curR = pw * liveCrop.right
+                        val curB = ph * liveCrop.bottom
+                        val curMidX = (curL + curR) / 2f
+                        val curMidY = (curT + curB) / 2f
 
                         val tx = down.position.x
                         val ty = down.position.y
 
-                        var target = when {
-                            hypot(tx - pipPixelW, ty - pipPixelH) < scaleTouchRadius -> DragTarget.SCALE
+                        val cornerRadius = 38f * density
+                        val edgeRadius = 32f * density
+                        val scaleRadius = 42f * density
 
-                            isCropModeActive && hypot(tx - cL, ty - cT) < cornerTouchRadius -> DragTarget.CORNER_TL
-                            isCropModeActive && hypot(tx - cR, ty - cT) < cornerTouchRadius -> DragTarget.CORNER_TR
-                            isCropModeActive && hypot(tx - cL, ty - cB) < cornerTouchRadius -> DragTarget.CORNER_BL
-                            isCropModeActive && hypot(tx - cR, ty - cB) < cornerTouchRadius -> DragTarget.CORNER_BR
+                        // 🌟 ULTRA-SMOOTH HIT TESTING LOGIC (Crop Mode-ல் துல்லியமாக இலக்கைத் தேர்வு செய்தல்)
+                        val target = if (isCropModeActive) {
+                            when {
+                                // 1. Corners (முன்னுரிமை: 4 மூலைகள்)
+                                hypot(tx - curL, ty - curT) < cornerRadius -> DragTarget.CORNER_TL
+                                hypot(tx - curR, ty - curT) < cornerRadius -> DragTarget.CORNER_TR
+                                hypot(tx - curL, ty - curB) < cornerRadius -> DragTarget.CORNER_BL
+                                hypot(tx - curR, ty - curB) < cornerRadius -> DragTarget.CORNER_BR
 
-                            isCropModeActive && hypot(tx - cCenterX, ty - cT) < edgeTouchRadius -> DragTarget.EDGE_T
-                            isCropModeActive && hypot(tx - cCenterX, ty - cB) < edgeTouchRadius -> DragTarget.EDGE_B
-                            isCropModeActive && hypot(tx - cL, ty - cCenterY) < edgeTouchRadius -> DragTarget.EDGE_L
-                            isCropModeActive && hypot(tx - cR, ty - cCenterY) < edgeTouchRadius -> DragTarget.EDGE_R
+                                // 2. Edges (கோட்டின் முழு நீளத்திற்கும் தொடும் எல்லை நீட்டிக்கப்பட்டுள்ளது)
+                                abs(ty - curT) < edgeRadius && tx in (curL - edgeRadius)..(curR + edgeRadius) -> DragTarget.EDGE_T
+                                abs(ty - curB) < edgeRadius && tx in (curL - edgeRadius)..(curR + edgeRadius) -> DragTarget.EDGE_B
+                                abs(tx - curL) < edgeRadius && ty in (curT - edgeRadius)..(curB + edgeRadius) -> DragTarget.EDGE_L
+                                abs(tx - curR) < edgeRadius && ty in (curT - edgeRadius)..(curB + edgeRadius) -> DragTarget.EDGE_R
 
-                            else -> DragTarget.MOVE_PIP
+                                // 3. பயனர் Crop பாக்ஸின் மையப்பகுதியைத் தொட்டால் மட்டுமே நகரும் (Pan/Move)
+                                tx in curL..curR && ty in curT..curB -> DragTarget.MOVE_PIP
+
+                                // 4. வெளியே அல்லது கைப்பிடியை தவறவிட்டால் எதுவுமே நடக்காது (குதிக்காது!)
+                                else -> DragTarget.NONE
+                            }
+                        } else {
+                            // சாதாரண PIP எடிட்டிங் நிலை
+                            when {
+                                hypot(tx - pw, ty - ph) < scaleRadius -> DragTarget.SCALE
+                                else -> DragTarget.MOVE_PIP
+                            }
                         }
 
                         var prevPointers = 0
@@ -673,7 +697,8 @@ private fun PipLayer(
                             val pointers = event.changes.filter { it.pressed }
                             if (pointers.isEmpty()) break
 
-                            if (pointers.size >= 2) {
+                            // Crop Mode-ல் 2 விரல் மோதல் தற்காலிகமாக தவிர்க்கப்படுகிறது
+                            if (pointers.size >= 2 && !isCropModeActive) {
                                 val p1 = pointers[0].position
                                 val p2 = pointers[1].position
                                 val currentDistance = hypot(p1.x - p2.x, p1.y - p2.y)
@@ -693,14 +718,14 @@ private fun PipLayer(
                                 liveOffsetY = (liveOffsetY + pan.y / (h / 2f)).coerceIn(-2.5f, 2.5f)
 
                                 pointers.forEach { it.consume() }
-                            } else {
+                            } else if (target != DragTarget.NONE) {
                                 prevPointers = 1
                                 prevDistance = 0f
                                 val pointer = pointers[0]
                                 val dx = pointer.position.x - pointer.previousPosition.x
                                 val dy = pointer.position.y - pointer.previousPosition.y
-                                val dxFrac = dx / pipPixelW
-                                val dyFrac = dy / pipPixelH
+                                val dxFrac = if (pw > 0f) dx / pw else 0f
+                                val dyFrac = if (ph > 0f) dy / ph else 0f
 
                                 when (target) {
                                     DragTarget.MOVE_PIP -> {
@@ -838,6 +863,7 @@ private fun PipLayer(
                 )
 
                 if (isCropModeActive) {
+                    // 🌟 4 வட்ட கைப்பிடிகள் (Top, Bottom, Left, Right Edges)
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cCenterX - 11 * density).roundToInt(), (cT - 11 * density).roundToInt()) }
@@ -874,6 +900,7 @@ private fun PipLayer(
                             .border(2.5.dp, Color.White, CircleShape),
                     )
 
+                    // 🌟 4 மூலைகள் (Corners: TL, TR, BL, BR Brackets)
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cL - 5 * density).roundToInt(), (cT - 5 * density).roundToInt()) }
@@ -917,17 +944,18 @@ private fun PipLayer(
                                 drawLine(cyanColor, Offset(size.width, 0f), Offset(size.width, size.height), strokeW)
                             },
                     )
+                } else {
+                    // சாதாரண PIP Scale Handle (Crop Mode ஆன் இல்லாத போது மட்டுமே தெரியும்)
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .offset(x = 8.dp, y = 8.dp)
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                            .border(3.5.dp, cyanColor, CircleShape),
+                    )
                 }
-
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .offset(x = 8.dp, y = 8.dp)
-                        .size(30.dp)
-                        .clip(CircleShape)
-                        .background(Color.White)
-                        .border(3.5.dp, cyanColor, CircleShape),
-                )
             }
         }
     }
