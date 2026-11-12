@@ -517,10 +517,10 @@ fun PreviewPlayer(
                 }
             }
 
-            // 🌟 16:9 FORMAT அசல் ANIMATED NEWS CRiCK WATERMARK LOGO (வலது மேல் மூலை)
-            val logoW = (w * 0.120f).coerceIn(44f * density, 82f * density)
+            // 🌟 16:9 FORMAT அசல் ANIMATED NEWS CRiCK WATERMARK LOGO (சிறிய அளவு - TV Bug Size)
+            val logoW = (w * 0.082f).coerceIn(30f * density, 55f * density)
             val logoH = logoW * 0.75f
-            val logoMargin = 4f * density
+            val logoMargin = 5f * density
 
             ComposeCanvas(
                 modifier = Modifier
