@@ -565,6 +565,11 @@ private fun PipLayer(
     } ?: return
 
     val context = LocalContext.current
+    // Latest callbacks for the long-lived gesture block (it is no longer re-created on every scale step).
+    val onSelectState by rememberUpdatedState(onSelect)
+    val onMoveState by rememberUpdatedState(onMove)
+    val onScaleState by rememberUpdatedState(onScale)
+    val onCropChangeState by rememberUpdatedState(onCropChange)
     val isAiCutoutOn = active.filter?.id?.contains("cutout") == true
     val isFlipped = active.filter?.id?.contains("flip") == true
 
@@ -622,10 +627,21 @@ private fun PipLayer(
                     rotationZ = t.rotationDegrees
                     alpha = active.opacity
                 }
-                .pointerInput(active.id, pipPixelW, pipPixelH, isSelected, isCropModeActive) {
+                .pointerInput(active.id, w, h, isCropModeActive) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        onSelect(active.id)
+                        onSelectState(active.id)
+
+                        // Geometry as it is NOW (finger just went down). The gesture block is no longer
+                        // restarted while scaling, so values captured at composition time would be stale.
+                        val pipPixelW = w * liveScale
+                        val pipPixelH = h * liveScale
+                        val cL = pipPixelW * liveCrop.left
+                        val cT = pipPixelH * liveCrop.top
+                        val cR = pipPixelW * liveCrop.right
+                        val cB = pipPixelH * liveCrop.bottom
+                        val cCenterX = (cL + cR) / 2f
+                        val cCenterY = (cT + cB) / 2f
 
                         val cornerTouchRadius = 50f * density
                         val edgeTouchRadius = 40f * density
@@ -746,10 +762,10 @@ private fun PipLayer(
                             }
                         } while (true)
 
-                        onMove(active.id, liveOffsetX, liveOffsetY)
-                        onScale(active.id, liveScale)
+                        onMoveState(active.id, liveOffsetX, liveOffsetY)
+                        onScaleState(active.id, liveScale)
                         if (isCropModeActive) {
-                            onCropChange(active.id, liveCrop)
+                            onCropChangeState(active.id, liveCrop)
                         }
                     }
                 },
