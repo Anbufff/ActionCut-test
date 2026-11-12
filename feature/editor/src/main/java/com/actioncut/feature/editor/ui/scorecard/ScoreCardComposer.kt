@@ -33,18 +33,7 @@ object ScoreCardComposer {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
-        // 1. கிரிக்கெட் மைதானப் புல்வெளி பின்னணி
-        p.shader = LinearGradient(0f, 0f, 0f, CANVAS_H, 0xFF0E2E11.toInt(), 0xFF050F06.toInt(), Shader.TileMode.CLAMP)
-        c.drawRect(0f, 0f, CANVAS_W, CANVAS_H, p)
-        p.shader = null
-
-        p.color = 0x0DFFFFFF
-        p.strokeWidth = 35f
-        var sx = -CANVAS_H
-        while (sx < CANVAS_W + CANVAS_H) {
-            c.drawLine(sx, CANVAS_H, sx + CANVAS_H * 0.8f, 0f, p)
-            sx += 70f
-        }
+        // 1. பின்னணி வெளிப்படையாக (transparent) - அசல் மைதான வீடியோ பின்னால் தெரியும்
 
         // 2. இடதுபுறம்: ஸ்கோர்கார்டு வரிகள்
         val listLeft = 24f
