@@ -138,11 +138,12 @@ class EditorViewModel @Inject constructor(
             }
             playerController.setTimeline(initialTimeline, preservePositionMs = initialTimeline.playheadMs)
 
-            // Cache Cutout for any existing PiP clips
+            // Cache Cutout for any existing PiP clips (Fix for smart cast)
             initialTimeline.allClips.forEach { c ->
-                if (c.type == ClipType.IMAGE && c.mediaUri != null && c.filter?.id?.contains("cutout") == true) {
+                val uri = c.mediaUri
+                if (c.type == ClipType.IMAGE && uri != null && c.filter?.id?.contains("cutout") == true) {
                     launch(Dispatchers.IO) {
-                        AiCutoutManager.getOrCreateCutoutUri(context, c.mediaUri)
+                        AiCutoutManager.getOrCreateCutoutUri(context, uri)
                     }
                 }
             }
@@ -462,10 +463,11 @@ class EditorViewModel @Inject constructor(
             }
         }
 
-        // 🌟 உடனே Background-ல் Cutout ஃபைலை உருவாக்கி வைக்கிறது (Export-ல் தவறாமல் வர)
-        if (isNowCutout && clip.mediaUri != null) {
+        // 🌟 Safe Smart Cast using local variable
+        val mediaUri = clip.mediaUri
+        if (isNowCutout && mediaUri != null) {
             viewModelScope.launch(Dispatchers.IO) {
-                AiCutoutManager.getOrCreateCutoutUri(context, clip.mediaUri)
+                AiCutoutManager.getOrCreateCutoutUri(context, mediaUri)
             }
         }
     }
