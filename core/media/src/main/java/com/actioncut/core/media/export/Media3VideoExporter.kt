@@ -310,10 +310,22 @@ class Media3VideoExporter @Inject constructor(
             clip.transform
         }
 
+        // 🌟 படத்தின் அசல் வடிவத்திற்கு ஏற்ப (Auto Aspect Ratio) பாக்ஸை அமைத்தல்
+        val srcW = srcBmp.width.toFloat()
+        val srcH = srcBmp.height.toFloat()
+        val srcAspect = if (srcH > 0f) srcW / srcH else (targetWidth.toFloat() / targetHeight.toFloat())
+        val canvasAspect = targetWidth.toFloat() / targetHeight.toFloat()
+
+        val (pw, ph) = if (srcAspect >= canvasAspect) {
+            val boxW = targetWidth * t.scale
+            boxW to (boxW / srcAspect)
+        } else {
+            val boxH = targetHeight * t.scale
+            (boxH * srcAspect) to boxH
+        }
+
         val cx = targetWidth / 2f + (t.offsetX / 2f) * targetWidth
         val cy = targetHeight / 2f + (t.offsetY / 2f) * targetHeight
-        val pw = targetWidth * t.scale
-        val ph = targetHeight * t.scale
 
         val left = cx - pw / 2f
         val top = cy - ph / 2f
@@ -338,9 +350,8 @@ class Media3VideoExporter @Inject constructor(
             canvas.rotate(totalRot, cx, cy)
         }
 
-        val srcW = srcBmp.width.toFloat()
-        val srcH = srcBmp.height.toFloat()
-        val scaleFit = maxOf(pw / srcW, ph / srcH)
+        // 🌟 முழு படமும் வெட்டப்படாமல் (தலை முதல் கால் வரை) தெரிய சரியாகப் பொருத்துதல்
+        val scaleFit = minOf(pw / srcW, ph / srcH)
         val dw = srcW * scaleFit
         val dh = srcH * scaleFit
         val dl = cx - dw / 2f
