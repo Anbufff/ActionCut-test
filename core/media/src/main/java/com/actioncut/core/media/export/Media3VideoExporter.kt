@@ -70,7 +70,8 @@ class Media3VideoExporter @Inject constructor(
 
         val aspect = settings.aspectRatio ?: project.aspectRatio
         val (targetWidth, targetHeight) = targetDimensions(aspect, settings.resolution)
-        val isFbTpl = project.canvas.isFbTemplateEnabled && aspect == AspectRatio.RATIO_4_5
+        val isFbTpl = (project.canvas.isFbTemplateEnabled || project.timeline.canvas.isFbTemplateEnabled) && aspect == AspectRatio.RATIO_4_5
+        val tplImageUri = project.canvas.fbTemplateImageUri ?: project.timeline.canvas.fbTemplateImageUri
 
         val clips = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             rawClips.map { clip ->
@@ -83,7 +84,7 @@ class Media3VideoExporter @Inject constructor(
                     }
                 } else if (clip.type == ClipType.IMAGE && clip.mediaUri != null) {
                     if (isFbTpl) {
-                        // 🌟 4:5 TPL மோடில் அசல் போட்டோ அப்படியே மேலே 16:9 section-ல் பொருந்த வேண்டும்
+                        // 🌟 4:5 TPL மோடில் அசல் போட்டோ அப்படியே மேலே 16:9-ல் பொருந்த வேண்டும்
                         clip
                     } else {
                         val blurredFrameUri = createBlurredBackdropImage(context, clip, targetWidth, targetHeight)
@@ -161,7 +162,7 @@ class Media3VideoExporter @Inject constructor(
 
                 // 🌟 Facebook 4:5 TPL மேலடுக்கு (Like Bar + Bottom Photo)
                 val tplOverlay = if (isFbTpl) {
-                    FbTemplateOverlay(context, targetWidth, targetHeight, project.canvas.fbTemplateImageUri)
+                    FbTemplateOverlay(context, targetWidth, targetHeight, tplImageUri)
                 } else null
 
                 val editedItems = exportClips.mapIndexed { index, clip ->
@@ -528,9 +529,6 @@ class Media3VideoExporter @Inject constructor(
     private fun even(v: Int): Int = if (v % 2 == 0) v else v + 1
 }
 
-/**
- * 4:5 Facebook TPL மேலடுக்கை (Animated Like Bar + Bottom Image) வீடியோ மீது வரைந்து எக்ஸ்போர்ட் செய்யும் Overlay
- */
 private class FbTemplateOverlay(
     private val context: Context,
     private val targetWidth: Int,
@@ -541,8 +539,6 @@ private class FbTemplateOverlay(
 
     private val defaultSettings = OverlaySettings.Builder().build()
     private var cachedBottomBitmap: Bitmap? = null
-    private var reusableBitmap: Bitmap? = null
-    private var reusableCanvas: Canvas? = null
 
     init {
         if (!bottomImageUriStr.isNullOrBlank()) {
@@ -565,14 +561,8 @@ private class FbTemplateOverlay(
         val currentPlayheadMs = clipStartMs + (presentationTimeUs / 1000L)
         val timeSeconds = currentPlayheadMs / 1000f
 
-        if (reusableBitmap == null) {
-            reusableBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-            reusableCanvas = Canvas(reusableBitmap!!)
-        }
-
-        val outBmp = reusableBitmap!!
-        val canvas = reusableCanvas!!
-        canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+        val outBmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(outBmp)
 
         val vH = (targetWidth * (9f / 16f)).roundToInt()
         val barH = targetHeight - 2 * vH
