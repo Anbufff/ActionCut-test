@@ -2,7 +2,6 @@ package com.actioncut.core.media.export
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Matrix
 import android.net.Uri
 import android.text.SpannableString
 import android.text.Spanned
@@ -98,6 +97,8 @@ object EffectMapper {
         targetHeight: Int,
         overlays: List<Clip>,
         presentationLayout: Int = Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
+        isFbTemplate: Boolean = false,
+        templateOverlay: Effect? = null,
     ): List<Effect> {
         val effects = previewVideoEffects(clip).toMutableList()
 
@@ -116,9 +117,23 @@ object EffectMapper {
             presentationLayout,
         )
 
+        // 🌟 4:5 TPL-ல் மெயின் வீடியோ / போட்டோவை துல்லியமாக மேலே உள்ள 16:9 பாக்ஸிற்கு நகர்த்துதல்
+        if (isFbTemplate) {
+            effects += MatrixTransformation { _ ->
+                android.graphics.Matrix().apply {
+                    postTranslate(0f, 0.55f)
+                }
+            }
+        }
+
         if (clip.scorecard != null) {
             val scOverlay = DynamicScorecardOverlay(clip.id, clip.scorecard!!)
             effects += OverlayEffect(ImmutableList.of(scOverlay))
+        }
+
+        // 🌟 Facebook 4:5 TPL நடுப்பகுதி Like/Share Bar + அடியில் உள்ள படத்தை வீடியோ மீது சேர்த்தல்
+        if (templateOverlay != null) {
+            effects += templateOverlay
         }
 
         overlayEffect(clip, overlays, targetWidth)?.let { effects += it }
