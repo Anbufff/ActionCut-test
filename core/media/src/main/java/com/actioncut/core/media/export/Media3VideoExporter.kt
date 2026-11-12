@@ -451,7 +451,7 @@ class Media3VideoExporter @Inject constructor(
             OverlayEffect(ImmutableList.of(it.forClip(timelineStartMs)))
         }
 
-        // 🌟 16:9 அதிவேக ரீ-யூசபிள் வாட்டர்மார்க் லேயர்
+        // 🌟 16:9 அதிவேக ரீ-யூசபிள் வாட்டர்மார்க் லேயர் (சிறிய டிவி அளவு)
         val watermarkOverlayEffect: Effect = OverlayEffect(
             ImmutableList.of(NewsCrickWatermarkOverlay(targetWidth, targetHeight, timelineStartMs))
         )
@@ -552,7 +552,7 @@ class Media3VideoExporter @Inject constructor(
 
 /**
  * ⚡ ULTRA-FAST ZERO-ALLOCATION WATERMARK OVERLAY
- * ஒவ்வொரு பிரேமுக்கும் புதிய Bitmap ஒதுக்காமல், ஒரே பிட்மேப்பை ரீ-யூஸ் செய்து அதிவேகமாக வரையும்.
+ * சிறிய அளவுடன் (8.2%) ஒரே பிட்மேப்பை ரீ-யூஸ் செய்து அதிவேகமாக வரையும்.
  */
 private class NewsCrickWatermarkOverlay(
     targetWidth: Int,
@@ -562,15 +562,15 @@ private class NewsCrickWatermarkOverlay(
 
     private val defaultSettings = OverlaySettings.Builder().build()
 
-    // 🌟 ஒரே ஒரு பிட்மேப் & கேன்வாஸ் மட்டுமே உருவாக்கப்படுகிறது (Zero Garbage Collection)
+    // 🌟 ஒரே ஒரு பிட்மேப் & கேன்வாஸ் (Zero Garbage Collection)
     private val reusableBmp: Bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
     private val reusableCanvas: Canvas = Canvas(reusableBmp)
 
-    // கணக்கீடுகளை முன்கூட்டியே சேமித்து வைப்பதால் CPU வேகம் மிச்சமாகும்
-    private val logoW = targetWidth * 0.125f
+    // 🌟 சிறிய அளவு (Compact TV Bug size ~8.2%)
+    private val logoW = targetWidth * 0.082f
     private val logoH = logoW * 0.75f
-    private val marginX = targetWidth * 0.012f
-    private val marginY = targetHeight * 0.015f
+    private val marginX = targetWidth * 0.014f
+    private val marginY = targetHeight * 0.018f
     private val logoX = targetWidth - logoW - marginX
     private val logoY = marginY
 
@@ -578,7 +578,7 @@ private class NewsCrickWatermarkOverlay(
         val currentPlayheadMs = clipStartMs + (presentationTimeUs / 1000L)
         val timeSec = currentPlayheadMs / 1000f
 
-        // முந்தைய பிரேமை வேகமாக அழித்துவிட்டு புது அனிமேஷன் வரைதல் (Super Fast)
+        // முந்தைய பிரேமை வேகமாக அழித்துவிட்டு புது அனிமேஷன் வரைதல்
         reusableBmp.eraseColor(Color.TRANSPARENT)
         NewsCrickWatermarkRenderer.renderLogo(reusableCanvas, logoX, logoY, logoW, logoH, timeSec)
 
