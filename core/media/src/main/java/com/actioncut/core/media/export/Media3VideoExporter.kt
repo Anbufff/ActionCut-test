@@ -84,7 +84,6 @@ class Media3VideoExporter @Inject constructor(
                     }
                 } else if (clip.type == ClipType.IMAGE && clip.mediaUri != null) {
                     if (isFbTpl) {
-                        // 🌟 4:5 TPL மோடில் அசல் போட்டோ அப்படியே மேலே 16:9-ல் பொருந்த வேண்டும்
                         clip
                     } else {
                         val blurredFrameUri = createBlurredBackdropImage(context, clip, targetWidth, targetHeight)
@@ -160,7 +159,6 @@ class Media3VideoExporter @Inject constructor(
                     clips
                 }
 
-                // 🌟 Facebook 4:5 TPL மேலடுக்கு (Like Bar + Bottom Photo)
                 val tplOverlay = if (isFbTpl) {
                     FbTemplateOverlay(context, targetWidth, targetHeight, tplImageUri)
                 } else null
@@ -282,9 +280,10 @@ class Media3VideoExporter @Inject constructor(
     ): String = runCatching {
         val uriStr = clip.mediaUri ?: return@runCatching ""
 
+        // 🌟 AI Cutout ஃபைல் இருந்தால் அதை முன்னுரிமையுடன் எடுத்து Export செய்வது
         val isAiCutout = clip.filter?.id?.contains("cutout") == true
         val cutoutFile = File(context.cacheDir, "cutout_${uriStr.hashCode()}.png")
-        val sourceUri = if (isAiCutout && cutoutFile.exists()) {
+        val sourceUri = if (isAiCutout && cutoutFile.exists() && cutoutFile.length() > 0L) {
             Uri.fromFile(cutoutFile)
         } else {
             Uri.parse(uriStr)
@@ -333,10 +332,20 @@ class Media3VideoExporter @Inject constructor(
             canvas.rotate(totalRot, cx, cy)
         }
 
+        // Preview-ல் இருப்பது போன்றே சரியான Center-Crop அளவில் படங்களை வரைதல்
+        val srcW = srcBmp.width.toFloat()
+        val srcH = srcBmp.height.toFloat()
+        val scaleFit = maxOf(pw / srcW, ph / srcH)
+        val dw = srcW * scaleFit
+        val dh = srcH * scaleFit
+        val dl = cx - dw / 2f
+        val dt = cy - dh / 2f
+        val dstRect = RectF(dl, dt, dl + dw, dt + dh)
+
         canvas.drawBitmap(
             srcBmp,
             null,
-            RectF(left, top, right, bottom),
+            dstRect,
             Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG),
         )
         canvas.restore()
@@ -568,13 +577,11 @@ private class FbTemplateOverlay(
         val barH = targetHeight - 2 * vH
         val bottomY = vH + barH
 
-        // 1. நடுவில் உள்ள Like / Message / Share Bar
         canvas.save()
         canvas.translate(0f, vH.toFloat())
         FbTemplateBarRenderer.drawTplBar(canvas, targetWidth.toFloat(), barH.toFloat(), timeSeconds)
         canvas.restore()
 
-        // 2. அடியில் உள்ள 16:9 புகைப்படம்
         val bottomRect = RectF(0f, bottomY.toFloat(), targetWidth.toFloat(), targetHeight.toFloat())
         val bgPaint = Paint().apply { color = android.graphics.Color.parseColor("#0B0B0B") }
         canvas.drawRect(bottomRect, bgPaint)
