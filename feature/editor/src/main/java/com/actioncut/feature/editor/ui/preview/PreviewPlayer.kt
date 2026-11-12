@@ -42,6 +42,7 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.actioncut.core.media.template.FbTemplateBarRenderer
+import com.actioncut.core.media.template.NewsCrickWatermarkRenderer
 import com.actioncut.core.model.*
 import com.actioncut.feature.editor.ui.pip.AiCutoutManager
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
@@ -110,13 +111,11 @@ fun PreviewPlayer(
             val h = constraints.maxHeight.toFloat()
             val density = LocalDensity.current.density
 
-            // 4:5 TPL (Video + Image Template) லேஅவுட்
             if (isTplMode) {
                 val vH = w * (9f / 16f)
                 val barH = h - 2 * vH
                 val bottomY = vH + barH
 
-                // 1. Top Section: 16:9 மெயின் வீடியோ / படம்
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -149,7 +148,6 @@ fun PreviewPlayer(
                     }
                 }
 
-                // 2. Middle Section: Like / Message / Share பார்
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -165,7 +163,6 @@ fun PreviewPlayer(
                     }
                 }
 
-                // 3. Bottom Section: 16:9 புகைப்படம்
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -203,7 +200,6 @@ fun PreviewPlayer(
                 }
 
             } else {
-                // 16:9 அல்லது சாதாரண 4:5 இயல்பு நிலை பின்னணி
                 if (currentMainClip != null && currentMainClip.mediaUri != null) {
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
@@ -252,7 +248,6 @@ fun PreviewPlayer(
                     )
                 }
 
-                // 🌟 MAIN TRACK IMAGE: Move & Two-finger Pinch-to-Zoom வசதியுடன்
                 if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
                     val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                     val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
@@ -359,7 +354,6 @@ fun PreviewPlayer(
                         }
                     }
 
-                    // அடுத்த படம் ட்ரான்சிஷன் நேரத்தில் திரையில் தெரியும் அனிமேஷன்
                     if (isInTransition && nextMainClip != null && nextMainClip.mediaUri != null && nextAlpha > 0f) {
                         AsyncImage(
                             model = nextMainClip.mediaUri,
@@ -378,7 +372,6 @@ fun PreviewPlayer(
                         )
                     }
 
-                    // 🌟 Main Track Image - தொட்டு நகர்த்தும் (Move) மற்றும் இரு விரல்களால் Zoom In / Out செய்யும் Pointer Input
                     val totalScale = autoZoomScale * mainLiveScale * currentScaleFactor
 
                     AsyncImage(
@@ -410,7 +403,6 @@ fun PreviewPlayer(
                                         val pointers = event.changes.filter { it.pressed }
                                         if (pointers.isEmpty()) break
 
-                                        // 🌟 இரண்டு விரல்களால் தொடும்போது: Zoom In / Zoom Out (Pinch Gesture)
                                         if (pointers.size >= 2) {
                                             val p1 = pointers[0].position
                                             val p2 = pointers[1].position
@@ -432,7 +424,6 @@ fun PreviewPlayer(
 
                                             pointers.forEach { it.consume() }
                                         } else if (isMainSelected) {
-                                            // 🌟 ஒரு விரலால் தொடும்போது: Move (Pan Gesture)
                                             prevPointers = 1
                                             prevDistance = 0f
                                             val pointer = pointers[0]
@@ -526,6 +517,30 @@ fun PreviewPlayer(
                 }
             }
 
+            // 🌟 16:9 FORMAT அசல் ANIMATED NEWS CRiCK WATERMARK LOGO (வலது மேல் மூலை)
+            val logoW = (w * 0.120f).coerceIn(44f * density, 82f * density)
+            val logoH = logoW * 0.75f
+            val logoMargin = 4f * density
+
+            ComposeCanvas(
+                modifier = Modifier
+                    .size((logoW / density).dp, (logoH / density).dp)
+                    .align(Alignment.TopEnd)
+                    .offset(x = (-logoMargin / density).dp, y = (logoMargin / density).dp),
+            ) {
+                drawIntoCanvas { canvas ->
+                    val timeSec = playheadMs / 1000f
+                    NewsCrickWatermarkRenderer.renderLogo(
+                        canvas.nativeCanvas,
+                        0f,
+                        0f,
+                        size.width,
+                        size.height,
+                        timeSec
+                    )
+                }
+            }
+
             if (!isPlaying) {
                 Box(
                     modifier = Modifier
@@ -565,11 +580,6 @@ private fun PipLayer(
     } ?: return
 
     val context = LocalContext.current
-    // Latest callbacks for the long-lived gesture block (it is no longer re-created on every scale step).
-    val onSelectState by rememberUpdatedState(onSelect)
-    val onMoveState by rememberUpdatedState(onMove)
-    val onScaleState by rememberUpdatedState(onScale)
-    val onCropChangeState by rememberUpdatedState(onCropChange)
     val isAiCutoutOn = active.filter?.id?.contains("cutout") == true
     val isFlipped = active.filter?.id?.contains("flip") == true
 
@@ -627,21 +637,10 @@ private fun PipLayer(
                     rotationZ = t.rotationDegrees
                     alpha = active.opacity
                 }
-                .pointerInput(active.id, w, h, isCropModeActive) {
+                .pointerInput(active.id, pipPixelW, pipPixelH, isSelected, isCropModeActive) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        onSelectState(active.id)
-
-                        // Geometry as it is NOW (finger just went down). The gesture block is no longer
-                        // restarted while scaling, so values captured at composition time would be stale.
-                        val pipPixelW = w * liveScale
-                        val pipPixelH = h * liveScale
-                        val cL = pipPixelW * liveCrop.left
-                        val cT = pipPixelH * liveCrop.top
-                        val cR = pipPixelW * liveCrop.right
-                        val cB = pipPixelH * liveCrop.bottom
-                        val cCenterX = (cL + cR) / 2f
-                        val cCenterY = (cT + cB) / 2f
+                        onSelect(active.id)
 
                         val cornerTouchRadius = 50f * density
                         val edgeTouchRadius = 40f * density
@@ -762,10 +761,10 @@ private fun PipLayer(
                             }
                         } while (true)
 
-                        onMoveState(active.id, liveOffsetX, liveOffsetY)
-                        onScaleState(active.id, liveScale)
+                        onMove(active.id, liveOffsetX, liveOffsetY)
+                        onScale(active.id, liveScale)
                         if (isCropModeActive) {
-                            onCropChangeState(active.id, liveCrop)
+                            onCropChange(active.id, liveCrop)
                         }
                     }
                 },
