@@ -406,9 +406,6 @@ fun PreviewPlayer(
                                         val pointers = event.changes.filter { it.pressed }
                                         if (pointers.isEmpty()) break
 
-                                        // Pinch/pan of the MAIN photo only when it is selected. Before, a stray 2-finger
-                                        // touch on the preview moved/zoomed the main photo locally without saving it,
-                                        // so the preview showed a zoomed/shifted photo while export was correct.
                                         if (pointers.size >= 2 && isMainSelected) {
                                             val p1 = pointers[0].position
                                             val p2 = pointers[1].position
@@ -523,7 +520,6 @@ fun PreviewPlayer(
                 }
             }
 
-            // 🌟 16:9 FORMAT அசல் ANIMATED NEWS CRiCK WATERMARK LOGO (சிறிய அளவு - TV Bug Size)
             val logoW = (w * 0.082f).coerceIn(30f * density, 55f * density)
             val logoH = logoW * 0.75f
             val logoMargin = 5f * density
@@ -547,7 +543,6 @@ fun PreviewPlayer(
                 }
             }
 
-            // Hide the centre play button while a PiP clip is selected: it sat on top of the PiP and stole touches.
             val isPipSelectedNow = selectedClipId != null && pipClips.any { it.id == selectedClipId }
             if (!isPlaying && !isPipSelectedNow) {
                 Box(
@@ -610,7 +605,6 @@ private fun PipLayer(
 
     val displayUri = if (isAiCutoutOn && cutoutUri != null) cutoutUri else active.mediaUri
 
-    // 🌟 படத்தின் அசல் நீள-அகல விகிதத்தை (Intrinsic Aspect Ratio) கண்டறிதல்
     var mediaAspectRatio by remember(active.id, displayUri) {
         mutableFloatStateOf(
             runCatching {
@@ -656,7 +650,6 @@ private fun PipLayer(
         val baseCrop = active.crop ?: CropRect(0f, 0f, 1f, 1f)
         var liveCrop by remember(active.id, baseCrop) { mutableStateOf(baseCrop) }
 
-        // 🌟 பாக்ஸின் அளவை படத்தின் வடிவத்திற்கு ஏற்ப (Auto Aspect Ratio) அமைத்தல்
         val canvasAspect = if (h > 0f) w / h else (16f / 9f)
         val effectiveAspect = if (mediaAspectRatio > 0f) mediaAspectRatio else canvasAspect
 
@@ -703,7 +696,6 @@ private fun PipLayer(
                         val tx = down.position.x
                         val ty = down.position.y
 
-                        // Handle hit-zones shrink on small PiP boxes so the middle stays draggable
                         val cropSide = minOf(curR - curL, curB - curT).coerceAtLeast(1f)
                         val cornerRadius = minOf(38f * density, cropSide * 0.22f)
                         val edgeRadius = minOf(32f * density, cropSide * 0.16f)
@@ -876,7 +868,7 @@ private fun PipLayer(
                             .crossfade(true)
                             .build(),
                         contentDescription = null,
-                        contentScale = ContentScale.Fit, // 🌟 முழு படமும் வெட்டப்படாமல் தெரிய Fit
+                        contentScale = ContentScale.Fit,
                         onSuccess = { state ->
                             val d = state.result.drawable
                             if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
@@ -912,7 +904,6 @@ private fun PipLayer(
                 )
 
                 if (isCropModeActive) {
-                    // 🌟 4 வட்ட கைப்பிடிகள் (Top, Bottom, Left, Right Edges)
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cCenterX - 11 * density).roundToInt(), (cT - 11 * density).roundToInt()) }
@@ -949,7 +940,6 @@ private fun PipLayer(
                             .border(2.5.dp, Color.White, CircleShape),
                     )
 
-                    // 🌟 4 மூலைகள் (Corners: TL, TR, BL, BR Brackets)
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cL - 5 * density).roundToInt(), (cT - 5 * density).roundToInt()) }
@@ -1018,8 +1008,6 @@ private fun OverlayLayer(
     onMove: (String, Float, Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val density = LocalContext.current.resources.displayMetrics.density
-
     BoxWithConstraints(modifier) {
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
