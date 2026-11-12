@@ -12,7 +12,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Image as ImageIcon
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -183,7 +183,12 @@ fun PreviewPlayer(
                         )
                     } else {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(ImageIcon, contentDescription = null, tint = Color(0xFF7FB8D8), modifier = Modifier.size(32.dp))
+                            Icon(
+                                imageVector = Icons.Filled.Add,
+                                contentDescription = "Add image",
+                                tint = Color(0xFF7FB8D8),
+                                modifier = Modifier.size(32.dp),
+                            )
                             Spacer(Modifier.height(6.dp))
                             Text(
                                 text = "படம் சேர்க்க (16:9)",
