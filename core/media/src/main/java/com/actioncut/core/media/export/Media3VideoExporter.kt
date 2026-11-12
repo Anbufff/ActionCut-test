@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Handler
@@ -31,6 +32,7 @@ import com.actioncut.core.model.ExportSettings
 import com.actioncut.core.model.ExportState
 import com.actioncut.core.model.Project
 import com.actioncut.core.model.Resolution
+import com.actioncut.core.model.TrackType
 import com.actioncut.core.model.TransitionType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
@@ -63,7 +65,6 @@ class Media3VideoExporter @Inject constructor(
         val aspect = settings.aspectRatio ?: project.aspectRatio
         val (targetWidth, targetHeight) = targetDimensions(aspect, settings.resolution)
 
-        // Fty Video Editor: எக்ஸ்போர்ட் செய்யப்படும் ஒவ்வொரு படத்திற்கும் பின்னணியில் அதே படத்தின் 16:9 Blur Background அமைத்தல்
         val clips = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             rawClips.map { clip ->
                 if (clip.isReversed && clip.type == ClipType.VIDEO && clip.mediaUri != null) {
@@ -92,9 +93,24 @@ class Media3VideoExporter @Inject constructor(
 
         handler.post {
             runCatching {
-                val overlayClips = project.timeline.allClips.filter {
-                    it.type == ClipType.TEXT || it.type == ClipType.STICKER
+                // OVERLAY டிராக்கில் உள்ள PiP Photo, Text மற்றும் Stickers அனைத்தையும் சேகரித்தல்
+                val rawOverlayClips = project.timeline.tracks
+                    .filter { it.type == TrackType.OVERLAY }
+                    .flatMap { it.clips }
+
+                // PiP Photo-க்களை Crop மற்றும் Cutout உடன் எக்ஸ்போர்ட் செய்யத் தயார் செய்தல்
+                val preparedPipOverlays = rawOverlayClips.map { ov ->
+                    if (ov.type == ClipType.IMAGE && ov.mediaUri != null && ov.mediaUri?.contains("news_banner") != true) {
+                        val processedUri = prepareExportOverlayImage(context, ov)
+                        ov.copy(mediaUri = processedUri, type = ClipType.STICKER)
+                    } else {
+                        ov
+                    }
                 }
+
+                val textOverlays = project.timeline.allClips.filter { it.type == ClipType.TEXT }
+                val overlayClips = preparedPipOverlays + textOverlays
+
                 val presentationLayout = when (project.canvas.fitMode) {
                     com.actioncut.core.model.FitMode.FIT -> Presentation.LAYOUT_SCALE_TO_FIT
                     com.actioncut.core.model.FitMode.FILL -> Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
@@ -139,14 +155,14 @@ class Media3VideoExporter @Inject constructor(
 
                 val sequences = mutableListOf(videoSequence)
 
-                val pipClips = project.timeline.tracks
-                    .filter { it.type == com.actioncut.core.model.TrackType.OVERLAY }
+                val pipVideoClips = project.timeline.tracks
+                    .filter { it.type == TrackType.OVERLAY }
                     .flatMap { it.clips }
                     .filter { it.mediaUri != null && it.type == ClipType.VIDEO }
                     .sortedBy { it.timelineStartMs }
-                if (pipClips.isNotEmpty()) {
+                if (pipVideoClips.isNotEmpty()) {
                     sequences += EditedMediaItemSequence(
-                        pipClips.map {
+                        pipVideoClips.map {
                             it.toEditedMediaItem(
                                 targetWidth, targetHeight, settings, emptyList(),
                                 Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
@@ -165,8 +181,8 @@ class Media3VideoExporter @Inject constructor(
 
                 val compositionBuilder = Composition.Builder(sequences)
                     .experimentalSetForceAudioTrack(true)
-                if (pipClips.isNotEmpty()) {
-                    compositionBuilder.setVideoCompositorSettings(pipCompositorSettings(pipClips.first()))
+                if (pipVideoClips.isNotEmpty()) {
+                    compositionBuilder.setVideoCompositorSettings(pipCompositorSettings(pipVideoClips.first()))
                 }
                 val composition = compositionBuilder.build()
 
@@ -227,8 +243,42 @@ class Media3VideoExporter @Inject constructor(
     }
 
     /**
-     * எக்ஸ்போர்ட் வீடியோவில் கறுப்புப் பட்டைக்கு பதிலாக அதே படத்தின் மங்கலான 16:9 Blur Background-ஐ உருவாக்கும் முறை (Fty Video Editor)
+     * PiP Photo-வின் Crop மற்றும் AI Cutout-ஐப் பயன்படுத்தி எக்ஸ்போர்ட் செய்வதற்கான பிம்பத்தை உருவாக்குதல்
      */
+    private fun prepareExportOverlayImage(context: Context, clip: Clip): String = runCatching {
+        val uriStr = clip.mediaUri ?: return@runCatching ""
+        val uri = Uri.parse(uriStr)
+
+        val srcBmp = context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it)
+        } ?: return@runCatching uriStr
+
+        val crop = clip.crop
+        val croppedBmp = if (crop != null && !crop.isFull) {
+            val cL = (srcBmp.width * crop.left).roundToInt().coerceIn(0, srcBmp.width - 1)
+            val cT = (srcBmp.height * crop.top).roundToInt().coerceIn(0, srcBmp.height - 1)
+            val cR = (srcBmp.width * crop.right).roundToInt().coerceIn(cL + 1, srcBmp.width)
+            val cB = (srcBmp.height * crop.bottom).roundToInt().coerceIn(cT + 1, srcBmp.height)
+            Bitmap.createBitmap(srcBmp, cL, cT, cR - cL, cB - cT)
+        } else {
+            srcBmp
+        }
+
+        val isFlipped = clip.filter?.id?.contains("flip") == true
+        val finalBmp = if (isFlipped) {
+            val matrix = android.graphics.Matrix().apply { preScale(-1f, 1f) }
+            Bitmap.createBitmap(croppedBmp, 0, 0, croppedBmp.width, croppedBmp.height, matrix, true)
+        } else {
+            croppedBmp
+        }
+
+        val outFile = File(context.cacheDir, "pip_export_${clip.id}.png")
+        FileOutputStream(outFile).use { out ->
+            finalBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+        }
+        Uri.fromFile(outFile).toString()
+    }.getOrDefault(clip.mediaUri ?: "")
+
     private fun createBlurredBackdropImage(
         context: Context,
         clip: Clip,
@@ -243,7 +293,6 @@ class Media3VideoExporter @Inject constructor(
         val outBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(outBitmap)
 
-        // 1. பின்னணியில் மங்கலான Blur Effect
         val small = Bitmap.createScaledBitmap(src, 64, 36, true)
         val blurredBg = Bitmap.createScaledBitmap(small, targetWidth, targetHeight, true)
         small.recycle()
@@ -252,10 +301,8 @@ class Media3VideoExporter @Inject constructor(
         canvas.drawBitmap(blurredBg, 0f, 0f, bgPaint)
         blurredBg.recycle()
 
-        // 2. பின்னணி மீது 35% கருப்பு நிழல் (Dark Scrim)
         canvas.drawColor(android.graphics.Color.argb(90, 0, 0, 0))
 
-        // 3. முன்பக்கத்தில் தெளிவான அசல் படம் அமைத்தல்
         val scaleFactor = minOf(
             targetWidth.toFloat() / src.width.toFloat(),
             targetHeight.toFloat() / src.height.toFloat(),
@@ -365,7 +412,7 @@ class Media3VideoExporter @Inject constructor(
             .build()
     }
 
-    private fun pipCompositorSettings(pip: com.actioncut.core.model.Clip): VideoCompositorSettings =
+    private fun pipCompositorSettings(pip: Clip): VideoCompositorSettings =
         object : VideoCompositorSettings {
             override fun getOutputSize(inputSizes: List<Size>): Size = inputSizes.first()
             override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings =
