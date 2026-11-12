@@ -397,24 +397,25 @@ private fun EditorTopBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 6.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        IconButton(onClick = onBack) {
+        IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
         }
         Row(
             modifier = Modifier
-                .weight(1f)
+                .weight(1f, fill = false)
                 .clip(RoundedCornerShape(8.dp))
                 .clickable { onTitleClick() }
-                .padding(vertical = 6.dp, horizontal = 4.dp),
+                .padding(vertical = 4.dp, horizontal = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(
                 text = title.ifBlank { "Untitled" },
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 1,
@@ -424,7 +425,7 @@ private fun EditorTopBar(
                 Icons.Filled.Edit,
                 contentDescription = "Rename project",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(14.dp),
             )
         }
         Row(
@@ -439,20 +440,20 @@ private fun EditorTopBar(
                 val on = aspectRatio == r
                 Text(
                     text = r.label,
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
                         .background(if (on) MaterialTheme.colorScheme.primary else Color.Transparent)
                         .clickable { onAspectRatio(r) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .padding(horizontal = 7.dp, vertical = 5.dp),
                 )
             }
             if (aspectRatio == AspectRatio.RATIO_4_5) {
                 Text(
                     text = "TPL",
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = if (isFbTemplateEnabled) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
@@ -460,22 +461,22 @@ private fun EditorTopBar(
                         .then(
                             if (isFbTemplateEnabled) {
                                 Modifier.background(
-                                    Brush.linearGradient(listOf(Color(0xFF00C6FF), Color(0xFF0072FF)))
+                                    Brush.linearGradient(listOf(Color(0xFF00C6FF), Color(0xFF0072FF))),
                                 )
                             } else {
                                 Modifier.background(Color.Transparent)
                             }
                         )
                         .clickable { onToggleFbTemplate() }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .padding(horizontal = 7.dp, vertical = 5.dp),
                 )
             }
         }
-        IconButton(onClick = onUndo, enabled = canUndo) {
-            Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo")
+        IconButton(onClick = onUndo, enabled = canUndo, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo", modifier = Modifier.size(18.dp))
         }
-        IconButton(onClick = onRedo, enabled = canRedo) {
-            Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo")
+        IconButton(onClick = onRedo, enabled = canRedo, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo", modifier = Modifier.size(18.dp))
         }
         PrimaryButton(text = "Export", onClick = onExport, leadingIcon = Icons.Filled.Add)
     }
