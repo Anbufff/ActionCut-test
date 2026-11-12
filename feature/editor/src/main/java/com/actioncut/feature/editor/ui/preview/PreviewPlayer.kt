@@ -89,7 +89,9 @@ fun PreviewPlayer(
 
     val mainClips = allClips.filter { it.type == ClipType.VIDEO || it.type == ClipType.IMAGE }
         .sortedBy { it.timelineStartMs }
-    val currentMainClip = mainClips.firstOrNull { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
+    val currentMainIndex = mainClips.indexOfFirst { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
+    val currentMainClip = if (currentMainIndex >= 0) mainClips[currentMainIndex] else null
+    val nextMainClip = if (currentMainIndex >= 0 && currentMainIndex + 1 < mainClips.size) mainClips[currentMainIndex + 1] else null
 
     Box(
         modifier = modifier
@@ -163,7 +165,7 @@ fun PreviewPlayer(
                     }
                 }
 
-                // 3. Bottom Section: 16:9 புகைப்படம் (தொட்டவுடன் கேலரி திறக்கும்)
+                // 3. Bottom Section: 16:9 புகைப்படம்
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -267,17 +269,102 @@ fun PreviewPlayer(
                     val trDuration = transition?.durationMs ?: 0L
                     val remainingTime = currentMainClip.timelineEndMs - playheadMs
 
-                    val alphaVal = if (transition != null && transition.type != TransitionType.SEAMLESS_MERGE &&
-                        transition.type != TransitionType.NONE && remainingTime in 1..trDuration
-                    ) {
-                        (remainingTime.toFloat() / trDuration.toFloat()).coerceIn(0f, 1f)
-                    } else {
-                        1.0f
+                    val isInTransition = transition != null &&
+                        transition.type != TransitionType.SEAMLESS_MERGE &&
+                        transition.type != TransitionType.NONE &&
+                        trDuration > 0L &&
+                        remainingTime in 1..trDuration
+
+                    val trProgress = if (isInTransition) {
+                        (1f - remainingTime.toFloat() / trDuration.toFloat()).coerceIn(0f, 1f)
+                    } else 0f
+
+                    val trType = transition?.type ?: TransitionType.NONE
+
+                    var currentAlpha = 1.0f
+                    var currentTransX = (currentMainClip.transform.offsetX / 2f) * w
+                    var currentTransY = (currentMainClip.transform.offsetY / 2f) * h
+                    var currentScaleFactor = 1.0f
+
+                    var nextAlpha = 0f
+                    var nextTransX = 0f
+                    var nextTransY = 0f
+                    var nextScaleFactor = 1.0f
+
+                    if (isInTransition) {
+                        when (trType) {
+                            TransitionType.CROSSFADE, TransitionType.DISSOLVE -> {
+                                currentAlpha = 1f - trProgress
+                                nextAlpha = trProgress
+                            }
+                            TransitionType.FADE -> {
+                                currentAlpha = (1f - trProgress * 2f).coerceIn(0f, 1f)
+                                nextAlpha = ((trProgress - 0.5f) * 2f).coerceIn(0f, 1f)
+                            }
+                            TransitionType.SLIDE_LEFT -> {
+                                currentTransX -= trProgress * w
+                                nextTransX = (1f - trProgress) * w
+                                nextAlpha = 1f
+                            }
+                            TransitionType.SLIDE_RIGHT -> {
+                                currentTransX += trProgress * w
+                                nextTransX = -(1f - trProgress) * w
+                                nextAlpha = 1f
+                            }
+                            TransitionType.SLIDE_UP -> {
+                                currentTransY -= trProgress * h
+                                nextTransY = (1f - trProgress) * h
+                                nextAlpha = 1f
+                            }
+                            TransitionType.SLIDE_DOWN -> {
+                                currentTransY += trProgress * h
+                                nextTransY = -(1f - trProgress) * h
+                                nextAlpha = 1f
+                            }
+                            TransitionType.ZOOM_IN -> {
+                                currentScaleFactor = 1f + trProgress * 0.35f
+                                currentAlpha = 1f - trProgress
+                                nextAlpha = trProgress
+                            }
+                            TransitionType.ZOOM_OUT -> {
+                                currentScaleFactor = (1f - trProgress * 0.35f).coerceAtLeast(0.1f)
+                                currentAlpha = 1f - trProgress
+                                nextAlpha = trProgress
+                            }
+                            TransitionType.BLUR, TransitionType.WIPE -> {
+                                currentAlpha = 1f - trProgress
+                                nextAlpha = trProgress
+                            }
+                            else -> {
+                                currentAlpha = 1.0f
+                                nextAlpha = 0f
+                            }
+                        }
                     }
 
+                    // 🌟 அடுத்த படம் ட்ரான்சிஷன் நேரத்தில் திரையில் சுலபமாகத் தெரியும் அனிமேஷன்
+                    if (isInTransition && nextMainClip != null && nextMainClip.mediaUri != null && nextAlpha > 0f) {
+                        AsyncImage(
+                            model = nextMainClip.mediaUri,
+                            contentDescription = null,
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    scaleX = nextMainClip.transform.scale * nextScaleFactor
+                                    scaleY = nextMainClip.transform.scale * nextScaleFactor
+                                    alpha = nextAlpha
+                                    translationX = nextTransX
+                                    translationY = nextTransY
+                                    rotationZ = (nextMainClip.rotationDegrees + nextMainClip.transform.rotationDegrees).toFloat()
+                                },
+                        )
+                    }
+
+                    // தற்போதைய படத்தின் அனிமேஷன்
                     val isMainSelected = currentMainClip.id == selectedClipId
                     val mainTransform = currentMainClip.transform
-                    val totalScale = autoZoomScale * mainTransform.scale
+                    val totalScale = autoZoomScale * mainTransform.scale * currentScaleFactor
 
                     AsyncImage(
                         model = currentMainClip.mediaUri,
@@ -288,9 +375,9 @@ fun PreviewPlayer(
                             .graphicsLayer {
                                 scaleX = totalScale
                                 scaleY = totalScale
-                                alpha = alphaVal
-                                translationX = (mainTransform.offsetX / 2f) * w
-                                translationY = (mainTransform.offsetY / 2f) * h
+                                alpha = currentAlpha
+                                translationX = currentTransX
+                                translationY = currentTransY
                                 rotationZ = (currentMainClip.rotationDegrees + mainTransform.rotationDegrees).toFloat()
                             }
                             .then(
