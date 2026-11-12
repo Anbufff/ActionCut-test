@@ -7,61 +7,35 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.asComposeRenderEffect
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.geometry.*
+import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.*
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.actioncut.core.model.AspectRatio
-import com.actioncut.core.model.Clip
-import com.actioncut.core.model.ClipType
-import com.actioncut.core.model.CropRect
-import com.actioncut.core.model.TransitionType
+import com.actioncut.core.model.*
 import com.actioncut.feature.editor.ui.pip.AiCutoutManager
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
 import kotlin.math.roundToInt
@@ -82,16 +56,16 @@ fun PreviewPlayer(
     onScaleOverlay: (String, Float) -> Unit = { _, _ -> },
     onCropChange: (String, CropRect) -> Unit = { _, _ -> },
     isCropModeActive: Boolean = true,
-    fitMode: com.actioncut.core.model.FitMode = com.actioncut.core.model.FitMode.FILL,
+    fitMode: FitMode = FitMode.FILL,
     backgroundColorArgb: Int = 0xFF000000.toInt(),
     allClips: List<Clip> = emptyList(),
     onScorecardRowTapped: (String, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val resizeMode = when (fitMode) {
-        com.actioncut.core.model.FitMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-        com.actioncut.core.model.FitMode.FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-        com.actioncut.core.model.FitMode.STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+        FitMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+        FitMode.FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+        FitMode.STRETCH -> AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
 
     val mainClips = allClips.filter { it.type == ClipType.VIDEO || it.type == ClipType.IMAGE }
@@ -218,7 +192,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // 3. Fty HTML Video Editor பாணியில் PiP Layer (Free Crop + AI Cutout)
+            // 3. Fty HTML Video Editor பாணியில் PiP Layer
             if (pipPlayer != null) {
                 PipLayer(
                     pipPlayer = pipPlayer,
@@ -307,11 +281,11 @@ fun PreviewPlayer(
 }
 
 /**
- * Fty Video Editor ஸ்கிரீன்ஷாட்டில் உள்ளபடியே:
- * 1. 48.dp தொடு பரப்புடன் கூடிய கைப்பிடிகள் (Touch handles with 48.dp hit target)
+ * Fty Video Editor பாணியில்:
+ * 1. 48.dp தொடு பரப்புடைய கைப்பிடிகள்
  * 2. சியான் டாஷ்ட் பார்டர் (Cyan Dashed Border)
- * 3. 4 மூலைகளில் L-வடிவ Corner Brackets
- * 4. 4 பக்கங்களில் வட்ட வடிவ Edge Handles
+ * 3. 4 மூலைகளில் Corner Brackets
+ * 4. 4 பக்கங்களில் Edge Handles
  * 5. நடுவில் உள்ள Center Pan Zone
  * 6. வலது கீழ் மூலையில் Scale Handle
  * 7. Google AI Human Cutout
@@ -372,7 +346,6 @@ private fun PipLayer(
                     alpha = props.opacity
                 }
                 .pointerInput(active.id, w, h, isCropModeActive) {
-                    // பயனர் CROP MODE-ல் இல்லாத போது மட்டுமே முழு PiP-ஐ நகர்த்த அனுமதிக்கும்
                     if (!isCropModeActive) {
                         var ox = t.offsetX
                         var oy = t.offsetY
@@ -388,7 +361,7 @@ private fun PipLayer(
                     }
                 },
         ) {
-            // 1. படம் (Image) - Crop விளிம்புகளுக்குள் கத்தரிக்கப்பட்டு வரையப்படுதல்
+            // 1. படம் - Crop விளிம்புகளுக்குள் கத்தரிக்கப்பட்டு வரைதல்
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -430,7 +403,7 @@ private fun PipLayer(
                 }
             }
 
-            // 2. Fty HTML Video Editor பாணி Live On-Screen Free Crop Bounding Box & Handles
+            // 2. Live On-Screen Free Crop Bounding Box & 48.dp Handles
             if (isSelected) {
                 val pipPixelW = pipW * density
                 val pipPixelH = pipH * density
@@ -444,7 +417,7 @@ private fun PipLayer(
                 val cCenterX = (cL + cR) / 2f
                 val cCenterY = (cT + cB) / 2f
 
-                // Fty சியான் நிற டாஷ்ட் பார்டர் (Cyan Dashed Border)
+                // சியான் நிற டாஷ்ட் பார்டர்
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -463,7 +436,7 @@ private fun PipLayer(
                         },
                 )
 
-                // Fty Center Crop Pan Zone (நடுப்பகுதியை இழுத்தால் Crop பாக்ஸை நகர்த்தும் பகுதி)
+                // Center Crop Pan Zone (நடுப்பகுதியை இழுத்து Crop பாக்ஸை நகர்த்துதல்)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset(cL.roundToInt(), cT.roundToInt()) }
@@ -485,7 +458,7 @@ private fun PipLayer(
                         },
                 )
 
-                // 48.dp தொடு பரப்புடைய Top Edge Handle
+                // Top Edge Handle (48.dp Touch)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cCenterX - 24 * density).roundToInt(), (cT - 24 * density).roundToInt()) }
@@ -509,7 +482,7 @@ private fun PipLayer(
                     )
                 }
 
-                // 48.dp தொடு பரப்புடைய Bottom Edge Handle
+                // Bottom Edge Handle (48.dp Touch)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cCenterX - 24 * density).roundToInt(), (cB - 24 * density).roundToInt()) }
@@ -533,7 +506,7 @@ private fun PipLayer(
                     )
                 }
 
-                // 48.dp தொடு பரப்புடைய Left Edge Handle
+                // Left Edge Handle (48.dp Touch)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cL - 24 * density).roundToInt(), (cCenterY - 24 * density).roundToInt()) }
@@ -557,7 +530,7 @@ private fun PipLayer(
                     )
                 }
 
-                // 48.dp தொடு பரப்புடைய Right Edge Handle
+                // Right Edge Handle (48.dp Touch)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cR - 24 * density).roundToInt(), (cCenterY - 24 * density).roundToInt()) }
@@ -581,7 +554,7 @@ private fun PipLayer(
                     )
                 }
 
-                // Top-Left Corner Bracket (48.dp Touch Target)
+                // Top-Left Corner Bracket (48.dp Touch)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cL - 16 * density).roundToInt(), (cT - 16 * density).roundToInt()) }
@@ -610,7 +583,7 @@ private fun PipLayer(
                     )
                 }
 
-                // Top-Right Corner Bracket (48.dp Touch Target)
+                // Top-Right Corner Bracket (48.dp Touch)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cR - 32 * density).roundToInt(), (cT - 16 * density).roundToInt()) }
@@ -639,7 +612,7 @@ private fun PipLayer(
                     )
                 }
 
-                // Bottom-Left Corner Bracket (48.dp Touch Target)
+                // Bottom-Left Corner Bracket (48.dp Touch)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cL - 16 * density).roundToInt(), (cB - 32 * density).roundToInt()) }
@@ -668,7 +641,7 @@ private fun PipLayer(
                     )
                 }
 
-                // Bottom-Right Corner Bracket (48.dp Touch Target)
+                // Bottom-Right Corner Bracket (48.dp Touch)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cR - 32 * density).roundToInt(), (cB - 32 * density).roundToInt()) }
@@ -697,7 +670,7 @@ private fun PipLayer(
                     )
                 }
 
-                // Fty வலது கீழ் மூலையில் உள்ள பெரிய வெள்ளை நிற Scaling Handle
+                // Fty Scaling Handle (White circle with cyan border)
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -812,7 +785,7 @@ private fun OverlayLayer(
 
 @Composable
 private fun StickerImage(uri: String, widthPx: Float, modifier: Modifier = Modifier) {
-    val bitmap = androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(
+    val bitmap = androidx.compose.runtime.produceState<ImageBitmap?>(
         initialValue = null,
         key1 = uri,
     ) {
