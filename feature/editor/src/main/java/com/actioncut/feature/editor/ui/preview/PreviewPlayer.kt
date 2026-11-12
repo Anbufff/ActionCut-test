@@ -191,7 +191,7 @@ fun PreviewPlayer(
                 )
             }
 
-            // 3. அதிவேக மென்மையான PiP லேயர் (Smooth Drag & Crop)
+            // 3. அதிவேக மென்மையான PiP லேயர் (Zero-Recomposition Smooth Drag & Crop)
             if (pipPlayer != null) {
                 PipLayer(
                     pipPlayer = pipPlayer,
@@ -279,9 +279,6 @@ fun PreviewPlayer(
     }
 }
 
-/**
- * Buttery Smooth 60fps/120fps PiP Drag & Live On-Screen Free Crop
- */
 @Composable
 private fun PipLayer(
     pipPlayer: ExoPlayer,
@@ -318,12 +315,10 @@ private fun PipLayer(
         val density = LocalDensity.current.density
         val props = com.actioncut.core.model.Keyframes.propsAt(active, playheadMs - active.timelineStartMs)
         val t = props.transform
-        val pipW = (w * t.scale) / density
-        val pipH = (h * t.scale) / density
         val isSelected = active.id == selectedClipId
         val cyanColor = Color(0xFF00E5FF)
 
-        // Live Smooth Dragging States (Recomposition-ஐத் தடுத்து அதிவேகமாக இயங்க வைக்கும் லோக்கல் ஸ்டேட்ஸ்)
+        // 120fps அதிகபட்ச மென்மைக்கான லோக்கல் ஸ்டேட்ஸ் (Zero-Jank Local States)
         var liveOffsetX by remember(active.id, t.offsetX) { mutableFloatStateOf(t.offsetX) }
         var liveOffsetY by remember(active.id, t.offsetY) { mutableFloatStateOf(t.offsetY) }
         var liveScale by remember(active.id, t.scale) { mutableFloatStateOf(t.scale) }
@@ -337,7 +332,7 @@ private fun PipLayer(
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
-                .size((w * liveScale / density).dp, (h * liveScale / density).dp)
+                .size((pipPixelW / density).dp, (pipPixelH / density).dp)
                 .graphicsLayer {
                     translationX = (liveOffsetX / 2f) * w
                     translationY = (liveOffsetY / 2f) * h
@@ -346,25 +341,20 @@ private fun PipLayer(
                     alpha = props.opacity
                 }
                 .pointerInput(active.id) {
+                    // PiP பாக்ஸை நகர்த்தும் போது 120fps-ல் உடனடி ரெண்டரிங், விரல் எடுத்ததும் ViewModel update
                     detectDragGestures(
-                        onDragStart = {
-                            onSelect(active.id)
-                        },
+                        onDragStart = { onSelect(active.id) },
                         onDrag = { change, dragAmount ->
                             change.consume()
                             liveOffsetX = (liveOffsetX + dragAmount.x / (w / 2f)).coerceIn(-1.8f, 1.8f)
                             liveOffsetY = (liveOffsetY + dragAmount.y / (h / 2f)).coerceIn(-1.8f, 1.8f)
                         },
-                        onDragEnd = {
-                            onMove(active.id, liveOffsetX, liveOffsetY)
-                        },
-                        onDragCancel = {
-                            onMove(active.id, liveOffsetX, liveOffsetY)
-                        }
+                        onDragEnd = { onMove(active.id, liveOffsetX, liveOffsetY) },
+                        onDragCancel = { onMove(active.id, liveOffsetX, liveOffsetY) },
                     )
                 },
         ) {
-            // 1. படம் - Crop விளிம்புகளுக்குள் கத்தரிக்கப்பட்டு வரைதல்
+            // 1. கத்தரிக்கப்பட்ட பிம்பம் வரைதல்
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -406,7 +396,7 @@ private fun PipLayer(
                 }
             }
 
-            // 2. அதிவேக Live On-Screen Free Crop Bounding Box & 48.dp Touch Handles
+            // 2. Fty பாணி 8-புள்ளிகள் கொண்ட அதிவேக Live Free Crop Bounding Box & Handles
             if (isSelected) {
                 val cL = pipPixelW * liveCrop.left
                 val cT = pipPixelH * liveCrop.top
@@ -436,7 +426,7 @@ private fun PipLayer(
                         },
                 )
 
-                // 48.dp தொடு பரப்புடைய Top Edge Handle
+                // Top Edge Handle (48.dp தொடு பரப்பு)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cCenterX - 24 * density).roundToInt(), (cT - 24 * density).roundToInt()) }
@@ -449,7 +439,7 @@ private fun PipLayer(
                                     val newTop = (liveCrop.top + dy).coerceIn(0f, liveCrop.bottom - 0.05f)
                                     liveCrop = liveCrop.copy(top = newTop)
                                 },
-                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                                onDragEnd = { onCropChange(active.id, liveCrop) },
                             )
                         },
                     contentAlignment = Alignment.Center,
@@ -463,7 +453,7 @@ private fun PipLayer(
                     )
                 }
 
-                // 48.dp தொடு பரப்புடைய Bottom Edge Handle
+                // Bottom Edge Handle (48.dp தொடு பரப்பு)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cCenterX - 24 * density).roundToInt(), (cB - 24 * density).roundToInt()) }
@@ -476,7 +466,7 @@ private fun PipLayer(
                                     val newBottom = (liveCrop.bottom + dy).coerceIn(liveCrop.top + 0.05f, 1f)
                                     liveCrop = liveCrop.copy(bottom = newBottom)
                                 },
-                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                                onDragEnd = { onCropChange(active.id, liveCrop) },
                             )
                         },
                     contentAlignment = Alignment.Center,
@@ -490,7 +480,7 @@ private fun PipLayer(
                     )
                 }
 
-                // 48.dp தொடு பரப்புடைய Left Edge Handle
+                // Left Edge Handle (48.dp தொடு பரப்பு)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cL - 24 * density).roundToInt(), (cCenterY - 24 * density).roundToInt()) }
@@ -503,7 +493,7 @@ private fun PipLayer(
                                     val newLeft = (liveCrop.left + dx).coerceIn(0f, liveCrop.right - 0.05f)
                                     liveCrop = liveCrop.copy(left = newLeft)
                                 },
-                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                                onDragEnd = { onCropChange(active.id, liveCrop) },
                             )
                         },
                     contentAlignment = Alignment.Center,
@@ -517,7 +507,7 @@ private fun PipLayer(
                     )
                 }
 
-                // 48.dp தொடு பரப்புடைய Right Edge Handle
+                // Right Edge Handle (48.dp தொடு பரப்பு)
                 Box(
                     modifier = Modifier
                         .offset { IntOffset((cR - 24 * density).roundToInt(), (cCenterY - 24 * density).roundToInt()) }
@@ -530,7 +520,7 @@ private fun PipLayer(
                                     val newRight = (liveCrop.right + dx).coerceIn(liveCrop.left + 0.05f, 1f)
                                     liveCrop = liveCrop.copy(right = newRight)
                                 },
-                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                                onDragEnd = { onCropChange(active.id, liveCrop) },
                             )
                         },
                     contentAlignment = Alignment.Center,
@@ -559,7 +549,7 @@ private fun PipLayer(
                                     val newTop = (liveCrop.top + dy).coerceIn(0f, liveCrop.bottom - 0.05f)
                                     liveCrop = liveCrop.copy(left = newLeft, top = newTop)
                                 },
-                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                                onDragEnd = { onCropChange(active.id, liveCrop) },
                             )
                         },
                     contentAlignment = Alignment.TopStart,
@@ -591,7 +581,7 @@ private fun PipLayer(
                                     val newTop = (liveCrop.top + dy).coerceIn(0f, liveCrop.bottom - 0.05f)
                                     liveCrop = liveCrop.copy(right = newRight, top = newTop)
                                 },
-                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                                onDragEnd = { onCropChange(active.id, liveCrop) },
                             )
                         },
                     contentAlignment = Alignment.TopEnd,
@@ -623,7 +613,7 @@ private fun PipLayer(
                                     val newBottom = (liveCrop.bottom + dy).coerceIn(liveCrop.top + 0.05f, 1f)
                                     liveCrop = liveCrop.copy(left = newLeft, bottom = newBottom)
                                 },
-                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                                onDragEnd = { onCropChange(active.id, liveCrop) },
                             )
                         },
                     contentAlignment = Alignment.BottomStart,
@@ -655,7 +645,7 @@ private fun PipLayer(
                                     val newBottom = (liveCrop.bottom + dy).coerceIn(liveCrop.top + 0.05f, 1f)
                                     liveCrop = liveCrop.copy(right = newRight, bottom = newBottom)
                                 },
-                                onDragEnd = { onCropChange(active.id, liveCrop) }
+                                onDragEnd = { onCropChange(active.id, liveCrop) },
                             )
                         },
                     contentAlignment = Alignment.BottomEnd,
@@ -672,7 +662,7 @@ private fun PipLayer(
                     )
                 }
 
-                // Fty Scaling Handle (White circle with cyan border)
+                // Fty Scaling Handle
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -684,7 +674,7 @@ private fun PipLayer(
                                     change.consume()
                                     liveScale = (liveScale + dragAmount.x / w).coerceIn(0.15f, 2.5f)
                                 },
-                                onDragEnd = { onScale(active.id, liveScale) }
+                                onDragEnd = { onScale(active.id, liveScale) },
                             )
                         },
                     contentAlignment = Alignment.Center,
