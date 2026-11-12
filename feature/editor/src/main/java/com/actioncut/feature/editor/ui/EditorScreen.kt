@@ -457,9 +457,14 @@ private fun EditorTopBar(
                     color = if (isFbTemplateEnabled) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
-                        .background(
-                            if (isFbTemplateEnabled) Brush.linearGradient(listOf(Color(0xFF00C6FF), Color(0xFF0072FF)))
-                            else Color.Transparent,
+                        .then(
+                            if (isFbTemplateEnabled) {
+                                Modifier.background(
+                                    Brush.linearGradient(listOf(Color(0xFF00C6FF), Color(0xFF0072FF)))
+                                )
+                            } else {
+                                Modifier.background(Color.Transparent)
+                            }
                         )
                         .clickable { onToggleFbTemplate() }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
