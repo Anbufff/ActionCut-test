@@ -36,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -48,7 +49,6 @@ import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.TrackType
 import com.actioncut.feature.editor.ui.newsalert.FlashNewsTextDialog
 import com.actioncut.feature.editor.ui.newsalert.NewsAlertTemplatesDialog
-import com.actioncut.feature.editor.ui.pip.FreeCropDialog
 import com.actioncut.feature.editor.ui.pip.PipSelectedBar
 import com.actioncut.feature.editor.ui.preview.PreviewPlayer
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibrary
@@ -70,9 +70,23 @@ fun EditorScreen(
 
     var showNewsAlertTemplates by remember { mutableStateOf(false) }
     var showFlashNewsText by remember { mutableStateOf(false) }
-    var isCropModeActive by remember { mutableStateOf(true) }
+    var isCropModeActive by remember { mutableStateOf(false) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    val tplImagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            viewModel.setFbTemplateImage(uri.toString())
+        }
+    }
 
     val addMediaPicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
@@ -153,6 +167,13 @@ fun EditorScreen(
             onTitleClick = { showRename = true },
             aspectRatio = uiState.aspectRatio,
             onAspectRatio = viewModel::setAspectRatio,
+            isFbTemplateEnabled = uiState.canvas.isFbTemplateEnabled,
+            onToggleFbTemplate = {
+                viewModel.toggleFbTemplate()
+                if (!uiState.canvas.isFbTemplateEnabled && uiState.canvas.fbTemplateImageUri == null) {
+                    tplImagePicker.launch(arrayOf("image/*"))
+                }
+            },
         )
 
         val activePipClips = uiState.timeline.tracks
@@ -181,6 +202,9 @@ fun EditorScreen(
             backgroundColorArgb = uiState.canvas.backgroundColorArgb,
             allClips = uiState.timeline.allClips,
             onScorecardRowTapped = viewModel::onScorecardRowTapped,
+            isFbTemplateEnabled = uiState.canvas.isFbTemplateEnabled,
+            fbTemplateImageUri = uiState.canvas.fbTemplateImageUri,
+            onPickTplImage = { tplImagePicker.launch(arrayOf("image/*")) },
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
@@ -367,6 +391,8 @@ private fun EditorTopBar(
     onTitleClick: () -> Unit,
     aspectRatio: AspectRatio,
     onAspectRatio: (AspectRatio) -> Unit,
+    isFbTemplateEnabled: Boolean = false,
+    onToggleFbTemplate: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
@@ -420,6 +446,22 @@ private fun EditorTopBar(
                         .clip(RoundedCornerShape(50))
                         .background(if (on) MaterialTheme.colorScheme.primary else Color.Transparent)
                         .clickable { onAspectRatio(r) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+            if (aspectRatio == AspectRatio.RATIO_4_5) {
+                Text(
+                    text = "TPL",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isFbTemplateEnabled) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (isFbTemplateEnabled) Brush.linearGradient(listOf(Color(0xFF00C6FF), Color(0xFF0072FF)))
+                            else Color.Transparent,
+                        )
+                        .clickable { onToggleFbTemplate() }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
