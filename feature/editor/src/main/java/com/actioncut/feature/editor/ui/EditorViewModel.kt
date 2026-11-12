@@ -43,6 +43,7 @@ import com.actioncut.core.model.VisualEffectType
 import com.actioncut.feature.editor.ui.newsalert.NewsBannerRenderer
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,6 +51,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.UUID
 import javax.inject.Inject
 import kotlin.math.abs
@@ -91,6 +93,7 @@ class EditorViewModel @Inject constructor(
             }
 
             val initialTimeline = project.timeline.copy(
+                canvas = project.canvas,
                 tracks = project.timeline.tracks.map { track ->
                     if (track.type == TrackType.VIDEO) {
                         track.copy(
@@ -189,8 +192,19 @@ class EditorViewModel @Inject constructor(
         updateCanvas { it.copy(isFbTemplateEnabled = newOn) }
     }
 
-    fun setFbTemplateImage(uri: String) {
-        updateCanvas { it.copy(fbTemplateImageUri = uri, isFbTemplateEnabled = true) }
+    fun setFbTemplateImage(uriStr: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val localUri = runCatching {
+                val uri = Uri.parse(uriStr)
+                val targetFile = File(context.filesDir, "tpl_bottom_image.jpg")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    targetFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                Uri.fromFile(targetFile).toString()
+            }.getOrDefault(uriStr)
+
+            updateCanvas { it.copy(fbTemplateImageUri = localUri, isFbTemplateEnabled = true) }
+        }
     }
 
     fun renameProject(name: String) {
@@ -319,7 +333,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Fty News Alert Banner
     fun addNewsBannerOverlay(text: String) {
         if (text.isBlank()) return
         viewModelScope.launch {
@@ -351,7 +364,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Fty PiP (Picture-in-Picture)
     fun addPipAtPlayhead(uri: String) {
         viewModelScope.launch {
             val media = resolveAnyMedia(uri) ?: return@launch
@@ -440,12 +452,11 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    // ------------------------------------------------------------------ Dynamic Scorecard
     fun addScorecardClip(data: ScorecardClipData) {
         val durationMs = 120_000L
-        val cardFile = java.io.File(context.cacheDir, "card_${data.id}.png")
+        val cardFile = File(context.cacheDir, "card_${data.id}.png")
         val cardUri = if (cardFile.exists()) {
-            android.net.Uri.fromFile(cardFile).toString()
+            Uri.fromFile(cardFile).toString()
         } else {
             data.sourceImageUri
         }
@@ -731,8 +742,9 @@ class EditorViewModel @Inject constructor(
 
     private fun updateCanvas(transform: (CanvasSettings) -> CanvasSettings) {
         val newCanvas = transform(_uiState.value.canvas)
-        _uiState.update { it.copy(canvas = newCanvas) }
-        loadedProject = loadedProject?.copy(canvas = newCanvas)
+        val updatedTimeline = _uiState.value.timeline.copy(canvas = newCanvas)
+        _uiState.update { it.copy(canvas = newCanvas, timeline = updatedTimeline) }
+        loadedProject = loadedProject?.copy(canvas = newCanvas, timeline = updatedTimeline)
         scheduleSave()
     }
 
