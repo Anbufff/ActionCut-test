@@ -150,7 +150,6 @@ fun PreviewPlayer(
                         )
                     }
 
-                    // 4:5 TPL-லிலும் ஸ்கோர் கார்டு மேலே உள்ள 16:9 பெட்டியில் முழுமையாகத் தெரிய வேண்டும்
                     ScorecardLayer(
                         allClips = allClips,
                         playheadMs = playheadMs,
@@ -211,7 +210,7 @@ fun PreviewPlayer(
                 }
 
             } else {
-                if (currentMainClip != null && currentMainClip.mediaUri != null) {
+                if (currentMainClip != null && currentMainClip.mediaUri != null && currentMainClip.scorecard == null) {
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
                             .data(currentMainClip.mediaUri)
@@ -259,7 +258,7 @@ fun PreviewPlayer(
                     )
                 }
 
-                if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null) {
+                if (currentMainClip != null && currentMainClip.type == ClipType.IMAGE && currentMainClip.mediaUri != null && currentMainClip.scorecard == null) {
                     val timeInClip = (playheadMs - currentMainClip.timelineStartMs).coerceAtLeast(0L)
                     val duration = currentMainClip.timelineDurationMs.coerceAtLeast(1L)
                     val halfDuration = duration / 2f
@@ -286,7 +285,7 @@ fun PreviewPlayer(
                     }
 
                     val currentIdx = mainClips.indexOfFirst { it.id == currentMainClip.id }
-                    val nextMainClip = if (currentIdx >= 0 && currentIdx + 1 < mainClips.size) mainClips[currentIdx + 1] else null
+                    val nextClip = if (currentIdx >= 0 && currentIdx + 1 < mainClips.size) mainClips[currentIdx + 1] else null
 
                     val transition = currentMainClip.transitionToNext
                     val trDuration = transition?.durationMs ?: 0L
@@ -365,20 +364,20 @@ fun PreviewPlayer(
                         }
                     }
 
-                    if (isInTransition && nextMainClip != null && nextMainClip.mediaUri != null && nextAlpha > 0f) {
+                    if (isInTransition && nextClip != null && nextClip.mediaUri != null && nextAlpha > 0f) {
                         AsyncImage(
-                            model = nextMainClip.mediaUri,
+                            model = nextClip.mediaUri,
                             contentDescription = null,
                             contentScale = ContentScale.Fit,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer {
-                                    scaleX = nextMainClip.transform.scale * nextScaleFactor
-                                    scaleY = nextMainClip.transform.scale * nextScaleFactor
+                                    scaleX = nextClip.transform.scale * nextScaleFactor
+                                    scaleY = nextClip.transform.scale * nextScaleFactor
                                     alpha = nextAlpha
                                     translationX = nextTransX
                                     translationY = nextTransY
-                                    rotationZ = (nextMainClip.rotationDegrees + nextMainClip.transform.rotationDegrees).toFloat()
+                                    rotationZ = (nextClip.rotationDegrees + nextClip.transform.rotationDegrees).toFloat()
                                 },
                         )
                     }
@@ -401,7 +400,7 @@ fun PreviewPlayer(
                             }
                             .pointerInput(currentMainClip.id, isMainSelected, w, h) {
                                 awaitEachGesture {
-                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    awaitFirstDown(requireUnconsumed = false)
                                     if (!isMainSelected) {
                                         onSelectOverlay(currentMainClip.id)
                                     }
@@ -887,7 +886,6 @@ private fun PipLayer(
                             .background(cyanColor)
                             .border(2.5.dp, Color.White, CircleShape),
                     )
-
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cCenterX - 11 * density).roundToInt(), (cB - 11 * density).roundToInt()) }
@@ -896,7 +894,6 @@ private fun PipLayer(
                             .background(cyanColor)
                             .border(2.5.dp, Color.White, CircleShape),
                     )
-
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cL - 11 * density).roundToInt(), (cCenterY - 11 * density).roundToInt()) }
@@ -905,7 +902,6 @@ private fun PipLayer(
                             .background(cyanColor)
                             .border(2.5.dp, Color.White, CircleShape),
                     )
-
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cR - 11 * density).roundToInt(), (cCenterY - 11 * density).roundToInt()) }
@@ -914,7 +910,6 @@ private fun PipLayer(
                             .background(cyanColor)
                             .border(2.5.dp, Color.White, CircleShape),
                     )
-
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cL - 5 * density).roundToInt(), (cT - 5 * density).roundToInt()) }
@@ -925,7 +920,6 @@ private fun PipLayer(
                                 drawLine(cyanColor, Offset(0f, 0f), Offset(0f, size.height), strokeW)
                             },
                     )
-
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cR - 19 * density).roundToInt(), (cT - 5 * density).roundToInt()) }
@@ -936,7 +930,6 @@ private fun PipLayer(
                                 drawLine(cyanColor, Offset(size.width, 0f), Offset(size.width, size.height), strokeW)
                             },
                     )
-
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cL - 5 * density).roundToInt(), (cB - 19 * density).roundToInt()) }
@@ -947,7 +940,6 @@ private fun PipLayer(
                                 drawLine(cyanColor, Offset(0f, 0f), Offset(0f, size.height), strokeW)
                             },
                     )
-
                     Box(
                         modifier = Modifier
                             .offset { IntOffset((cR - 19 * density).roundToInt(), (cB - 19 * density).roundToInt()) }
@@ -994,7 +986,6 @@ private fun OverlayLayer(
                 val t = props.transform
                 val glyph = clip.text?.text ?: ""
                 val baseSp = clip.text?.fontSizeSp ?: 24f
-                val isSelected = clip.id == selectedClipId
                 val isNewsBanner = clip.mediaUri?.contains("news_banner") == true
 
                 val gestureModifier = Modifier
@@ -1076,10 +1067,6 @@ private fun StickerImage(uri: String, widthPx: Float, modifier: Modifier = Modif
     )
 }
 
-/**
- * The animated scorecard card (rows, bouncing arrow, key player panel).
- * Shared by the normal layout and the 4:5 TPL layout (where it fills the top 16:9 box).
- */
 @Composable
 private fun ScorecardLayer(
     allClips: List<Clip>,
@@ -1091,6 +1078,14 @@ private fun ScorecardLayer(
         it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
     } ?: return
     val sc = activeScoreClip.scorecard ?: return
+    val context = LocalContext.current
+    var prepTick by remember(sc.id, sc.themeIdx) { mutableIntStateOf(0) }
+    LaunchedEffect(sc.id, sc.themeIdx) {
+        ScorecardManager.ensurePrepared(context, sc)
+        prepTick++
+    }
+    @Suppress("UNUSED_EXPRESSION")
+    prepTick
     val currentPlayheadMs by rememberUpdatedState(playheadMs)
     val timeInClip = (playheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
     val activeBmp = ScorecardManager.getActiveBitmap(activeScoreClip.id, sc, timeInClip) ?: return
