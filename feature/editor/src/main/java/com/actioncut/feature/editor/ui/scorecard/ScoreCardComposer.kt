@@ -2,8 +2,10 @@ package com.actioncut.feature.editor.ui.scorecard
 
 import android.graphics.Bitmap
 import android.graphics.BlurMaskFilter
+import android.graphics.Camera
 import android.graphics.Canvas
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
@@ -11,6 +13,8 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -333,6 +337,7 @@ object ScoreCardComposer {
         photo: Bitmap?,
         fallbackName: String?,
         panelLeft: Float = PANEL_LEFT,
+        reserveRightForRuns: Boolean = false,
     ) {
         val pl = panelLeft
         val pr = CANVAS_W - 28f
@@ -458,7 +463,9 @@ object ScoreCardComposer {
         p.textSize = ph * 0.064f
         p.letterSpacing = 0.03f
         val nm = displayName.uppercase()
-        while (p.measureText(nm) > (npRect.width() - pw * 0.07f) && p.textSize > 18f) {
+        val reservedRight = if (reserveRightForRuns && theme != 2) 220f else 0f
+        val maxNameW = (npRect.width() - pw * 0.07f - reservedRight).coerceAtLeast(120f)
+        while (p.measureText(nm) > maxNameW && p.textSize > 18f) {
             p.textSize -= 2f
         }
         c.drawText(nm, npLeft + pw * 0.035f, npTop + ph * 0.125f, p)
@@ -466,14 +473,15 @@ object ScoreCardComposer {
 
         val lineY1 = npBottom - ph * 0.025f
         val lineY2 = npBottom - ph * 0.017f
+        val lineRight = npRight - pw * 0.035f - (if (reserveRightForRuns && theme != 2) 210f else 0f)
         when (theme) {
             0 -> {
                 fillRR(c, p, RectF(npLeft + pw * 0.035f, lineY1, npLeft + pw * 0.30f, lineY2), 3f, 0xFFFFCC00.toInt())
-                fillRR(c, p, RectF(npLeft + pw * 0.32f, lineY1, npRight - pw * 0.035f, lineY2 - 1f), 2f, 0xFF00E5FF.toInt())
+                fillRR(c, p, RectF(npLeft + pw * 0.32f, lineY1, lineRight, lineY2 - 1f), 2f, 0xFF00E5FF.toInt())
             }
             1 -> gradRR(
                 c, p,
-                RectF(npLeft + pw * 0.035f, lineY1, npRight - pw * 0.035f, lineY2),
+                RectF(npLeft + pw * 0.035f, lineY1, lineRight, lineY2),
                 3f,
                 intArrayOf(0xFFF6D77A.toInt(), 0xFFC8922A.toInt(), 0x00C8922A),
                 floatArrayOf(0f, 0.65f, 1f),
@@ -481,7 +489,7 @@ object ScoreCardComposer {
             )
             else -> {
                 fillRR(c, p, RectF(npLeft + pw * 0.035f, lineY1, npLeft + pw * 0.30f, lineY2), 4f, 0xFFFF8A00.toInt())
-                fillRR(c, p, RectF(npLeft + pw * 0.32f, lineY1, npRight - pw * 0.035f, lineY2 - 1f), 3f, 0xFFE61E8C.toInt())
+                fillRR(c, p, RectF(npLeft + pw * 0.32f, lineY1, lineRight, lineY2 - 1f), 3f, 0xFFE61E8C.toInt())
             }
         }
 
@@ -536,6 +544,200 @@ object ScoreCardComposer {
         }
         p.style = Paint.Style.FILL
         p.textAlign = Paint.Align.LEFT
+    }
+
+    /**
+     * Draws a broadcast-quality 3D Y-axis rotating Runs badge/stat inside the empty right
+     * side of the KEY BATSMAN / KEY BOWLER box for Design 1 (Neon) and Design 2 (Gold).
+     */
+    fun drawAnimatedRuns3D(
+        canvas: Canvas,
+        runsText: String,
+        labelText: String = "RUNS",
+        timeInClipMs: Long,
+        themeIdx: Int,
+        panelLeft: Float = PANEL_LEFT,
+    ) {
+        if (runsText.isBlank()) return
+        val theme = normTheme(themeIdx)
+        if (theme == 2) return // Only Design 1 (Neon) & Design 2 (Gold)
+
+        val pr = CANVAS_W - 28f
+        val pt = 28f
+        val pb = CANVAS_H - 28f
+        val ph = pb - pt
+        val pw = pr - panelLeft
+        val npRight = pr - pw * 0.035f
+        val npTop = pb - ph * 0.21f
+        val npBottom = pb - ph * 0.03f
+        val npH = npBottom - npTop
+
+        val cx = npRight - 114f
+        val cy = npTop + npH * 0.45f
+
+        // Smooth 3.0s 360° 3D rotation cycle
+        val u = (timeInClipMs % 3000L) / 3000f
+        val twoPi = (2.0 * Math.PI).toFloat()
+        val rawAngle = u * 360f - 18f * sin(2f * twoPi * u)
+        val rad = Math.toRadians(rawAngle.toDouble())
+        val cosA = cos(rad).toFloat()
+        val sinA = sin(rad).toFloat()
+        val isBackFace = cosA < 0f
+        val displayAngle = if (isBackFace) rawAngle - 180f else rawAngle
+
+        val bobY = sin(twoPi * u) * 3f
+        val animCy = cy + bobY
+
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        val badgeW = 176f
+        val badgeH = 136f
+        val badgeRad = 24f
+        val badgeRect = RectF(cx - badgeW / 2f, animCy - badgeH / 2f, cx + badgeW / 2f, animCy + badgeH / 2f)
+
+        // 1. Soft pulsing broadcast aura + 3D ground shadow beneath badge
+        val pulse = 0.65f + 0.35f * abs(cosA)
+        val auraAlpha = (85 * pulse).toInt().coerceIn(25, 110)
+        val auraColor = if (theme == 0) {
+            (auraAlpha shl 24) or 0x00E5FF
+        } else {
+            (auraAlpha shl 24) or 0xFFD447
+        }
+        p.shader = RadialGradient(
+            cx, animCy, 118f,
+            intArrayOf(auraColor, 0x00000000),
+            null, Shader.TileMode.CLAMP,
+        )
+        canvas.drawCircle(cx, animCy, 118f, p)
+        p.shader = null
+
+        val shadowHalfW = 58f * (0.35f + 0.65f * abs(cosA))
+        p.color = 0x88000000.toInt()
+        p.maskFilter = BlurMaskFilter(10f, BlurMaskFilter.Blur.NORMAL)
+        canvas.drawOval(RectF(cx - shadowHalfW, npBottom - 23f, cx + shadowHalfW, npBottom - 11f), p)
+        p.maskFilter = null
+
+        val camera = Camera()
+        val matrix = Matrix()
+
+        // 2. 3D Extruded Depth Thickness Layers
+        val sideColor = when {
+            theme == 0 && isBackFace -> 0xFF5A0B4E.toInt()
+            theme == 0 -> 0xFF0A4573.toInt()
+            theme == 1 && isBackFace -> 0xFF6B1020.toInt()
+            else -> 0xFF7D4E09.toInt()
+        }
+        val depthSteps = floatArrayOf(12f, 9.5f, 7f, 4.5f, 2f)
+        for (z in depthSteps) {
+            camera.save()
+            camera.setLocation(0f, 0f, -18f)
+            camera.rotateX(8f)
+            camera.rotateY(displayAngle)
+            camera.translate(0f, 0f, z)
+            camera.getMatrix(matrix)
+            camera.restore()
+            matrix.preTranslate(-cx, -animCy)
+            matrix.postTranslate(cx, animCy)
+
+            canvas.save()
+            canvas.concat(matrix)
+            p.style = Paint.Style.FILL
+            p.shader = null
+            p.color = sideColor
+            canvas.drawRoundRect(badgeRect, badgeRad, badgeRad, p)
+            canvas.restore()
+        }
+
+        // 3. Front (or flipped readable Back) Face
+        camera.save()
+        camera.setLocation(0f, 0f, -18f)
+        camera.rotateX(8f)
+        camera.rotateY(displayAngle)
+        camera.getMatrix(matrix)
+        camera.restore()
+        matrix.preTranslate(-cx, -animCy)
+        matrix.postTranslate(cx, animCy)
+
+        canvas.save()
+        canvas.concat(matrix)
+
+        val faceColors = when {
+            theme == 0 && isBackFace -> intArrayOf(0xFF420B3E.toInt(), 0xFF1F0732.toInt(), 0xFF0E0520.toInt())
+            theme == 0 -> intArrayOf(0xFF0E2C59.toInt(), 0xFF071636.toInt(), 0xFF030B1E.toInt())
+            theme == 1 && isBackFace -> intArrayOf(0xFF4F0B1B.toInt(), 0xFF28050E.toInt(), 0xFF120308.toInt())
+            else -> intArrayOf(0xFF2D1E08.toInt(), 0xFF1A1105.toInt(), 0xFF0D0802.toInt())
+        }
+        p.style = Paint.Style.FILL
+        p.shader = LinearGradient(
+            badgeRect.left, badgeRect.top, badgeRect.right, badgeRect.bottom,
+            faceColors, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP,
+        )
+        canvas.drawRoundRect(badgeRect, badgeRad, badgeRad, p)
+        p.shader = null
+
+        // Moving 3D Specular Light Sheen clipped inside the badge
+        canvas.save()
+        canvas.clipPath(Path().apply { addRoundRect(badgeRect, badgeRad, badgeRad, Path.Direction.CW) })
+        val sheenCenter = cx + sinA * 95f
+        p.shader = LinearGradient(
+            sheenCenter - 55f, badgeRect.top,
+            sheenCenter + 55f, badgeRect.bottom,
+            intArrayOf(0x00FFFFFF, 0x3AFFFFFF, 0x00FFFFFF),
+            null, Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(badgeRect, p)
+        p.shader = null
+        canvas.restore()
+
+        val rimColor = when {
+            theme == 0 && isBackFace -> 0xFFFF4081.toInt()
+            theme == 0 -> 0xFF00E5FF.toInt()
+            theme == 1 && isBackFace -> 0xFFFFD54F.toInt()
+            else -> 0xFFF6D77A.toInt()
+        }
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 3.5f
+        p.color = rimColor
+        canvas.drawRoundRect(badgeRect, badgeRad, badgeRad, p)
+
+        val innerRim = RectF(badgeRect.left + 5f, badgeRect.top + 5f, badgeRect.right - 5f, badgeRect.bottom - 5f)
+        p.strokeWidth = 1.2f
+        p.color = 0x50FFFFFF
+        canvas.drawRoundRect(innerRim, badgeRad - 4f, badgeRad - 4f, p)
+
+        // Huge Colourful 3D Runs Number
+        p.style = Paint.Style.FILL
+        p.typeface = Typeface.DEFAULT_BOLD
+        p.textAlign = Paint.Align.CENTER
+        p.textSize = when {
+            runsText.length <= 2 -> 76f
+            runsText.length == 3 -> 62f
+            else -> 50f
+        }
+        val numColors = when {
+            theme == 0 && isBackFace -> intArrayOf(0xFFFFFFFF.toInt(), 0xFFFF80AB.toInt(), 0xFFFFD740.toInt())
+            theme == 0 -> intArrayOf(0xFF00F5FF.toInt(), 0xFFFFFFFF.toInt(), 0xFFFFD400.toInt())
+            theme == 1 && isBackFace -> intArrayOf(0xFFFFFFFF.toInt(), 0xFFFFE57F.toInt(), 0xFFFF6E40.toInt())
+            else -> intArrayOf(0xFFFFF8E1.toInt(), 0xFFFFD54F.toInt(), 0xFFFF8F00.toInt())
+        }
+        val numY = animCy + 14f
+        p.shader = LinearGradient(
+            cx - 40f, animCy - 52f,
+            cx + 40f, animCy + 24f,
+            numColors, floatArrayOf(0f, 0.48f, 1f), Shader.TileMode.CLAMP,
+        )
+        p.setShadowLayer(8f, 0f, 3f, 0xCC000000.toInt())
+        canvas.drawText(runsText, cx, numY, p)
+        p.clearShadowLayer()
+        p.shader = null
+
+        // Subtle RUNS / WKTS label below the number
+        p.textSize = 19f
+        p.letterSpacing = 0.20f
+        p.color = rimColor
+        canvas.drawText(labelText, cx, badgeRect.bottom - 18f, p)
+        p.letterSpacing = 0f
+
+        canvas.restore()
     }
 
     fun drawBouncingArrow(
