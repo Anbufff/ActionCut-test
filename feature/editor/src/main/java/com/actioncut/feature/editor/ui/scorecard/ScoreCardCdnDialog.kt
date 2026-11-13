@@ -67,6 +67,7 @@ fun ScoreCardCdnDialog(
     var workerUrl by remember { mutableStateOf(CdnScorecardClient.savedWorkerUrl(context)) }
     var matchInput by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     var matchData by remember { mutableStateOf<CdnMatchScorecard?>(null) }
@@ -75,13 +76,28 @@ fun ScoreCardCdnDialog(
     var type by remember { mutableStateOf(ScoreCardType.BATTING) }
     var themeIdx by remember { mutableIntStateOf(0) }
     var selectedRow by remember { mutableIntStateOf(2) }
+    var photoVersion by remember { mutableIntStateOf(0) }
     var composed by remember { mutableStateOf<ComposedCard?>(null) }
 
-    LaunchedEffect(matchData, inningsIdx, type, selectedRow, themeIdx) {
+    // Render preview frame and fetch selected player's photo on-demand if not yet cached
+    LaunchedEffect(matchData, inningsIdx, type, selectedRow, themeIdx, photoVersion) {
         val inn = matchData?.innings?.getOrNull(inningsIdx) ?: return@LaunchedEffect
         composed = withContext(Dispatchers.Default) {
             CdnVectorScoreCardComposer.composeFrame(context, inn, type, selectedRow, library, themeIdx)
         }
+        val rows = CdnVectorScoreCardComposer.buildRows(inn, type)
+        val sel = rows.getOrNull(selectedRow) as? CdnVectorScoreCardComposer.VectorRow.PlayerRow
+        if (sel != null && CdnScorecardClient.cachedPlayerPhoto(context, sel.imageId, sel.playerId) == null) {
+            val fetched = CdnScorecardClient.ensurePlayerPhoto(context, workerUrl, sel.imageId, sel.playerId, sel.name)
+            if (fetched) photoVersion++
+        }
+    }
+
+    // Background prefetch for the rest of the current innings photos
+    LaunchedEffect(matchData, inningsIdx) {
+        val inn = matchData?.innings?.getOrNull(inningsIdx) ?: return@LaunchedEffect
+        CdnScorecardClient.downloadInningsPhotos(context, workerUrl, inn)
+        photoVersion++
     }
 
     val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -126,19 +142,20 @@ fun ScoreCardCdnDialog(
                         modifier = Modifier.weight(1f),
                     )
                     Button(
-                        enabled = !loading && matchInput.isNotBlank() && workerUrl.isNotBlank(),
+                        enabled = !loading && !saving && matchInput.isNotBlank() && workerUrl.isNotBlank(),
                         onClick = {
                             loading = true
                             errorMsg = null
                             CdnScorecardClient.saveWorkerUrl(context, workerUrl)
                             scope.launch {
-                                val res = CdnScorecardClient.fetch(context, workerUrl, matchInput)
+                                val res = CdnScorecardClient.fetchMatchOnly(workerUrl, matchInput)
                                 loading = false
                                 res.onSuccess { (data, json) ->
                                     matchData = data
                                     rawJson = json
                                     inningsIdx = (data.innings.size - 1).coerceAtLeast(0)
                                     selectedRow = 2
+                                    photoVersion++
                                 }
                                 res.onFailure {
                                     errorMsg = it.localizedMessage ?: "Failed to load scorecard"
@@ -220,10 +237,14 @@ fun ScoreCardCdnDialog(
                     TextButton(onClick = onDismiss) { Text("Cancel") }
                     Spacer(modifier = Modifier.weight(1f))
                     Button(
-                        enabled = data != null && composed != null && !loading,
+                        enabled = data != null && composed != null && !loading && !saving,
                         onClick = {
                             val inn = data?.innings?.getOrNull(inningsIdx) ?: return@Button
+                            saving = true
                             scope.launch {
+                                // Ensure all photos in this innings are downloaded before baking timeline frames
+                                CdnScorecardClient.downloadInningsPhotos(context, workerUrl, inn)
+
                                 val clipId = "sc_${System.currentTimeMillis()}"
                                 val dir = File(context.filesDir, "scorecards").apply { mkdirs() }
                                 val jsonFile = File(dir, "cdn_score_$clipId.json")
@@ -253,11 +274,12 @@ fun ScoreCardCdnDialog(
                                     keyframes = listOf(ScorecardKeyframe(0L, safeInitial)),
                                 )
                                 ScorecardManager.prepareCard(context, scData, library)
+                                saving = false
                                 Toast.makeText(context, "Vector Scorecard Ready!", Toast.LENGTH_SHORT).show()
                                 onDone(scData)
                             }
                         },
-                    ) { Text("Add to video") }
+                    ) { Text(if (saving) "Preparing..." else "Add to video") }
                 }
             }
         }
