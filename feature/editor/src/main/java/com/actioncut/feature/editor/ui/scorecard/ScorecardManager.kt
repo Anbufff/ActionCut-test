@@ -42,7 +42,7 @@ object ScorecardManager {
         }.getOrNull() ?: return@withContext ""
 
         val scoreType = if (data.type == "BOWLING") ScoreCardType.BOWLING else ScoreCardType.BATTING
-        val rendered = ScoreCardRenderer.renderWithRows(srcBmp, data.cropStartF, data.cropEndF, scoreType)
+        val rendered = ScoreCardRenderer.renderWithRows(srcBmp, data.cropStartF, data.cropEndF, scoreType, data.themeIdx)
 
         val rowMap = mutableMapOf<Int, Bitmap>()
         val rectsMap = mutableMapOf<Int, List<RectF>>()
@@ -59,7 +59,8 @@ object ScorecardManager {
                 selected = i,
                 player = player,
                 photo = photoBmp,
-                fallbackName = row.fallbackName
+                fallbackName = row.fallbackName,
+                themeIdx = data.themeIdx
             )
             rowMap[i] = composed.bitmap
             rectsMap[i] = composed.rowRects
@@ -112,7 +113,7 @@ object ScorecardManager {
             canvas.drawColor(0, PorterDuff.Mode.CLEAR)
             canvas.drawBitmap(baseBmp, 0f, 0f, null)
             if (targetRect != null) {
-                ScoreCardComposer.drawBouncingArrow(canvas, targetRect, timeInClipMs)
+                ScoreCardComposer.drawBouncingArrow(canvas, targetRect, timeInClipMs, data.themeIdx)
             }
             return dynamicFrameBitmap
         }
