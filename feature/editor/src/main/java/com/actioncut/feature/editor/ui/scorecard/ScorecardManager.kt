@@ -29,6 +29,11 @@ object ScorecardManager {
             return size > MAX_CACHED_CARDS
         }
     }
+    private val rowStatCache = object : LinkedHashMap<String, MutableMap<Int, Pair<String, String>>>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, MutableMap<Int, Pair<String, String>>>?): Boolean {
+            return size > MAX_CACHED_CARDS
+        }
+    }
 
     @Volatile
     private var appContext: Context? = null
@@ -69,6 +74,7 @@ object ScorecardManager {
         val isCdnVector = data.sourceImageUri.endsWith(".json", ignoreCase = true)
         val rowMap = mutableMapOf<Int, Bitmap>()
         val rectsMap = mutableMapOf<Int, List<RectF>>()
+        val statMap = mutableMapOf<Int, Pair<String, String>>()
 
         if (isCdnVector) {
             val inningsIdx = data.cropStartF.toInt().coerceAtLeast(0)
@@ -78,6 +84,9 @@ object ScorecardManager {
                 inningsIdx,
             ) ?: return@withContext ""
             val scoreType = if (data.type == "BOWLING") ScoreCardType.BOWLING else ScoreCardType.BATTING
+            val vRows = CdnVectorScoreCardComposer.buildRows(inn, scoreType)
+            val lbl = if (scoreType == ScoreCardType.BOWLING) "WKTS" else "RUNS"
+
             for (i in data.rows.indices) {
                 val composed = CdnVectorScoreCardComposer.composeFrame(
                     context = context,
@@ -87,9 +96,14 @@ object ScorecardManager {
                     library = library,
                     themeIdx = data.themeIdx,
                     opponentName = opponent,
+                    staticRunsTimeMs = null,
                 )
                 rowMap[i] = composed.bitmap
                 rectsMap[i] = composed.rowRects
+                val vr = vRows.getOrNull(i) as? CdnVectorScoreCardComposer.VectorRow.PlayerRow
+                if (vr != null) {
+                    statMap[i] = vr.primaryStat to lbl
+                }
             }
         } else {
             val srcBmp = runCatching {
@@ -124,6 +138,7 @@ object ScorecardManager {
         synchronized(prepLock) {
             cardCache[key] = rowMap
             rowRectsCache[key] = rectsMap
+            rowStatCache[key] = statMap
         }
 
         val initialRow = data.keyframes.firstOrNull()?.rowIndex ?: 0
@@ -172,13 +187,21 @@ object ScorecardManager {
         return activeKf.rowIndex
     }
 
-    private fun resolveRowBitmapAndRect(data: ScorecardClipData, timeInClipMs: Long): Pair<Bitmap, RectF?>? {
+    private data class ResolvedRowFrame(
+        val baseBmp: Bitmap,
+        val targetRect: RectF?,
+        val statPair: Pair<String, String>?,
+    )
+
+    private fun resolveRowState(data: ScorecardClipData, timeInClipMs: Long): ResolvedRowFrame? {
         val key = cacheKey(data)
         var baseMap: Map<Int, Bitmap>?
         var rectsMap: Map<Int, List<RectF>>?
+        var statMap: Map<Int, Pair<String, String>>?
         synchronized(prepLock) {
             baseMap = cardCache[key]
             rectsMap = rowRectsCache[key]
+            statMap = rowStatCache[key]
         }
         if (baseMap == null) {
             val ctx = appContext
@@ -189,6 +212,7 @@ object ScorecardManager {
                 synchronized(prepLock) {
                     baseMap = cardCache[key]
                     rectsMap = rowRectsCache[key]
+                    statMap = rowStatCache[key]
                 }
             }
         }
@@ -197,11 +221,12 @@ object ScorecardManager {
         val baseBmp = map[activeRow] ?: map.values.firstOrNull() ?: return null
         if (baseBmp.isRecycled) return null
         val targetRect = rectsMap?.get(activeRow)?.getOrNull(activeRow)
-        return baseBmp to targetRect
+        val statPair = statMap?.get(activeRow)
+        return ResolvedRowFrame(baseBmp, targetRect, statPair)
     }
 
     fun getActiveBitmap(clipId: String, data: ScorecardClipData, timeInClipMs: Long): Bitmap? {
-        val (baseBmp, targetRect) = resolveRowBitmapAndRect(data, timeInClipMs) ?: return null
+        val resolved = resolveRowState(data, timeInClipMs) ?: return null
         val isCdnVector = data.sourceImageUri.endsWith(".json", ignoreCase = true)
         synchronized(previewFrameLock) {
             val idx = previewFrameIdx
@@ -217,14 +242,24 @@ object ScorecardManager {
             }
             val canvas = Canvas(out)
             canvas.drawColor(0, PorterDuff.Mode.CLEAR)
-            canvas.drawBitmap(baseBmp, 0f, 0f, null)
-            if (targetRect != null) {
+            canvas.drawBitmap(resolved.baseBmp, 0f, 0f, null)
+            if (resolved.targetRect != null) {
                 ScoreCardComposer.drawBouncingArrow(
                     canvas,
-                    targetRect,
+                    resolved.targetRect,
                     timeInClipMs,
                     data.themeIdx,
                     compact = isCdnVector,
+                )
+            }
+            if (ScoreCardComposer.normTheme(data.themeIdx) != 2 && resolved.statPair != null) {
+                ScoreCardComposer.drawAnimatedRuns3D(
+                    canvas = canvas,
+                    runsText = resolved.statPair.first,
+                    labelText = resolved.statPair.second,
+                    timeInClipMs = timeInClipMs,
+                    themeIdx = data.themeIdx,
+                    panelLeft = if (isCdnVector) 956f else ScoreCardComposer.PANEL_LEFT,
                 )
             }
             return out
@@ -232,7 +267,7 @@ object ScorecardManager {
     }
 
     fun getExportBitmap(clipId: String, data: ScorecardClipData, timeInClipMs: Long): Bitmap? {
-        val (baseBmp, targetRect) = resolveRowBitmapAndRect(data, timeInClipMs) ?: return null
+        val resolved = resolveRowState(data, timeInClipMs) ?: return null
         val isCdnVector = data.sourceImageUri.endsWith(".json", ignoreCase = true)
         synchronized(exportFrameLock) {
             val idx = exportFrameIdx
@@ -248,14 +283,24 @@ object ScorecardManager {
             }
             val canvas = Canvas(out)
             canvas.drawColor(0, PorterDuff.Mode.CLEAR)
-            canvas.drawBitmap(baseBmp, 0f, 0f, null)
-            if (targetRect != null) {
+            canvas.drawBitmap(resolved.baseBmp, 0f, 0f, null)
+            if (resolved.targetRect != null) {
                 ScoreCardComposer.drawBouncingArrow(
                     canvas,
-                    targetRect,
+                    resolved.targetRect,
                     timeInClipMs,
                     data.themeIdx,
                     compact = isCdnVector,
+                )
+            }
+            if (ScoreCardComposer.normTheme(data.themeIdx) != 2 && resolved.statPair != null) {
+                ScoreCardComposer.drawAnimatedRuns3D(
+                    canvas = canvas,
+                    runsText = resolved.statPair.first,
+                    labelText = resolved.statPair.second,
+                    timeInClipMs = timeInClipMs,
+                    themeIdx = data.themeIdx,
+                    panelLeft = if (isCdnVector) 956f else ScoreCardComposer.PANEL_LEFT,
                 )
             }
             return out
@@ -300,6 +345,7 @@ object ScorecardManager {
             keys.forEach {
                 cardCache.remove(it)
                 rowRectsCache.remove(it)
+                rowStatCache.remove(it)
             }
         }
     }
