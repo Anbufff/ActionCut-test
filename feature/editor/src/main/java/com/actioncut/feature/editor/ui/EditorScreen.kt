@@ -56,6 +56,7 @@ import com.actioncut.feature.editor.ui.preview.PreviewPlayer
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibrary
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibraryDialog
 import com.actioncut.feature.editor.ui.scorecard.PlayerRegisterDialog
+import com.actioncut.feature.editor.ui.scorecard.ScoreCardCdnDialog
 import com.actioncut.feature.editor.ui.scorecard.ScoreCardComposer
 import com.actioncut.feature.editor.ui.scorecard.ScoreCardCropDialog
 import com.actioncut.feature.editor.ui.timeline.EditorTimeline
@@ -136,6 +137,7 @@ fun EditorScreen(
     }
 
     var cricSource by remember { mutableStateOf<String?>(null) }
+    var showCricCdn by remember { mutableStateOf(false) }
     var showPlayers by remember { mutableStateOf(false) }
     var showRegister by remember { mutableStateOf(false) }
     val playerLibrary = remember { PlayerLibrary(context) }
@@ -323,6 +325,7 @@ fun EditorScreen(
                                 EditorTool.AUDIO -> audioPicker.launch(arrayOf("audio/*"))
                                 EditorTool.PIP -> pipMediaPicker.launch(arrayOf("image/*", "video/*"))
                                 EditorTool.CRIC -> cricPicker.launch(arrayOf("image/*"))
+                                EditorTool.CRIC_CDN -> showCricCdn = true
                                 EditorTool.CARD_ADD -> showRegister = true
                                 EditorTool.PLAYER -> showPlayers = true
                                 EditorTool.NEWS_ALERT -> showNewsAlertTemplates = true
@@ -376,6 +379,16 @@ fun EditorScreen(
             onDone = { scorecardData ->
                 viewModel.addScorecardClip(scorecardData)
                 cricSource = null
+            },
+        )
+    }
+
+    if (showCricCdn) {
+        ScoreCardCdnDialog(
+            onDismiss = { showCricCdn = false },
+            onDone = { scorecardData ->
+                viewModel.addScorecardClip(scorecardData)
+                showCricCdn = false
             },
         )
     }
