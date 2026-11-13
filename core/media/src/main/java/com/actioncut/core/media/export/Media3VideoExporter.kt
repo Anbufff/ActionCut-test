@@ -161,8 +161,11 @@ class Media3VideoExporter @Inject constructor(
                     clips
                 }
 
-                val tplOverlay = if (isFbTpl) {
-                    FbTemplateOverlay(context, targetWidth, targetHeight, tplImageUri)
+                val sharedWatermarkBuffers = PingPongBuffers(targetWidth, targetHeight)
+                val sharedTplBuffers = if (isFbTpl) PingPongBuffers(targetWidth, targetHeight) else null
+
+                val tplOverlay = if (isFbTpl && sharedTplBuffers != null) {
+                    FbTemplateOverlay(context, targetWidth, targetHeight, tplImageUri, sharedTplBuffers)
                 } else null
 
                 val editedItems = exportClips.mapIndexed { index, clip ->
@@ -181,6 +184,7 @@ class Media3VideoExporter @Inject constructor(
                         outgoing = outgoing,
                         isFbTpl = isFbTpl,
                         tplOverlay = tplOverlay,
+                        watermarkBuffers = sharedWatermarkBuffers,
                     )
                 }
                 val videoSequence = EditedMediaItemSequence(editedItems)
@@ -198,6 +202,7 @@ class Media3VideoExporter @Inject constructor(
                             it.toEditedMediaItem(
                                 targetWidth, targetHeight, settings, emptyList(),
                                 Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
+                                watermarkBuffers = sharedWatermarkBuffers,
                             )
                         },
                     )
@@ -439,6 +444,7 @@ class Media3VideoExporter @Inject constructor(
         outgoing: com.actioncut.core.model.Transition? = null,
         isFbTpl: Boolean = false,
         tplOverlay: FbTemplateOverlay? = null,
+        watermarkBuffers: PingPongBuffers,
     ): EditedMediaItem {
         val mediaItemBuilder = MediaItem.Builder().setUri(mediaUri)
         if (type != ClipType.IMAGE) {
@@ -457,7 +463,7 @@ class Media3VideoExporter @Inject constructor(
         }
 
         val watermarkOverlayEffect: Effect = OverlayEffect(
-            ImmutableList.of(NewsCrickWatermarkOverlay(targetWidth, targetHeight, timelineStartMs))
+            ImmutableList.of(NewsCrickWatermarkOverlay(targetWidth, targetHeight, timelineStartMs, watermarkBuffers))
         )
 
         val videoEffects = EffectMapper.videoEffects(
@@ -554,16 +560,31 @@ class Media3VideoExporter @Inject constructor(
     private fun even(v: Int): Int = if (v % 2 == 0) v else v + 1
 }
 
+/** Shared ping-pong 2-bitmap buffer so Media3 uploads animated overlays every frame with minimal RAM. */
+private class PingPongBuffers(width: Int, height: Int) {
+    private val bmps = Array(2) { Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888) }
+    private val canvases = Array(2) { i -> Canvas(bmps[i]) }
+    private var idx = 0
+
+    @Synchronized
+    fun drawFrame(drawBlock: (Canvas) -> Unit): Bitmap {
+        val i = idx
+        idx = (idx + 1) and 1
+        bmps[i].eraseColor(Color.TRANSPARENT)
+        drawBlock(canvases[i])
+        return bmps[i]
+    }
+}
+
 private class NewsCrickWatermarkOverlay(
     targetWidth: Int,
     targetHeight: Int,
     private val clipStartMs: Long = 0L,
+    private val buffers: PingPongBuffers,
 ) : BitmapOverlay() {
 
     private val defaultSettings = OverlaySettings.Builder().build()
-
-    private val reusableBmp: Bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-    private val reusableCanvas: Canvas = Canvas(reusableBmp)
+    private var baseUs = Long.MIN_VALUE
 
     private val logoW = targetWidth * 0.082f
     private val logoH = logoW * 0.75f
@@ -573,13 +594,13 @@ private class NewsCrickWatermarkOverlay(
     private val logoY = marginY
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
-        val currentPlayheadMs = clipStartMs + (presentationTimeUs / 1000L)
+        if (baseUs == Long.MIN_VALUE) baseUs = presentationTimeUs
+        val currentPlayheadMs = clipStartMs + ((presentationTimeUs - baseUs).coerceAtLeast(0L) / 1000L)
         val timeSec = currentPlayheadMs / 1000f
 
-        reusableBmp.eraseColor(Color.TRANSPARENT)
-        NewsCrickWatermarkRenderer.renderLogo(reusableCanvas, logoX, logoY, logoW, logoH, timeSec)
-
-        return reusableBmp
+        return buffers.drawFrame { canvas ->
+            NewsCrickWatermarkRenderer.renderLogo(canvas, logoX, logoY, logoW, logoH, timeSec)
+        }
     }
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = defaultSettings
@@ -590,14 +611,14 @@ private class FbTemplateOverlay(
     private val targetWidth: Int,
     private val targetHeight: Int,
     private val bottomImageUriStr: String?,
+    private val buffers: PingPongBuffers,
     private val clipStartMs: Long = 0L,
 ) : BitmapOverlay() {
 
     private val defaultSettings = OverlaySettings.Builder().build()
     private var cachedBottomBitmap: Bitmap? = null
+    private var baseUs = Long.MIN_VALUE
 
-    private val reusableBmp: Bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-    private val reusableCanvas: Canvas = Canvas(reusableBmp)
     private val bgPaint = Paint().apply { color = android.graphics.Color.parseColor("#0B0B0B") }
     private val imgPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
@@ -618,38 +639,37 @@ private class FbTemplateOverlay(
     }
 
     fun forClip(startMs: Long): FbTemplateOverlay {
-        val copy = FbTemplateOverlay(context, targetWidth, targetHeight, bottomImageUriStr, startMs)
+        val copy = FbTemplateOverlay(context, targetWidth, targetHeight, bottomImageUriStr, buffers, startMs)
         copy.cachedBottomBitmap = this.cachedBottomBitmap
         return copy
     }
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
-        val currentPlayheadMs = clipStartMs + (presentationTimeUs / 1000L)
+        if (baseUs == Long.MIN_VALUE) baseUs = presentationTimeUs
+        val currentPlayheadMs = clipStartMs + ((presentationTimeUs - baseUs).coerceAtLeast(0L) / 1000L)
         val timeSeconds = currentPlayheadMs / 1000f
 
-        reusableBmp.eraseColor(Color.TRANSPARENT)
+        return buffers.drawFrame { canvas ->
+            canvas.save()
+            canvas.translate(0f, vH.toFloat())
+            FbTemplateBarRenderer.drawTplBar(canvas, targetWidth.toFloat(), barH.toFloat(), timeSeconds)
+            canvas.restore()
 
-        reusableCanvas.save()
-        reusableCanvas.translate(0f, vH.toFloat())
-        FbTemplateBarRenderer.drawTplBar(reusableCanvas, targetWidth.toFloat(), barH.toFloat(), timeSeconds)
-        reusableCanvas.restore()
+            canvas.drawRect(bottomRect, bgPaint)
 
-        reusableCanvas.drawRect(bottomRect, bgPaint)
+            val src = cachedBottomBitmap
+            if (src != null && !src.isRecycled) {
+                val iw = src.width.toFloat()
+                val ih = src.height.toFloat()
+                val sc = minOf(targetWidth.toFloat() / iw, vH.toFloat() / ih)
+                val dw = iw * sc
+                val dh = ih * sc
+                val dx = (targetWidth - dw) / 2f
+                val dy = bottomY + (vH - dh) / 2f
 
-        val src = cachedBottomBitmap
-        if (src != null && !src.isRecycled) {
-            val iw = src.width.toFloat()
-            val ih = src.height.toFloat()
-            val sc = minOf(targetWidth.toFloat() / iw, vH.toFloat() / ih)
-            val dw = iw * sc
-            val dh = ih * sc
-            val dx = (targetWidth - dw) / 2f
-            val dy = bottomY + (vH - dh) / 2f
-
-            reusableCanvas.drawBitmap(src, null, RectF(dx, dy, dx + dw, dy + dh), imgPaint)
+                canvas.drawBitmap(src, null, RectF(dx, dy, dx + dw, dy + dh), imgPaint)
+            }
         }
-
-        return reusableBmp
     }
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = defaultSettings
