@@ -194,15 +194,15 @@ object ScoreCardComposer {
         val cy = targetRow.centerY()
 
         // 0.75 நொடி இடைவெளியில் முன்னும் பின்னும் 18 பிக்சல் அளவுக்கு அழகாகத் துடிக்கும் கணக்கீடு
-        val bounce = ((1.0 - sin(timeInClipMs * 2.0 * Math.PI / 750.0)) / 2.0 * 18.0).toFloat()
+        val bounce = ((1.0 - sin(timeInClipMs * 2.0 * Math.PI / 750.0)) / 2.0 * 22.0).toFloat()
         val tipX = targetRow.right + 4f + bounce
 
-        // பெரிய அம்பு அளவுகள் (92px அகலம், 58px உயரம்)
-        val arrowW = 92f
-        val arrowH = 58f
-        val headLen = 36f
+        // பெரிய அம்பு அளவுகள் (128px அகலம், 84px உயரம்)
+        val arrowW = 128f
+        val arrowH = 84f
+        val headLen = 52f
         val halfHeadH = arrowH / 2f
-        val halfStemH = 12f
+        val halfStemH = 17f
         val tailX = tipX + arrowW
 
         val arrowPath = Path().apply {
@@ -220,7 +220,7 @@ object ScoreCardComposer {
         val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             color = 0xFF000000.toInt()
-            strokeWidth = 4f
+            strokeWidth = 5f
             strokeJoin = Paint.Join.ROUND
         }
 
