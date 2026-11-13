@@ -332,8 +332,9 @@ object ScoreCardComposer {
         player: Player?,
         photo: Bitmap?,
         fallbackName: String?,
+        panelLeft: Float = PANEL_LEFT,
     ) {
-        val pl = PANEL_LEFT
+        val pl = panelLeft
         val pr = CANVAS_W - 28f
         val pt = 28f
         val pb = CANVAS_H - 28f
@@ -537,18 +538,25 @@ object ScoreCardComposer {
         p.textAlign = Paint.Align.LEFT
     }
 
-    fun drawBouncingArrow(canvas: Canvas, targetRow: RectF, timeInClipMs: Long, themeIdx: Int = 0) {
+    fun drawBouncingArrow(
+        canvas: Canvas,
+        targetRow: RectF,
+        timeInClipMs: Long,
+        themeIdx: Int = 0,
+        compact: Boolean = false,
+    ) {
         val theme = normTheme(themeIdx)
         val cy = targetRow.centerY()
 
-        val bounce = ((1.0 - sin(timeInClipMs * 2.0 * Math.PI / 750.0)) / 2.0 * 22.0).toFloat()
-        val tipX = targetRow.right + 4f + bounce
+        val maxBounce = if (compact) 14.0 else 22.0
+        val bounce = ((1.0 - sin(timeInClipMs * 2.0 * Math.PI / 750.0)) / 2.0 * maxBounce).toFloat()
+        val tipX = targetRow.right + (if (compact) 6f else 4f) + bounce
 
-        val arrowW = 128f
-        val arrowH = 84f
-        val headLen = 52f
+        val arrowW = if (compact) 86f else 128f
+        val arrowH = if (compact) 62f else 84f
+        val headLen = if (compact) 38f else 52f
         val halfHeadH = arrowH / 2f
-        val halfStemH = 17f
+        val halfStemH = if (compact) 13f else 17f
         val tailX = tipX + arrowW
 
         val arrowPath = Path().apply {
@@ -608,7 +616,7 @@ object ScoreCardComposer {
         val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             color = outlineColor
-            strokeWidth = if (theme == 2) 6f else 5f
+            strokeWidth = if (theme == 2) 6f else 4.5f
             strokeJoin = Paint.Join.ROUND
         }
 
