@@ -10,7 +10,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -43,6 +42,7 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.actioncut.core.designsystem.component.rememberHaptic
 import com.actioncut.core.media.template.FbTemplateBarRenderer
 import com.actioncut.core.media.template.NewsCrickWatermarkRenderer
 import com.actioncut.core.model.*
@@ -95,7 +95,6 @@ fun PreviewPlayer(
         .sortedBy { it.timelineStartMs }
     val currentMainIndex = mainClips.indexOfFirst { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
     val currentMainClip = if (currentMainIndex >= 0) mainClips[currentMainIndex] else null
-    val nextMainClip = if (currentMainIndex >= 0 && currentMainIndex + 1 < mainClips.size) mainClips[currentMainIndex + 1] else null
 
     Box(
         modifier = modifier
@@ -1079,6 +1078,7 @@ private fun ScorecardLayer(
     } ?: return
     val sc = activeScoreClip.scorecard ?: return
     val context = LocalContext.current
+    val haptic = rememberHaptic()
     var prepTick by remember(sc.id, sc.themeIdx) { mutableIntStateOf(0) }
     LaunchedEffect(sc.id, sc.themeIdx) {
         ScorecardManager.ensurePrepared(context, sc)
@@ -1087,6 +1087,9 @@ private fun ScorecardLayer(
     @Suppress("UNUSED_EXPRESSION")
     prepTick
     val currentPlayheadMs by rememberUpdatedState(playheadMs)
+    val currentSc by rememberUpdatedState(sc)
+    val currentClipStartMs by rememberUpdatedState(activeScoreClip.timelineStartMs)
+    val currentOnRowTapped by rememberUpdatedState(onScorecardRowTapped)
     val timeInClip = (playheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
     val activeBmp = ScorecardManager.getActiveBitmap(activeScoreClip.id, sc, timeInClip) ?: return
 
@@ -1096,19 +1099,36 @@ private fun ScorecardLayer(
         contentScale = ContentScale.FillBounds,
         modifier = modifier
             .pointerInput(activeScoreClip.id) {
-                detectTapGestures { offset ->
-                    val curTimeInClip = (currentPlayheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
-                    val touchYFraction = offset.y / size.height
-                    val touchXFraction = offset.x / size.width
-                    val hitRow = ScorecardManager.hitTestRow(
-                        activeScoreClip.id,
-                        sc,
-                        curTimeInClip,
-                        touchYFraction,
-                        touchXFraction,
-                    )
-                    if (hitRow >= 0) {
-                        onScorecardRowTapped(activeScoreClip.id, hitRow)
+                val maxTapMovePx = 36.dp.toPx()
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var lastPos = down.position
+                    var maxMove = 0f
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            lastPos = change.position
+                            break
+                        }
+                        lastPos = change.position
+                        maxMove = maxOf(maxMove, (lastPos - down.position).getDistance())
+                    }
+                    if (maxMove < maxTapMovePx && size.width > 0 && size.height > 0) {
+                        val curTimeInClip = (currentPlayheadMs - currentClipStartMs).coerceAtLeast(0L)
+                        val touchYFraction = (lastPos.y / size.height).coerceIn(0f, 1f)
+                        val touchXFraction = (lastPos.x / size.width).coerceIn(0f, 1f)
+                        val hitRow = ScorecardManager.hitTestRow(
+                            activeScoreClip.id,
+                            currentSc,
+                            curTimeInClip,
+                            touchYFraction,
+                            touchXFraction,
+                        )
+                        if (hitRow >= 0) {
+                            haptic.tick()
+                            currentOnRowTapped(activeScoreClip.id, hitRow)
+                        }
                     }
                 }
             },
