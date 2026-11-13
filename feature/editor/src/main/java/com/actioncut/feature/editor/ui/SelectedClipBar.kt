@@ -1,15 +1,19 @@
 package com.actioncut.feature.editor.ui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -33,7 +37,11 @@ fun SelectedClipBar(
     onTrimRight: () -> Unit = {},
     onDeselect: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Only for scorecard clips: switches between the 3 scorecard designs. */
+    onTheme: (() -> Unit)? = null,
+    themeLabel: String = "Design",
 ) {
+    val scrollState = rememberScrollState()
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -42,7 +50,8 @@ fun SelectedClipBar(
         tonalElevation = 2.dp,
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = (if (onTheme != null) Modifier.horizontalScroll(scrollState) else Modifier)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -56,7 +65,12 @@ fun SelectedClipBar(
             ToolItem(label = "Duplicate", icon = Icons.Filled.ContentCopy, onClick = onDuplicate)
             ToolItem(label = "Delete", icon = Icons.Filled.DeleteOutline, onClick = onDelete)
             ToolItem(label = "Trim R", icon = Icons.AutoMirrored.Filled.ArrowForward, onClick = onTrimRight)
-            androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+            if (onTheme != null) {
+                ToolItem(label = themeLabel, icon = Icons.Filled.Palette, onClick = onTheme)
+                androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
+            } else {
+                androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+            }
             ToolItem(label = "Done", icon = Icons.Filled.Done, onClick = onDeselect)
         }
     }
