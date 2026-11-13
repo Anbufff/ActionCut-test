@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SportsCricket
+import androidx.compose.material.icons.filled.SportsScore
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Tune
@@ -43,6 +44,7 @@ import com.actioncut.feature.editor.ui.EditorTool
 val MainTools: List<EditorTool> = listOf(
     EditorTool.SPLIT,
     EditorTool.CRIC,
+    EditorTool.CRIC_CDN,
     EditorTool.CARD_ADD,
     EditorTool.PLAYER,
     EditorTool.SPEED,
@@ -95,6 +97,7 @@ fun EditorTool.icon(): ImageVector = when (this) {
     EditorTool.VOICEOVER -> Icons.Filled.Mic
     EditorTool.PIP -> Icons.Filled.PictureInPictureAlt
     EditorTool.CRIC -> Icons.Filled.SportsCricket
+    EditorTool.CRIC_CDN -> Icons.Filled.SportsScore
     EditorTool.CARD_ADD -> Icons.Filled.PersonAdd
     EditorTool.PLAYER -> Icons.Filled.Person
     EditorTool.EXTRACT_AUDIO -> Icons.Filled.CallSplit
