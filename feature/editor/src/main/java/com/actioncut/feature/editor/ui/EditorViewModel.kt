@@ -140,7 +140,6 @@ class EditorViewModel @Inject constructor(
             }
             playerController.setTimeline(initialTimeline, preservePositionMs = initialTimeline.playheadMs)
 
-            // Cache Cutout for any existing PiP clips (Fix for smart cast)
             initialTimeline.allClips.forEach { c ->
                 val uri = c.mediaUri
                 if (c.type == ClipType.IMAGE && uri != null && c.filter?.id?.contains("cutout") == true) {
@@ -238,7 +237,7 @@ class EditorViewModel @Inject constructor(
             EditorTool.ROTATE -> { rotateSelected(); clearTool() }
             EditorTool.MUTE -> { toggleMuteSelected(); clearTool() }
             EditorTool.EXTRACT_AUDIO -> { detachAudioFromSelected(); clearTool() }
-            EditorTool.AUDIO, EditorTool.PIP, EditorTool.CRIC, EditorTool.CARD_ADD, EditorTool.PLAYER, EditorTool.NEWS_ALERT -> clearTool()
+            EditorTool.AUDIO, EditorTool.PIP, EditorTool.CRIC, EditorTool.CRIC_CDN, EditorTool.CARD_ADD, EditorTool.PLAYER, EditorTool.NEWS_ALERT -> clearTool()
             else -> _uiState.update { it.copy(activeTool = tool) }
         }
     }
@@ -465,7 +464,6 @@ class EditorViewModel @Inject constructor(
             }
         }
 
-        // 🌟 Safe Smart Cast using local variable
         val mediaUri = clip.mediaUri
         if (isNowCutout && mediaUri != null) {
             viewModelScope.launch(Dispatchers.IO) {
@@ -546,7 +544,6 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** Switches the selected scorecard clip to the next design: Neon Night -> Royal Gold -> Sunset Pop. */
     fun cycleScorecardTheme() = withSelected { clipId ->
         val clip = currentClip(clipId) ?: return@withSelected
         val sc = clip.scorecard ?: return@withSelected
@@ -558,7 +555,6 @@ class EditorViewModel @Inject constructor(
         val sc = clip.scorecard ?: return
         val updatedSc = sc.copy(themeIdx = ScoreCardComposer.normTheme(themeIdx))
         viewModelScope.launch {
-            // புதிய டிசைனில் கார்டை மீண்டும் உருவாக்கிய பிறகே டைம்லைனை மாற்றுகிறோம் (பழைய கார்டு அதுவரை தெரியும்)
             ScorecardManager.prepareCard(context, updatedSc, PlayerLibrary(context))
             mutate(structural = false) { timeline ->
                 TimelineEditor.updateClip(timeline, clipId) { it.copy(scorecard = updatedSc) }
