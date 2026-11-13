@@ -20,6 +20,7 @@ import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.StaticOverlaySettings
+import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
@@ -42,7 +43,6 @@ import com.actioncut.core.model.Resolution
 import com.actioncut.core.model.TrackType
 import com.actioncut.core.model.Transform
 import com.actioncut.core.model.TransitionType
-import com.google.common.collect.ImmutableList
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -463,11 +463,13 @@ class Media3VideoExporter @Inject constructor(
         }
 
         val templateOverlayEffect: Effect? = tplOverlay?.let {
-            OverlayEffect(ImmutableList.of(it.forClip(timelineStartMs)))
+            OverlayEffect(listOf<TextureOverlay>(it.forClip(timelineStartMs)))
         }
 
         val watermarkOverlayEffect: Effect = OverlayEffect(
-            ImmutableList.of(NewsCrickWatermarkOverlay(targetWidth, targetHeight, timelineStartMs, watermarkBuffers))
+            listOf<TextureOverlay>(
+                NewsCrickWatermarkOverlay(targetWidth, targetHeight, timelineStartMs, watermarkBuffers),
+            ),
         )
 
         val videoEffects = EffectMapper.videoEffects(
