@@ -71,16 +71,14 @@ object ScorecardManager {
         val baseBmp = rowMap[initialRow] ?: rowMap[0]
         val outFile = File(context.cacheDir, "card_${data.id}.png")
         if (baseBmp != null) {
+            // இந்த PNG அடிப்படை (base) லேயராக மட்டுமே பயன்படும். அம்பு மற்றும் வரிகள் அனைத்தும்
+            // getActiveBitmap() மூலம் மேலே வரையப்படுவதால், இங்கே முழுவதும் வெளிப்படையான (transparent)
+            // படத்தைச் சேமிக்கிறோம் - இல்லையெனில் இரண்டாவது அம்பு / இரட்டை லேயர் தெரியும்.
             val previewOut = Bitmap.createBitmap(baseBmp.width, baseBmp.height, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(previewOut)
-            canvas.drawBitmap(baseBmp, 0f, 0f, null)
-            val initialRect = rectsMap[initialRow]?.getOrNull(initialRow)
-            if (initialRect != null) {
-                ScoreCardComposer.drawBouncingArrow(canvas, initialRect, 0L)
-            }
             FileOutputStream(outFile).use { fos ->
                 previewOut.compress(Bitmap.CompressFormat.PNG, 100, fos)
             }
+            previewOut.recycle()
         }
         Uri.fromFile(outFile).toString()
     }
