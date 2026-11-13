@@ -72,11 +72,14 @@ import com.actioncut.core.model.Timeline
 import com.actioncut.core.model.Track
 import com.actioncut.core.model.TrackType
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 private const val TRACK_HEIGHT = 52
 private const val RULER_HEIGHT = 22
+private const val MIN_ZOOM_PX_PER_SEC = 24f
+private const val MAX_ZOOM_PX_PER_SEC = 320f
 
 @Composable
 fun EditorTimeline(
@@ -98,6 +101,7 @@ fun EditorTimeline(
     onPause: () -> Unit = {},
     onScrubStart: () -> Unit = {},
     onScrubEnd: (Long) -> Unit = {},
+    onZoomChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -107,6 +111,8 @@ fun EditorTimeline(
     val layoutDurationMs = (durationMs + extraPaddingMs).coerceAtLeast(3_000L)
 
     var isPointerDown by remember { mutableStateOf(false) }
+    var isPinching by remember { mutableStateOf(false) }
+    var pinchAnchorMs by remember { mutableLongStateOf(0L) }
     var wasScrubbing by remember { mutableStateOf(false) }
     var lastScrubbedMs by remember { mutableLongStateOf(-1L) }
 
@@ -118,6 +124,7 @@ fun EditorTimeline(
     val currentOnPause by rememberUpdatedState(onPause)
     val currentOnScrubStart by rememberUpdatedState(onScrubStart)
     val currentOnScrubEnd by rememberUpdatedState(onScrubEnd)
+    val currentOnZoomChange by rememberUpdatedState(onZoomChange)
 
     fun msToPxF(ms: Long): Float = ms / 1000f * pxPerSecond
     fun pxToMs(px: Int): Long = (px / currentPxPerSecond * 1000f).roundToLong()
@@ -126,6 +133,7 @@ fun EditorTimeline(
         snapshotFlow {
             Triple(scrollState.value, scrollState.isScrollInProgress, isPointerDown)
         }.collect { (value, inProgress, pointerDown) ->
+            if (isPinching) return@collect
             val active = inProgress || pointerDown
             if (active && currentIsPlaying) {
                 currentOnPause()
@@ -150,10 +158,14 @@ fun EditorTimeline(
 
     LaunchedEffect(pxPerSecond) {
         lastScrubbedMs = -1L
+        if (isPinching) {
+            val targetPx = (pinchAnchorMs / 1000f * pxPerSecond).roundToInt()
+            scrollState.scrollTo(targetPx)
+        }
     }
 
     LaunchedEffect(playheadMs, isPlaying, pxPerSecond) {
-        if (!scrollState.isScrollInProgress && !isPointerDown) {
+        if (!scrollState.isScrollInProgress && !isPointerDown && !isPinching) {
             if (isPlaying || playheadMs != lastScrubbedMs) {
                 val target = msToPxF(playheadMs).roundToInt()
                 if (abs(scrollState.value - target) > 1) {
@@ -191,12 +203,46 @@ fun EditorTimeline(
                         currentOnPause()
                     }
                     isPointerDown = true
+                    var prevPinchDist = 0f
                     try {
-                        do {
+                        while (true) {
                             val event = awaitPointerEvent(pass = PointerEventPass.Initial)
-                        } while (event.changes.any { it.pressed })
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+
+                            if (pressed.size >= 2) {
+                                if (!isPinching) {
+                                    isPinching = true
+                                    pinchAnchorMs = currentPlayheadMs
+                                    wasScrubbing = false
+                                }
+                                val p1 = pressed[0].position
+                                val p2 = pressed[1].position
+                                val dist = hypot(p1.x - p2.x, p1.y - p2.y)
+                                if (prevPinchDist > 12f && dist > 12f) {
+                                    val factor = (dist / prevPinchDist).coerceIn(0.85f, 1.20f)
+                                    if (abs(factor - 1f) > 0.002f) {
+                                        val nextPx = (currentPxPerSecond * factor).coerceIn(
+                                            MIN_ZOOM_PX_PER_SEC,
+                                            MAX_ZOOM_PX_PER_SEC,
+                                        )
+                                        currentOnZoomChange(nextPx)
+                                        prevPinchDist = dist
+                                    }
+                                } else {
+                                    prevPinchDist = dist
+                                }
+                                pressed.forEach { it.consume() }
+                            } else {
+                                prevPinchDist = 0f
+                                if (isPinching) {
+                                    pressed.forEach { it.consume() }
+                                }
+                            }
+                        }
                     } finally {
                         isPointerDown = false
+                        isPinching = false
                     }
                 }
             },
