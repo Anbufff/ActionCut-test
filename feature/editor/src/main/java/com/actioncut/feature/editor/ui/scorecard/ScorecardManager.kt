@@ -157,12 +157,9 @@ object ScorecardManager {
             }
         }
         val map = baseMap ?: return null
-        return map to rectsMap
-            .let { (m, r) ->
-                val activeRow = getActiveRowIndex(data, 0L)
-                val b = m[activeRow] ?: m.values.firstOrNull() ?: return null
-                b to r?.get(activeRow)?.getOrNull(activeRow)
-            }
+        val activeRow = getActiveRowIndex(data, 0L)
+        val b = map[activeRow] ?: map.values.firstOrNull() ?: return null
+        return b to rectsMap?.get(activeRow)?.getOrNull(activeRow)
     }
 
     fun getActiveRowIndex(data: ScorecardClipData, timeInClipMs: Long): Int {
