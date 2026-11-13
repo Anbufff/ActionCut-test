@@ -2,7 +2,6 @@ package com.actioncut.feature.editor.ui.scorecard
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
@@ -15,12 +14,12 @@ import android.net.Uri
 import java.io.File
 import java.util.Locale
 import kotlin.math.max
-import kotlin.math.min
 
 /**
  * 4K-crisp Broadcast Vector Renderer for CDN/JSON Cricbuzz Scorecards.
- * Features Neon (Theme 0), Royal Gold (Theme 1), and Sunset Pop (Theme 2)
- * with Overs/Run-Rate footer and clean arrow gap before the player card.
+ * - Theme 0: Neon
+ * - Theme 1: Royal Gold
+ * - Theme 2: Pop (Left side list intact + Right side Star Performer broadcast layout)
  */
 object CdnVectorScoreCardComposer {
 
@@ -100,6 +99,7 @@ object CdnVectorScoreCardComposer {
         selected: Int,
         library: PlayerLibrary,
         themeIdx: Int = 0,
+        opponentName: String? = null,
     ): ComposedCard {
         val theme = ScoreCardComposer.normTheme(themeIdx)
         val rows = buildRows(innings, type)
@@ -110,63 +110,76 @@ object CdnVectorScoreCardComposer {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
-        // Deep stadium emerald background matching broadcast look
         drawStadiumBackdrop(c, p, w, h)
 
         val listLeft = CDN_LIST_LEFT
         val listWidth = CDN_LIST_WIDTH
         val footerH = 54f
         val footerTop = h - 28f - footerH
-        val listTop = 28f
-        val listBottom = footerTop - 10f
-        val listHeight = listBottom - listTop
-
-        val rowHeights = rows.map { r ->
-            when (r) {
-                is VectorRow.Header -> 78f
-                is VectorRow.Columns -> 46f
-                is VectorRow.PlayerRow -> if (r.subText.isNotBlank()) 104f else 76f
-            }
-        }
         val gap = 9f
-        val totalH = rowHeights.sum() + gap * max(0, rows.size - 1)
 
-        val cY = if (totalH <= listHeight) {
-            listTop + (listHeight - totalH) / 2f
+        // Pin Header (0) & Column Bar (1) at top so Team score is NEVER clipped
+        val headerH = 78f
+        val colsH = 46f
+        val headerRect = RectF(listLeft, 28f, listLeft + listWidth, 28f + headerH)
+        val colsRect = RectF(listLeft, headerRect.bottom + gap, listLeft + listWidth, headerRect.bottom + gap + colsH)
+
+        val playersTop = colsRect.bottom + gap
+        val playersBottom = footerTop - 10f
+        val playersAreaH = (playersBottom - playersTop).coerceAtLeast(100f)
+
+        val playerRows = rows.drop(2)
+        val playerHeights = playerRows.map { r ->
+            val pr = r as VectorRow.PlayerRow
+            if (pr.subText.isNotBlank()) 104f else 76f
+        }
+        val totalPlayersH = playerHeights.sum() + gap * max(0, playerRows.size - 1)
+
+        val selPlayerIdx = (selected - 2).coerceIn(0, max(0, playerRows.size - 1))
+        val startY = if (totalPlayersH <= playersAreaH) {
+            playersTop
         } else {
             var activeTop = 0f
-            for (i in 0 until selected.coerceIn(0, rows.size - 1)) {
-                activeTop += rowHeights[i] + gap
+            for (i in 0 until selPlayerIdx) {
+                activeTop += playerHeights[i] + gap
             }
-            val activeH = rowHeights.getOrElse(selected) { 96f }
-            val desiredTop = activeTop - (listHeight - activeH) / 2f
-            val maxScroll = totalH - listHeight
-            listTop - desiredTop.coerceIn(0f, maxScroll)
+            val activeH = playerHeights.getOrElse(selPlayerIdx) { 96f }
+            val desiredTop = activeTop - (playersAreaH - activeH) / 2f
+            val maxScroll = totalPlayersH - playersAreaH
+            playersTop - desiredTop.coerceIn(0f, maxScroll)
         }
 
-        val renderedRowRects = ArrayList<RectF>()
-        c.save()
-        c.clipRect(listLeft - 12f, listTop - 12f, listLeft + listWidth + 12f, listBottom + 12f)
+        val renderedRowRects = ArrayList<RectF>(rows.size)
+        renderedRowRects.add(RectF(headerRect))
+        renderedRowRects.add(RectF(colsRect))
 
-        var currY = cY
-        var playerCounter = 0
-        rows.forEachIndexed { i, row ->
-            val rh = rowHeights[i]
+        // Draw scrollable player rows clipped strictly between Column Bar and Footer
+        c.save()
+        c.clipRect(listLeft - 12f, playersTop - 4f, listLeft + listWidth + 12f, playersBottom + 4f)
+        var currY = startY
+        playerRows.forEachIndexed { pIdx, row ->
+            val rh = playerHeights[pIdx]
             val rowRect = RectF(listLeft, currY, listLeft + listWidth, currY + rh)
             renderedRowRects.add(RectF(rowRect))
-
-            val isSel = i == selected
-            val isHeader = row is VectorRow.Header
-            val isCol = row is VectorRow.Columns
-            val pIdx = if (!isHeader && !isCol) playerCounter++ else 0
-
-            val rInfo = RowInfo(rowRect, 0, 0, isHeader = isHeader, isColumnHeader = isCol)
+            val isSel = (pIdx + 2) == selected
+            val rInfo = RowInfo(rowRect, 0, 0, isHeader = false, isColumnHeader = false)
             ScoreCardComposer.drawRowContainer(c, p, theme, rowRect, rInfo, isSel, pIdx)
             drawVectorRowContent(c, p, rowRect, row, theme, isSel, type, pIdx)
-
             currY += rh + gap
         }
         c.restore()
+
+        // Draw pinned Team Header & Column Header on top
+        rows.getOrNull(0)?.let { hdr ->
+            val rInfo = RowInfo(headerRect, 0, 0, isHeader = true, isColumnHeader = false)
+            ScoreCardComposer.drawRowContainer(c, p, theme, headerRect, rInfo, false, 0)
+            drawVectorRowContent(c, p, headerRect, hdr, theme, false, type, 0)
+        }
+        rows.getOrNull(1)?.let { col ->
+            val rInfo = RowInfo(colsRect, 0, 0, isHeader = false, isColumnHeader = true)
+            ScoreCardComposer.drawRowContainer(c, p, theme, colsRect, rInfo, false, 0)
+            drawVectorRowContent(c, p, colsRect, col, theme, false, type, 0)
+        }
 
         // Bottom Overs & Run rate footer bar
         val footerRect = RectF(listLeft, footerTop, listLeft + listWidth, footerTop + footerH)
@@ -178,19 +191,269 @@ object CdnVectorScoreCardComposer {
         val photo = matchedPlayer?.let { library.photo(it) }
             ?: CdnScorecardClient.cachedPlayerPhoto(context, selectedRow?.imageId, selectedRow?.playerId)
 
-        ScoreCardComposer.drawPlayerPanel(
-            c = c,
-            p = p,
-            bmpPaint = bmpPaint,
-            theme = theme,
-            type = type,
-            player = matchedPlayer,
-            photo = photo,
-            fallbackName = selectedRow?.name,
-            panelLeft = CDN_PANEL_LEFT,
-        )
+        if (theme == 2) {
+            drawPopStarPerformerPanel(
+                c = c,
+                p = p,
+                bmpPaint = bmpPaint,
+                innings = innings,
+                type = type,
+                selectedRow = selectedRow,
+                player = matchedPlayer,
+                photo = photo,
+                opponentName = opponentName,
+            )
+        } else {
+            ScoreCardComposer.drawPlayerPanel(
+                c = c,
+                p = p,
+                bmpPaint = bmpPaint,
+                theme = theme,
+                type = type,
+                player = matchedPlayer,
+                photo = photo,
+                fallbackName = selectedRow?.name,
+                panelLeft = CDN_PANEL_LEFT,
+            )
+        }
 
         return ComposedCard(out, renderedRowRects)
+    }
+
+    /**
+     * Design 3 (Pop) Right Panel — Star Performer broadcast graphic:
+     * Top player photo, middle hot-pink STAR PERFORMER band, bottom dark emerald section
+     * with bat/ball icon, lime-yellow player name, VS team, and 5 alternating pink/green stat blocks.
+     */
+    private fun drawPopStarPerformerPanel(
+        c: Canvas,
+        p: Paint,
+        bmpPaint: Paint,
+        innings: CdnInnings,
+        type: ScoreCardType,
+        selectedRow: VectorRow.PlayerRow?,
+        player: Player?,
+        photo: Bitmap?,
+        opponentName: String?,
+    ) {
+        val pl = CDN_PANEL_LEFT
+        val pr = ScoreCardComposer.CANVAS_W - 28f
+        val pt = 28f
+        val pb = ScoreCardComposer.CANVAS_H - 28f
+        val pw = pr - pl
+        val ph = pb - pt
+        val panelRect = RectF(pl, pt, pr, pb)
+        val corner = 24f
+
+        val splitY = pt + ph * 0.575f
+        val bandH = 38f
+        val bandBottom = splitY + bandH
+
+        c.save()
+        c.clipPath(Path().apply { addRoundRect(panelRect, corner, corner, Path.Direction.CW) })
+
+        // 1. Top photo backdrop + crisp player photo
+        p.shader = RadialGradient(
+            pl + pw * 0.5f, pt + (splitY - pt) * 0.4f, pw * 0.8f,
+            intArrayOf(0xFF1B4D3E.toInt(), 0xFF0A241C.toInt()),
+            null, Shader.TileMode.CLAMP,
+        )
+        c.drawRect(pl, pt, pr, splitY, p)
+        p.shader = null
+
+        val playerBmp = photo ?: if (type == ScoreCardType.BOWLING) {
+            CricketAssets.getBowlerLogo()
+        } else {
+            CricketAssets.getBatterLogo()
+        }
+        if (playerBmp.width > 0 && playerBmp.height > 0) {
+            val photoH = splitY - pt
+            val scale = max(pw / playerBmp.width, photoH / playerBmp.height)
+            val dw = playerBmp.width * scale
+            val dh = playerBmp.height * scale
+            val dl = pl + (pw - dw) / 2f
+            val dt = pt - (dh - photoH) * 0.14f
+            c.save()
+            c.clipRect(pl, pt, pr, splitY)
+            c.drawBitmap(playerBmp, null, RectF(dl, dt, dl + dw, dt + dh), bmpPaint)
+            c.restore()
+        }
+
+        // Top-left match pill badge
+        val badgeW = pw * 0.30f
+        val badgeH = 44f
+        val badgeRect = RectF(pl + 24f, pt + 22f, pl + 24f + badgeW, pt + 22f + badgeH)
+        p.style = Paint.Style.FILL
+        p.color = 0xE6052D22.toInt()
+        c.drawRoundRect(badgeRect, 12f, 12f, p)
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 2f
+        p.color = 0xFFD4FF33.toInt()
+        c.drawRoundRect(badgeRect, 12f, 12f, p)
+        p.style = Paint.Style.FILL
+        p.color = 0xFFFFFFFF.toInt()
+        p.typeface = Typeface.DEFAULT_BOLD
+        p.textSize = 22f
+        p.textAlign = Paint.Align.CENTER
+        c.drawText("⚡ NEWS CRICK", badgeRect.centerX(), badgeRect.centerY() + 8f, p)
+
+        // 2. Hot-pink STAR PERFORMER divider band
+        p.color = 0xFFFF007A.toInt()
+        c.drawRect(pl, splitY, pr, bandBottom, p)
+        p.color = 0xFFFFFFFF.toInt()
+        p.textSize = 18f
+        p.letterSpacing = 0.08f
+        p.textAlign = Paint.Align.CENTER
+        c.drawText(
+            "STAR PERFORMER  •  STAR PERFORMER  •  STAR PERFORMER  •  STAR PERFORMER",
+            pl + pw / 2f,
+            splitY + bandH * 0.68f,
+            p,
+        )
+        p.letterSpacing = 0f
+
+        // 3. Bottom dark emerald green graphic area
+        p.color = 0xFF042D23.toInt()
+        c.drawRect(pl, bandBottom, pr, pb, p)
+
+        // Decorative subtle stadium curves in emerald section
+        p.color = 0xFF073E30.toInt()
+        val curve1 = Path().apply {
+            moveTo(pl, bandBottom + 80f)
+            quadTo(pl + pw * 0.45f, bandBottom - 10f, pr, bandBottom + 110f)
+            lineTo(pr, pb)
+            lineTo(pl, pb)
+            close()
+        }
+        c.drawPath(curve1, p)
+
+        p.color = 0xFF0A4A3A.toInt()
+        val curve2 = Path().apply {
+            moveTo(pl + pw * 0.25f, pb)
+            quadTo(pl + pw * 0.65f, bandBottom + 40f, pr, bandBottom + 170f)
+            lineTo(pr, pb)
+            close()
+        }
+        c.drawPath(curve2, p)
+
+        // Bat / Ball icon + Player Name + VS Team
+        val iconCx = pl + 110f
+        val iconCy = bandBottom + 88f
+        drawCricketBadgeIcon(c, p, iconCx, iconCy, isBowling = (type == ScoreCardType.BOWLING))
+
+        val displayName = (player?.name ?: selectedRow?.name ?: if (type == ScoreCardType.BOWLING) "BOWLER" else "BATTER")
+            .trim()
+            .uppercase()
+        val subLine = if (!opponentName.isNullOrBlank()) {
+            "VS ${opponentName.trim().uppercase()}"
+        } else {
+            val team = innings.teamName.ifBlank { innings.teamShortName }.uppercase()
+            if (type == ScoreCardType.BOWLING) "$team  •  KEY BOWLER" else "$team  •  KEY BATSMAN"
+        }
+
+        val nameX = pl + 184f
+        val maxNameW = pr - nameX - 28f
+        p.typeface = Typeface.DEFAULT_BOLD
+        p.textAlign = Paint.Align.LEFT
+        p.color = 0xFFD4FF33.toInt()
+        p.textSize = 48f
+        while (p.measureText(displayName) > maxNameW && p.textSize > 22f) {
+            p.textSize -= 2f
+        }
+        c.drawText(displayName, nameX, bandBottom + 82f, p)
+
+        p.color = 0xFFFFFFFF.toInt()
+        p.textSize = 26f
+        while (p.measureText(subLine) > maxNameW && p.textSize > 16f) {
+            p.textSize -= 1.5f
+        }
+        c.drawText(subLine, nameX, bandBottom + 118f, p)
+
+        // 4. 5-Column Stat Strip (alternating Hot Pink #FF007A & Emerald Transparent)
+        val statCols: List<Pair<String, String>> = if (type == ScoreCardType.BATTING) {
+            val r = selectedRow?.primaryStat ?: "0"
+            val b = selectedRow?.otherStats?.getOrElse(0) { "0" } ?: "0"
+            val f4 = selectedRow?.otherStats?.getOrElse(1) { "0" } ?: "0"
+            val s6 = selectedRow?.otherStats?.getOrElse(2) { "0" } ?: "0"
+            val sr = selectedRow?.otherStats?.getOrElse(3) { "0.0" } ?: "0.0"
+            listOf(r to "RUNS", b to "BALLS", f4 to "FOURS", s6 to "SIXES", sr to "STRIKE RATE")
+        } else {
+            val o = selectedRow?.otherStats?.getOrElse(0) { "0" } ?: "0"
+            val m = selectedRow?.otherStats?.getOrElse(1) { "0" } ?: "0"
+            val r = selectedRow?.otherStats?.getOrElse(2) { "0" } ?: "0"
+            val w = selectedRow?.primaryStat ?: "0"
+            val eco = selectedRow?.otherStats?.getOrElse(3) { "0.0" } ?: "0.0"
+            listOf(w to "WICKETS", o to "OVERS", m to "MAIDENS", r to "RUNS", eco to "ECONOMY")
+        }
+
+        val stripLeft = pl + 24f
+        val stripRight = pr - 24f
+        val stripTop = bandBottom + 160f
+        val stripBottom = pb - 24f
+        val colGap = 6f
+        val colW = (stripRight - stripLeft - colGap * 4) / 5f
+
+        statCols.forEachIndexed { idx, (value, label) ->
+            val bx0 = stripLeft + idx * (colW + colGap)
+            val bx1 = bx0 + colW
+            val boxRect = RectF(bx0, stripTop, bx1, stripBottom)
+
+            p.style = Paint.Style.FILL
+            if (idx % 2 == 0) {
+                p.color = 0xFFFF007A.toInt()
+                c.drawRoundRect(boxRect, 6f, 6f, p)
+            } else {
+                p.color = 0x44031F18
+                c.drawRoundRect(boxRect, 6f, 6f, p)
+            }
+
+            p.color = 0xFFFFFFFF.toInt()
+            p.typeface = Typeface.DEFAULT_BOLD
+            p.textAlign = Paint.Align.CENTER
+            p.textSize = 54f
+            while (p.measureText(value) > (colW - 14f) && p.textSize > 24f) {
+                p.textSize -= 2f
+            }
+            c.drawText(value, boxRect.centerX(), boxRect.top + boxRect.height() * 0.56f, p)
+
+            p.textSize = 19f
+            while (p.measureText(label) > (colW - 10f) && p.textSize > 13f) {
+                p.textSize -= 1f
+            }
+            c.drawText(label, boxRect.centerX(), boxRect.top + boxRect.height() * 0.84f, p)
+        }
+
+        c.restore()
+
+        // Crisp outer frame border
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 4f
+        p.color = 0xCCFFFFFF.toInt()
+        c.drawRoundRect(panelRect, corner, corner, p)
+        p.style = Paint.Style.FILL
+        p.textAlign = Paint.Align.LEFT
+    }
+
+    private fun drawCricketBadgeIcon(c: Canvas, p: Paint, cx: Float, cy: Float, isBowling: Boolean) {
+        p.style = Paint.Style.FILL
+        p.color = 0xFFD4FF33.toInt()
+        if (isBowling) {
+            c.drawCircle(cx, cy, 34f, p)
+            p.style = Paint.Style.STROKE
+            p.strokeWidth = 4f
+            p.color = 0xFF042D23.toInt()
+            c.drawLine(cx - 22f, cy - 22f, cx + 22f, cy + 22f, p)
+            p.style = Paint.Style.FILL
+        } else {
+            c.save()
+            c.translate(cx, cy)
+            c.rotate(42f)
+            // Bat blade
+            c.drawRoundRect(RectF(-12f, -12f, 12f, 44f), 4f, 4f, p)
+            // Bat handle
+            c.drawRoundRect(RectF(-4f, -44f, 4f, -12f), 2f, 2f, p)
+            c.restore()
+        }
     }
 
     private fun drawStadiumBackdrop(c: Canvas, p: Paint, w: Float, h: Float) {
@@ -204,7 +467,6 @@ object CdnVectorScoreCardComposer {
         )
         c.drawRect(0f, 0f, w, h, p)
 
-        // Subtle stadium light beams
         p.shader = RadialGradient(
             w * 0.42f, h * 0.15f, w * 0.65f,
             intArrayOf(0x2E22995A, 0x00000000),
@@ -297,7 +559,6 @@ object CdnVectorScoreCardComposer {
         p.color = valueColor
         c.drawText(oversStr, leftStart + p.measureText(oversLbl), cy, p)
 
-        // Right-aligned Run rate
         val rightEnd = rect.right - 26f
         p.typeface = Typeface.DEFAULT_BOLD
         val rrValW = p.measureText(runRate)
@@ -333,11 +594,11 @@ object CdnVectorScoreCardComposer {
         val leftX = rect.left + if (theme == 1 && row !is VectorRow.Header) 80f else 34f
         val rightX = rect.right - 24f
         val statXs = floatArrayOf(
-            rect.right - 330f, // col 0 (R / O) - centered
-            rect.right - 248f, // col 1 (B / M)
-            rect.right - 184f, // col 2 (4s / R)
-            rect.right - 122f, // col 3 (6s / W)
-            rightX,            // col 4 (SR / ECO) - right aligned
+            rect.right - 330f,
+            rect.right - 248f,
+            rect.right - 184f,
+            rect.right - 122f,
+            rightX,
         )
 
         val mainColor = when {
@@ -361,11 +622,6 @@ object CdnVectorScoreCardComposer {
 
         when (row) {
             is VectorRow.Header -> {
-                p.typeface = Typeface.DEFAULT_BOLD
-                p.color = if (theme == 1) 0xFFF6D77A.toInt() else 0xFFFFFFFF.toInt()
-                p.textSize = 35f
-
-                // Measure right side: big scorePart + smaller oversPart
                 p.textSize = 24f
                 p.typeface = Typeface.DEFAULT
                 val ovText = " ${row.oversPart}"
@@ -384,7 +640,6 @@ object CdnVectorScoreCardComposer {
                 p.textAlign = Paint.Align.LEFT
                 c.drawText(ellipsize(row.leftTitle, p, maxTitleW), titleLeft, rect.centerY() + 12f, p)
 
-                // Draw score + overs on right
                 p.textAlign = Paint.Align.RIGHT
                 p.textSize = 24f
                 p.typeface = Typeface.DEFAULT
@@ -399,10 +654,7 @@ object CdnVectorScoreCardComposer {
 
             is VectorRow.Columns -> {
                 p.typeface = Typeface.DEFAULT_BOLD
-                p.color = when (theme) {
-                    1 -> 0xFFD6B363.toInt()
-                    else -> subColor
-                }
+                p.color = if (theme == 1) 0xFFD6B363.toInt() else subColor
                 p.textSize = 21f
                 p.textAlign = Paint.Align.LEFT
                 c.drawText(row.col0, leftX, rect.centerY() + 8f, p)
@@ -416,7 +668,6 @@ object CdnVectorScoreCardComposer {
             }
 
             is VectorRow.PlayerRow -> {
-                // Theme 1 (Gold): Draw numbered circle badge (1), (2), (3)...
                 if (theme == 1) {
                     val cx = rect.left + 48f
                     val cy = rect.centerY()
@@ -443,7 +694,6 @@ object CdnVectorScoreCardComposer {
                     c.drawText((playerIndex + 1).toString(), cx, cy + 7f, p)
                 }
 
-                // Player name + dismissal on left
                 val maxNameW = (statXs[0] - 46f) - leftX - 10f
                 p.typeface = Typeface.DEFAULT_BOLD
                 p.color = mainColor
@@ -478,7 +728,6 @@ object CdnVectorScoreCardComposer {
                     val colX = statXs[idx]
 
                     if (isPrimary && theme == 1) {
-                        // Theme 1 (Gold): Rounded pill badge around primary stat (R / W)
                         val pillW = 74f
                         val pillH = 52f
                         val pillRect = RectF(
@@ -507,7 +756,6 @@ object CdnVectorScoreCardComposer {
                         p.textAlign = Paint.Align.CENTER
                         c.drawText(v, colX, rect.centerY() + 10f, p)
                     } else if (isPrimary) {
-                        // Theme 0 (Neon): Large bold color-coded stat; Theme 2 (Pop): crisp bold
                         p.typeface = Typeface.DEFAULT_BOLD
                         p.textSize = 34f
                         p.textAlign = Paint.Align.CENTER
@@ -540,13 +788,20 @@ object CdnVectorScoreCardComposer {
         return text.substring(0, end) + "…"
     }
 
-    fun loadInnings(context: Context, jsonUri: String, inningsIdx: Int): CdnInnings? {
+    fun loadInnings(context: Context, jsonUri: String, inningsIdx: Int): CdnInnings? =
+        loadInningsWithOpponent(context, jsonUri, inningsIdx)?.first
+
+    fun loadInningsWithOpponent(context: Context, jsonUri: String, inningsIdx: Int): Pair<CdnInnings, String?>? {
         val raw = runCatching {
             val uri = Uri.parse(jsonUri)
             val file = File(uri.path ?: jsonUri)
             if (file.exists()) file.readText() else null
         }.getOrNull() ?: return null
         val match = runCatching { CdnScorecardClient.parseJson(raw) }.getOrNull() ?: return null
-        return match.innings.getOrNull(inningsIdx) ?: match.innings.firstOrNull()
+        val inn = match.innings.getOrNull(inningsIdx) ?: match.innings.firstOrNull() ?: return null
+        val opp = match.innings.firstOrNull { it.inningsId != inn.inningsId }?.let {
+            it.teamName.ifBlank { it.teamShortName }
+        }
+        return inn to opp
     }
 }
