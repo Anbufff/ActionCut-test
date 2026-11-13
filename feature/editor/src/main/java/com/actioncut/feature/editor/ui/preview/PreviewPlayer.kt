@@ -149,6 +149,14 @@ fun PreviewPlayer(
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
+
+                    // 4:5 TPL-லிலும் ஸ்கோர் கார்டு மேலே உள்ள 16:9 பெட்டியில் முழுமையாகத் தெரிய வேண்டும்
+                    ScorecardLayer(
+                        allClips = allClips,
+                        playheadMs = playheadMs,
+                        onScorecardRowTapped = onScorecardRowTapped,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
 
                 Box(
@@ -479,45 +487,12 @@ fun PreviewPlayer(
                     modifier = Modifier.fillMaxSize(),
                 )
 
-                val activeScoreClip = allClips.firstOrNull {
-                    it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
-                }
-
-                if (activeScoreClip != null) {
-                    val sc = activeScoreClip.scorecard
-                    if (sc != null) {
-                        val currentPlayheadMs by rememberUpdatedState(playheadMs)
-                        val timeInClip = (playheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
-                        val activeBmp = ScorecardManager.getActiveBitmap(activeScoreClip.id, sc, timeInClip)
-
-                        if (activeBmp != null) {
-                            Image(
-                                bitmap = activeBmp.asImageBitmap(),
-                                contentDescription = "Scorecard",
-                                contentScale = ContentScale.FillBounds,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .pointerInput(activeScoreClip.id) {
-                                        detectTapGestures { offset ->
-                                            val curTimeInClip = (currentPlayheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
-                                            val touchYFraction = offset.y / size.height
-                                            val touchXFraction = offset.x / size.width
-                                            val hitRow = ScorecardManager.hitTestRow(
-                                                activeScoreClip.id,
-                                                sc,
-                                                curTimeInClip,
-                                                touchYFraction,
-                                                touchXFraction,
-                                            )
-                                            if (hitRow >= 0) {
-                                                onScorecardRowTapped(activeScoreClip.id, hitRow)
-                                            }
-                                        }
-                                    },
-                            )
-                        }
-                    }
-                }
+                ScorecardLayer(
+                    allClips = allClips,
+                    playheadMs = playheadMs,
+                    onScorecardRowTapped = onScorecardRowTapped,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
 
             val logoW = (w * 0.082f).coerceIn(30f * density, 55f * density)
@@ -1098,5 +1073,49 @@ private fun StickerImage(uri: String, widthPx: Float, modifier: Modifier = Modif
         modifier = modifier
             .width(with(density) { widthPx.toDp() })
             .aspectRatio(bitmap.width.toFloat() / bitmap.height.toFloat()),
+    )
+}
+
+/**
+ * The animated scorecard card (rows, bouncing arrow, key player panel).
+ * Shared by the normal layout and the 4:5 TPL layout (where it fills the top 16:9 box).
+ */
+@Composable
+private fun ScorecardLayer(
+    allClips: List<Clip>,
+    playheadMs: Long,
+    onScorecardRowTapped: (String, Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val activeScoreClip = allClips.firstOrNull {
+        it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
+    } ?: return
+    val sc = activeScoreClip.scorecard ?: return
+    val currentPlayheadMs by rememberUpdatedState(playheadMs)
+    val timeInClip = (playheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
+    val activeBmp = ScorecardManager.getActiveBitmap(activeScoreClip.id, sc, timeInClip) ?: return
+
+    Image(
+        bitmap = activeBmp.asImageBitmap(),
+        contentDescription = "Scorecard",
+        contentScale = ContentScale.FillBounds,
+        modifier = modifier
+            .pointerInput(activeScoreClip.id) {
+                detectTapGestures { offset ->
+                    val curTimeInClip = (currentPlayheadMs - activeScoreClip.timelineStartMs).coerceAtLeast(0L)
+                    val touchYFraction = offset.y / size.height
+                    val touchXFraction = offset.x / size.width
+                    val hitRow = ScorecardManager.hitTestRow(
+                        activeScoreClip.id,
+                        sc,
+                        curTimeInClip,
+                        touchYFraction,
+                        touchXFraction,
+                    )
+                    if (hitRow >= 0) {
+                        onScorecardRowTapped(activeScoreClip.id, hitRow)
+                    }
+                }
+            },
     )
 }
