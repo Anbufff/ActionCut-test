@@ -23,8 +23,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.ZoomIn
-import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -226,8 +224,6 @@ fun EditorScreen(
             durationMs = uiState.durationMs,
             isPlaying = uiState.isPlaying,
             onTogglePlay = viewModel::togglePlayPause,
-            onZoomIn = { viewModel.setZoom(uiState.pxPerSecond * 1.4f) },
-            onZoomOut = { viewModel.setZoom(uiState.pxPerSecond / 1.4f) },
         )
 
         EditorTimeline(
@@ -249,6 +245,7 @@ fun EditorScreen(
             onPause = viewModel::pause,
             onScrubStart = viewModel::beginScrub,
             onScrubEnd = viewModel::endScrub,
+            onZoomChange = viewModel::setZoom,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(120.dp),
@@ -549,35 +546,51 @@ private fun PlaybackBar(
     durationMs: Long,
     isPlaying: Boolean,
     onTogglePlay: () -> Unit,
-    onZoomIn: () -> Unit,
-    onZoomOut: () -> Unit,
 ) {
     val haptic = com.actioncut.core.designsystem.component.rememberHaptic()
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        IconButton(onClick = { haptic.click(); onTogglePlay() }) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f),
+        ) {
+            Text(
+                text = TimeFormatter.precise(playheadMs),
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontFeatureSettings = "tnum",
+                    fontWeight = FontWeight.SemiBold,
+                ),
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                text = " / ${TimeFormatter.clock(durationMs)}",
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontFeatureSettings = "tnum",
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .size(width = 58.dp, height = 44.dp)
+                .clip(RoundedCornerShape(50))
+                .background(
+                    Brush.linearGradient(listOf(Color(0xFFFF2E4D), Color(0xFFFF6B3D))),
+                )
+                .clickable { haptic.click(); onTogglePlay() },
+            contentAlignment = Alignment.Center,
+        ) {
             Icon(
                 imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                 contentDescription = if (isPlaying) "Pause" else "Play",
-                tint = MaterialTheme.colorScheme.onBackground,
+                tint = Color.White,
+                modifier = Modifier.size(28.dp),
             )
-        }
-        Text(
-            text = "${TimeFormatter.precise(playheadMs)} / ${TimeFormatter.clock(durationMs)}",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-        IconButton(onClick = onZoomOut) {
-            Icon(Icons.Filled.ZoomOut, contentDescription = "Zoom out", modifier = Modifier.size(20.dp))
-        }
-        IconButton(onClick = onZoomIn) {
-            Icon(Icons.Filled.ZoomIn, contentDescription = "Zoom in", modifier = Modifier.size(20.dp))
         }
     }
 }
