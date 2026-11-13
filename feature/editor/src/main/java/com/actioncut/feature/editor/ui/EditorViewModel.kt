@@ -82,6 +82,9 @@ class EditorViewModel @Inject constructor(
     private val redoStack = ArrayDeque<Timeline>()
     private var saveJob: Job? = null
 
+    @Volatile
+    private var isUserScrubbing: Boolean = false
+
     init {
         observePlayback()
         loadProject()
@@ -157,14 +160,18 @@ class EditorViewModel @Inject constructor(
                 _uiState.update { state ->
                     state.copy(
                         isPlaying = playback.isPlaying,
-                        playheadMs = playback.positionMs.coerceIn(0, state.durationMs),
+                        playheadMs = if (isUserScrubbing) {
+                            state.playheadMs
+                        } else {
+                            playback.positionMs.coerceIn(0, state.durationMs)
+                        },
                     )
                 }
             }
         }
         viewModelScope.launch {
             playerController.positionFlow().collect { positionMs ->
-                if (_uiState.value.isPlaying) {
+                if (_uiState.value.isPlaying && !isUserScrubbing) {
                     _uiState.update { it.copy(playheadMs = positionMs.coerceIn(0, it.durationMs)) }
                 }
             }
@@ -172,6 +179,34 @@ class EditorViewModel @Inject constructor(
     }
 
     fun togglePlayPause() = playerController.togglePlayPause()
+
+    fun pause() {
+        if (_uiState.value.isPlaying) {
+            playerController.pause()
+            _uiState.update { it.copy(isPlaying = false) }
+        }
+    }
+
+    fun beginScrub() {
+        isUserScrubbing = true
+        playerController.beginScrub()
+        if (_uiState.value.isPlaying) {
+            _uiState.update { it.copy(isPlaying = false) }
+        }
+    }
+
+    fun scrubTo(positionMs: Long) {
+        val clamped = positionMs.coerceIn(0, _uiState.value.durationMs)
+        _uiState.update { it.copy(playheadMs = clamped) }
+        playerController.scrubTo(clamped)
+    }
+
+    fun endScrub(positionMs: Long) {
+        isUserScrubbing = false
+        val clamped = positionMs.coerceIn(0, _uiState.value.durationMs)
+        _uiState.update { it.copy(playheadMs = clamped) }
+        playerController.endScrub(clamped)
+    }
 
     fun seekTo(positionMs: Long) {
         val clamped = positionMs.coerceIn(0, _uiState.value.durationMs)
