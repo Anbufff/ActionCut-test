@@ -23,7 +23,7 @@ hiltWork = "1.2.0"
 room = "2.6.1"
 
 # Media
-media3 = "1.4.1"
+media3 = "1.9.4"
 
 # Async
 coroutines = "1.9.0"
