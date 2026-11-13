@@ -58,10 +58,14 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.decode.VideoFrameDecoder
+import coil.request.ImageRequest
+import coil.request.videoFrameMillis
 import com.actioncut.core.designsystem.component.clickableNoRipple
 import com.actioncut.core.designsystem.theme.LaneAudio
 import com.actioncut.core.designsystem.theme.LaneText
@@ -416,6 +420,7 @@ private fun ClipBlock(
     playheadMsProvider: () -> Long = { 0L },
 ) {
     val density = LocalDensity.current
+    val context = LocalContext.current
     val widthDp = with(density) { (clip.timelineDurationMs / 1000f * pxPerSecond).toDp() }
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent
 
@@ -453,9 +458,26 @@ private fun ClipBlock(
             },
         contentAlignment = Alignment.CenterStart,
     ) {
-        if ((clip.type == ClipType.IMAGE || clip.type == ClipType.VIDEO) && clip.mediaUri != null && clip.mediaUri?.contains("news_banner") != true) {
+        if ((clip.type == ClipType.IMAGE || clip.type == ClipType.VIDEO) &&
+            clip.mediaUri != null &&
+            clip.scorecard == null &&
+            clip.mediaUri?.contains("news_banner") != true
+        ) {
+            val thumbRequest = remember(clip.id, clip.mediaUri, clip.type) {
+                ImageRequest.Builder(context)
+                    .data(clip.mediaUri)
+                    .size(240, 120)
+                    .apply {
+                        if (clip.type == ClipType.VIDEO) {
+                            videoFrameMillis(500L)
+                            decoderFactory(VideoFrameDecoder.Factory())
+                        }
+                    }
+                    .crossfade(false)
+                    .build()
+            }
             AsyncImage(
-                model = clip.mediaUri,
+                model = thumbRequest,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
