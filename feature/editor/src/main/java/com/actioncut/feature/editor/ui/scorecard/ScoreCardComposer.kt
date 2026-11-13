@@ -17,21 +17,16 @@ import kotlin.math.sin
 
 data class ComposedCard(val bitmap: Bitmap, val rowRects: List<RectF>)
 
-/**
- * Draws the whole scorecard frame (rows list on the left, key-player panel on the right) in one of
- * three broadcast designs: 0 = Neon Night (default), 1 = Royal Gold, 2 = Sunset Pop.
- * The background of the frame is left fully transparent so the match video shows through.
- */
 object ScoreCardComposer {
     const val CANVAS_W = 1920f
     const val CANVAS_H = 1080f
     const val THEME_COUNT = 3
 
-    private const val LIST_LEFT = 24f
-    private const val LIST_WIDTH = 860f
-    private const val PANEL_LEFT = LIST_LEFT + LIST_WIDTH // 884f — 0px gap between names & player photo
-    private const val TEXT_PAD_LEFT = 36f
-    private const val TEXT_PAD_RIGHT = 14f
+    internal const val LIST_LEFT = 24f
+    internal const val LIST_WIDTH = 860f
+    internal const val PANEL_LEFT = LIST_LEFT + LIST_WIDTH // 884f — 0px gap between names & player photo
+    internal const val TEXT_PAD_LEFT = 36f
+    internal const val TEXT_PAD_RIGHT = 14f
 
     fun normTheme(idx: Int): Int = ((idx % THEME_COUNT) + THEME_COUNT) % THEME_COUNT
 
@@ -66,9 +61,6 @@ object ScoreCardComposer {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
-        // 1. பின்னணி வெளிப்படையாக (transparent) - அசல் மைதான வீடியோ பின்னால் தெரியும்
-
-        // 2. இடதுபுறம்: ஸ்கோர்கார்டு வரிகள்
         val listLeft = LIST_LEFT
         val listWidth = LIST_WIDTH
         val listTop = 28f
@@ -116,7 +108,6 @@ object ScoreCardComposer {
                 rInfo.rect.right.toInt(),
                 rInfo.rect.bottom.toInt()
             )
-            // அனைத்துப் பெயர்களின் முதல் எழுத்தும் தெளிவாகத் தெரிய வலதுபுறம் நகர்த்தப்பட்டுள்ளது
             val dstRect = RectF(
                 rowRect.left + TEXT_PAD_LEFT,
                 rowRect.top,
@@ -127,10 +118,8 @@ object ScoreCardComposer {
             val isSel = i == selected
             val accentIdx = if (!rInfo.isHeader && !rInfo.isColumnHeader) playerCounter++ else 0
 
-            // வரியின் பின்னணி (தேர்ந்தெடுத்த டிசைனுக்கு ஏற்ப)
             drawRowContainer(c, p, theme, rowRect, rInfo, isSel, accentIdx)
 
-            // வரியின் எழுத்துகள்
             val textBmp = if (isSel && selBitmap != null) selBitmap else card.bitmap
             c.drawBitmap(textBmp, srcRect, dstRect, bmpPaint)
 
@@ -138,15 +127,10 @@ object ScoreCardComposer {
         }
         c.restore()
 
-        // 3. வலதுபுறம்: பிளேயர் பேனல் (இடைவெளி இல்லாமல் இடதுபுறத்துடன் இணைக்கப்பட்டுள்ளது)
         drawPlayerPanel(c, p, bmpPaint, theme, type, player, photo, fallbackName)
 
         return ComposedCard(out, renderedRowRects)
     }
-
-    // ------------------------------------------------------------------------------------------
-    //  Row containers (Pro TV Broadcast Style)
-    // ------------------------------------------------------------------------------------------
 
     private fun fillRR(c: Canvas, p: Paint, r: RectF, rad: Float, color: Int) {
         p.shader = null
@@ -198,7 +182,7 @@ object ScoreCardComposer {
         )
     }
 
-    private fun drawRowContainer(
+    internal fun drawRowContainer(
         c: Canvas,
         p: Paint,
         theme: Int,
@@ -339,11 +323,7 @@ object ScoreCardComposer {
         p.maskFilter = null
     }
 
-    // ------------------------------------------------------------------------------------------
-    //  Right-hand key player panel (flush with left scorecard rows)
-    // ------------------------------------------------------------------------------------------
-
-    private fun drawPlayerPanel(
+    internal fun drawPlayerPanel(
         c: Canvas,
         p: Paint,
         bmpPaint: Paint,
@@ -366,14 +346,12 @@ object ScoreCardComposer {
             else -> 32f
         }
 
-        // வெளிப்புற ஒளி / நிழல்
         when (theme) {
             0 -> glowRR(c, p, panelRect, corner, 0x9600E5FF.toInt(), 18f, 0f, 0f)
             1 -> glowRR(c, p, panelRect, corner, 0xAA000000.toInt(), 16f, 0f, 6f)
             else -> glowRR(c, p, panelRect, corner, 0x96E61E8C.toInt(), 20f, 0f, 0f)
         }
 
-        // பின்னணி + Stadium Spotlight
         when (theme) {
             0 -> {
                 p.shader = RadialGradient(
@@ -424,7 +402,6 @@ object ScoreCardComposer {
             c.drawBitmap(playerBmp, null, RectF(dl, pt, dl + dw, pt + dh), bmpPaint)
         }
 
-        // படத்தின் ஓரங்களில் Vignette + கீழே Pro Lower-Third Nameplate Gradient
         p.shader = RadialGradient(
             pl + pw / 2f, pt + ph * 0.45f, max(pw, ph) * 0.72f,
             intArrayOf(0x00000000, 0x00000000, 0x88000000.toInt()),
@@ -444,7 +421,6 @@ object ScoreCardComposer {
         c.drawRect(pl, barTop, pr, pb, p)
         p.shader = null
 
-        // Lower-third frosted glass bar behind the player name
         val npLeft = pl + pw * 0.035f
         val npRight = pr - pw * 0.035f
         val npTop = pb - ph * 0.21f
@@ -464,7 +440,6 @@ object ScoreCardComposer {
         val displayName = (player?.name ?: fallbackName ?: if (type == ScoreCardType.BOWLING) "BOWLER" else "BATTER").trim()
         val tagText = if (type == ScoreCardType.BOWLING) "KEY BOWLER" else "KEY BATSMAN"
 
-        // Role pill badge inside nameplate
         val roleColor = when (theme) {
             0 -> 0xFF00E5FF.toInt()
             1 -> 0xFFF6D77A.toInt()
@@ -478,7 +453,6 @@ object ScoreCardComposer {
         p.letterSpacing = 0.16f
         c.drawText("● $tagText", npLeft + pw * 0.035f, npTop + ph * 0.052f, p)
 
-        // Player Name
         p.color = 0xFFFFFFFF.toInt()
         p.textSize = ph * 0.064f
         p.letterSpacing = 0.03f
@@ -489,7 +463,6 @@ object ScoreCardComposer {
         c.drawText(nm, npLeft + pw * 0.035f, npTop + ph * 0.125f, p)
         p.letterSpacing = 0f
 
-        // பெயருக்குக் கீழ் Accent கோடுகள்
         val lineY1 = npBottom - ph * 0.025f
         val lineY2 = npBottom - ph * 0.017f
         when (theme) {
@@ -511,7 +484,6 @@ object ScoreCardComposer {
             }
         }
 
-        // மேலே "⚡ NEWS CRICK" பேட்ஜ்
         val bw = pw * 0.30f
         val bh = ph * 0.055f
         val bx = pl + pw * 0.035f
@@ -544,7 +516,6 @@ object ScoreCardComposer {
 
         c.restore()
 
-        // பேனல் சட்டம் (double-bevel TV frame)
         when (theme) {
             0 -> {
                 strokeRR(c, p, panelRect, corner, 0xFF00E5FF.toInt(), 4.5f)
@@ -566,19 +537,13 @@ object ScoreCardComposer {
         p.textAlign = Paint.Align.LEFT
     }
 
-    /**
-     * தேர்ந்தெடுத்த வரியின் வலது பக்கம் முன்னும் பின்னும் துடிக்கும் பெரிய அம்பு.
-     * ஒவ்வொரு டிசைனுக்கும் தனி நிறம் & 3D highlight.
-     */
     fun drawBouncingArrow(canvas: Canvas, targetRow: RectF, timeInClipMs: Long, themeIdx: Int = 0) {
         val theme = normTheme(themeIdx)
         val cy = targetRow.centerY()
 
-        // 0.75 நொடி இடைவெளியில் முன்னும் பின்னும் 22 பிக்சல் அளவுக்குத் துடிக்கும்
         val bounce = ((1.0 - sin(timeInClipMs * 2.0 * Math.PI / 750.0)) / 2.0 * 22.0).toFloat()
         val tipX = targetRow.right + 4f + bounce
 
-        // பெரிய அம்பு அளவுகள் (128px அகலம், 84px உயரம்)
         val arrowW = 128f
         val arrowH = 84f
         val headLen = 52f
