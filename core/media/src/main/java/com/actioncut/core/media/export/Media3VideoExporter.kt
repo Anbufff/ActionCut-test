@@ -85,7 +85,7 @@ class Media3VideoExporter @Inject constructor(
                         clip
                     }
                 } else if (clip.type == ClipType.IMAGE && clip.mediaUri != null) {
-                    if (isFbTpl) {
+                    if (isFbTpl || clip.scorecard != null) {
                         clip
                     } else {
                         val blurredFrameUri = createBlurredBackdropImage(context, clip, targetWidth, targetHeight)
@@ -313,8 +313,6 @@ class Media3VideoExporter @Inject constructor(
         val cx = targetWidth / 2f + (t.offsetX / 2f) * targetWidth
         val cy = targetHeight / 2f + (t.offsetY / 2f) * targetHeight
 
-        // Same box maths as PreviewPlayer.PipLayer: the PiP box follows the photo's own aspect ratio,
-        // so a 9:16 photo is never centre-cropped (old code used a 16:9 box + cover-fit = half photo).
         val srcW = srcBmp.width.toFloat()
         val srcH = srcBmp.height.toFloat()
         val srcAspect = srcW / srcH
@@ -458,7 +456,6 @@ class Media3VideoExporter @Inject constructor(
             OverlayEffect(ImmutableList.of(it.forClip(timelineStartMs)))
         }
 
-        // 🌟 16:9 அதிவேக ரீ-யூசபிள் வாட்டர்மார்க் லேயர் (சிறிய டிவி அளவு)
         val watermarkOverlayEffect: Effect = OverlayEffect(
             ImmutableList.of(NewsCrickWatermarkOverlay(targetWidth, targetHeight, timelineStartMs))
         )
@@ -557,10 +554,6 @@ class Media3VideoExporter @Inject constructor(
     private fun even(v: Int): Int = if (v % 2 == 0) v else v + 1
 }
 
-/**
- * ⚡ ULTRA-FAST ZERO-ALLOCATION WATERMARK OVERLAY
- * சிறிய அளவுடன் (8.2%) ஒரே பிட்மேப்பை ரீ-யூஸ் செய்து அதிவேகமாக வரையும்.
- */
 private class NewsCrickWatermarkOverlay(
     targetWidth: Int,
     targetHeight: Int,
@@ -569,11 +562,9 @@ private class NewsCrickWatermarkOverlay(
 
     private val defaultSettings = OverlaySettings.Builder().build()
 
-    // 🌟 ஒரே ஒரு பிட்மேப் & கேன்வாஸ் (Zero Garbage Collection)
     private val reusableBmp: Bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
     private val reusableCanvas: Canvas = Canvas(reusableBmp)
 
-    // 🌟 சிறிய அளவு (Compact TV Bug size ~8.2%)
     private val logoW = targetWidth * 0.082f
     private val logoH = logoW * 0.75f
     private val marginX = targetWidth * 0.014f
@@ -585,7 +576,6 @@ private class NewsCrickWatermarkOverlay(
         val currentPlayheadMs = clipStartMs + (presentationTimeUs / 1000L)
         val timeSec = currentPlayheadMs / 1000f
 
-        // முந்தைய பிரேமை வேகமாக அழித்துவிட்டு புது அனிமேஷன் வரைதல்
         reusableBmp.eraseColor(Color.TRANSPARENT)
         NewsCrickWatermarkRenderer.renderLogo(reusableCanvas, logoX, logoY, logoW, logoH, timeSec)
 
@@ -595,9 +585,6 @@ private class NewsCrickWatermarkOverlay(
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = defaultSettings
 }
 
-/**
- * ⚡ ULTRA-FAST ZERO-ALLOCATION FB TEMPLATE OVERLAY
- */
 private class FbTemplateOverlay(
     private val context: Context,
     private val targetWidth: Int,
@@ -609,7 +596,6 @@ private class FbTemplateOverlay(
     private val defaultSettings = OverlaySettings.Builder().build()
     private var cachedBottomBitmap: Bitmap? = null
 
-    // 🌟 ரீ-யூசபிள் பிட்மேப் மற்றும் கேன்வாஸ்
     private val reusableBmp: Bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
     private val reusableCanvas: Canvas = Canvas(reusableBmp)
     private val bgPaint = Paint().apply { color = android.graphics.Color.parseColor("#0B0B0B") }
