@@ -90,6 +90,7 @@ fun PreviewPlayer(
     }
 
     val isTplMode = aspectRatio == AspectRatio.RATIO_4_5 && isFbTemplateEnabled
+    val context = LocalContext.current
 
     val mainClips = allClips.filter { it.type == ClipType.VIDEO || it.type == ClipType.IMAGE }
         .sortedBy { it.timelineStartMs }
@@ -126,8 +127,8 @@ fun PreviewPlayer(
                 ) {
                     if (currentMainClip?.type == ClipType.VIDEO) {
                         AndroidView(
-                            factory = { context ->
-                                PlayerView(context).apply {
+                            factory = { ctx ->
+                                PlayerView(ctx).apply {
                                     useController = false
                                     this.player = player
                                     this.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
@@ -141,8 +142,15 @@ fun PreviewPlayer(
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else if (currentMainClip != null && currentMainClip.mediaUri != null) {
+                        val tplMainReq = remember(currentMainClip.mediaUri) {
+                            ImageRequest.Builder(context)
+                                .data(currentMainClip.mediaUri)
+                                .size(1280, 720)
+                                .crossfade(false)
+                                .build()
+                        }
                         AsyncImage(
-                            model = currentMainClip.mediaUri,
+                            model = tplMainReq,
                             contentDescription = null,
                             contentScale = ContentScale.Fit,
                             modifier = Modifier.fillMaxSize(),
@@ -183,8 +191,15 @@ fun PreviewPlayer(
                     contentAlignment = Alignment.Center,
                 ) {
                     if (!fbTemplateImageUri.isNullOrBlank()) {
+                        val tplBottomReq = remember(fbTemplateImageUri) {
+                            ImageRequest.Builder(context)
+                                .data(fbTemplateImageUri)
+                                .size(1280, 720)
+                                .crossfade(false)
+                                .build()
+                        }
                         AsyncImage(
-                            model = fbTemplateImageUri,
+                            model = tplBottomReq,
                             contentDescription = null,
                             contentScale = ContentScale.Fit,
                             modifier = Modifier.fillMaxSize(),
@@ -210,12 +225,15 @@ fun PreviewPlayer(
 
             } else {
                 if (currentMainClip != null && currentMainClip.mediaUri != null && currentMainClip.scorecard == null) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
+                    val blurReq = remember(currentMainClip.mediaUri) {
+                        ImageRequest.Builder(context)
                             .data(currentMainClip.mediaUri)
                             .size(64, 36)
-                            .crossfade(true)
-                            .build(),
+                            .crossfade(false)
+                            .build()
+                    }
+                    AsyncImage(
+                        model = blurReq,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
@@ -241,8 +259,8 @@ fun PreviewPlayer(
 
                 if (currentMainClip?.type == ClipType.VIDEO) {
                     AndroidView(
-                        factory = { context ->
-                            PlayerView(context).apply {
+                        factory = { ctx ->
+                            PlayerView(ctx).apply {
                                 useController = false
                                 this.player = player
                                 this.resizeMode = resizeMode
@@ -364,8 +382,15 @@ fun PreviewPlayer(
                     }
 
                     if (isInTransition && nextClip != null && nextClip.mediaUri != null && nextAlpha > 0f) {
+                        val nextImgReq = remember(nextClip.mediaUri) {
+                            ImageRequest.Builder(context)
+                                .data(nextClip.mediaUri)
+                                .size(1280, 1280)
+                                .crossfade(false)
+                                .build()
+                        }
                         AsyncImage(
-                            model = nextClip.mediaUri,
+                            model = nextImgReq,
                             contentDescription = null,
                             contentScale = ContentScale.Fit,
                             modifier = Modifier
@@ -382,9 +407,16 @@ fun PreviewPlayer(
                     }
 
                     val totalScale = autoZoomScale * mainLiveScale * currentScaleFactor
+                    val curImgReq = remember(currentMainClip.mediaUri) {
+                        ImageRequest.Builder(context)
+                            .data(currentMainClip.mediaUri)
+                            .size(1280, 1280)
+                            .crossfade(false)
+                            .build()
+                    }
 
                     AsyncImage(
-                        model = currentMainClip.mediaUri,
+                        model = curImgReq,
                         contentDescription = null,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
@@ -835,11 +867,15 @@ private fun PipLayer(
                             },
                     )
                 } else {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
+                    val pipImgReq = remember(displayUri) {
+                        ImageRequest.Builder(context)
                             .data(displayUri)
-                            .crossfade(true)
-                            .build(),
+                            .size(1024, 1024)
+                            .crossfade(false)
+                            .build()
+                    }
+                    AsyncImage(
+                        model = pipImgReq,
                         contentDescription = null,
                         contentScale = ContentScale.Fit,
                         onSuccess = { state ->
