@@ -4,6 +4,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
@@ -47,10 +49,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -68,6 +73,7 @@ import com.actioncut.core.model.Track
 import com.actioncut.core.model.TrackType
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 private const val TRACK_HEIGHT = 52
 private const val RULER_HEIGHT = 22
@@ -89,6 +95,9 @@ fun EditorTimeline(
     onMoveCommit: () -> Unit = {},
     onLoadWaveform: (suspend (String) -> FloatArray)? = null,
     onAddMedia: () -> Unit = {},
+    onPause: () -> Unit = {},
+    onScrubStart: () -> Unit = {},
+    onScrubEnd: (Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -97,25 +106,100 @@ fun EditorTimeline(
     val extraPaddingMs = with(density) { (90.dp.toPx() / pxPerSecond * 1000f).toLong() }
     val layoutDurationMs = (durationMs + extraPaddingMs).coerceAtLeast(3_000L)
 
-    fun msToPxF(ms: Long): Float = ms / 1000f * pxPerSecond
-    fun pxToMs(px: Int): Long = (px / pxPerSecond * 1000f).toLong()
+    var isPointerDown by remember { mutableStateOf(false) }
+    var wasScrubbing by remember { mutableStateOf(false) }
+    var lastScrubbedMs by remember { mutableLongStateOf(-1L) }
 
-    LaunchedEffect(scrollState, pxPerSecond, durationMs) {
-        snapshotFlow { scrollState.value to scrollState.isScrollInProgress }
-            .collect { (value, inProgress) ->
-                if (inProgress && !isPlaying) onScrub(pxToMs(value).coerceIn(0, durationMs))
+    val currentIsPlaying by rememberUpdatedState(isPlaying)
+    val currentDurationMs by rememberUpdatedState(durationMs)
+    val currentPxPerSecond by rememberUpdatedState(pxPerSecond)
+    val currentPlayheadMs by rememberUpdatedState(playheadMs)
+    val currentOnScrub by rememberUpdatedState(onScrub)
+    val currentOnPause by rememberUpdatedState(onPause)
+    val currentOnScrubStart by rememberUpdatedState(onScrubStart)
+    val currentOnScrubEnd by rememberUpdatedState(onScrubEnd)
+
+    fun msToPxF(ms: Long): Float = ms / 1000f * pxPerSecond
+    fun pxToMs(px: Int): Long = (px / currentPxPerSecond * 1000f).roundToLong()
+
+    LaunchedEffect(scrollState) {
+        snapshotFlow {
+            Triple(scrollState.value, scrollState.isScrollInProgress, isPointerDown)
+        }.collect { (value, inProgress, pointerDown) ->
+            val active = inProgress || pointerDown
+            if (active && currentIsPlaying) {
+                currentOnPause()
             }
+            if (active && !wasScrubbing) {
+                wasScrubbing = true
+                currentOnScrubStart()
+            }
+            if (inProgress) {
+                val targetMs = pxToMs(value).coerceIn(0L, currentDurationMs)
+                lastScrubbedMs = targetMs
+                currentOnScrub(targetMs)
+            }
+            if (!active && wasScrubbing) {
+                wasScrubbing = false
+                val finalMs = pxToMs(value).coerceIn(0L, currentDurationMs)
+                lastScrubbedMs = finalMs
+                currentOnScrubEnd(finalMs)
+            }
+        }
     }
 
-    LaunchedEffect(playheadMs, isPlaying) {
-        if (!scrollState.isScrollInProgress) {
-            val target = msToPxF(playheadMs).roundToInt()
-            if (abs(scrollState.value - target) > 1) scrollState.scrollTo(target)
+    LaunchedEffect(pxPerSecond) {
+        lastScrubbedMs = -1L
+    }
+
+    LaunchedEffect(playheadMs, isPlaying, pxPerSecond) {
+        if (!scrollState.isScrollInProgress && !isPointerDown) {
+            if (isPlaying || playheadMs != lastScrubbedMs) {
+                val target = msToPxF(playheadMs).roundToInt()
+                if (abs(scrollState.value - target) > 1) {
+                    scrollState.scrollTo(target)
+                }
+            }
+        }
+    }
+
+    val displayTracks = remember(timeline, selectedClipId) {
+        val videoTrack = timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
+        val audioTrack = timeline.tracks.firstOrNull { it.type == TrackType.AUDIO }
+        val overlayTrack = timeline.tracks.firstOrNull { it.type == TrackType.OVERLAY }
+        val isOverlaySelected = overlayTrack?.clips?.any { it.id == selectedClipId } == true
+
+        buildList {
+            if (videoTrack != null) add(videoTrack)
+            if (isOverlaySelected && overlayTrack != null) {
+                add(overlayTrack)
+            } else if (audioTrack != null) {
+                add(audioTrack)
+            } else if (overlayTrack != null && overlayTrack.clips.isNotEmpty()) {
+                add(overlayTrack)
+            }
         }
     }
 
     androidx.compose.foundation.layout.BoxWithConstraints(
-        modifier = modifier.background(MaterialTheme.colorScheme.surface),
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.surface)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    if (currentIsPlaying) {
+                        currentOnPause()
+                    }
+                    isPointerDown = true
+                    try {
+                        do {
+                            val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                        } while (event.changes.any { it.pressed })
+                    } finally {
+                        isPointerDown = false
+                    }
+                }
+            },
     ) {
         val viewportPx = constraints.maxWidth
         val halfViewportDp = with(density) { (viewportPx / 2).toDp() }
@@ -125,23 +209,6 @@ fun EditorTimeline(
             Spacer(Modifier.width(halfViewportDp))
             Column {
                 TimeRuler(layoutDurationMs, pxPerSecond, contentWidthDp)
-
-                val videoTrack = timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
-                val audioTrack = timeline.tracks.firstOrNull { it.type == TrackType.AUDIO }
-                val overlayTrack = timeline.tracks.firstOrNull { it.type == TrackType.OVERLAY }
-
-                val isOverlaySelected = overlayTrack?.clips?.any { it.id == selectedClipId } == true
-
-                val displayTracks = buildList {
-                    if (videoTrack != null) add(videoTrack)
-                    if (isOverlaySelected && overlayTrack != null) {
-                        add(overlayTrack)
-                    } else if (audioTrack != null) {
-                        add(audioTrack)
-                    } else if (overlayTrack != null && overlayTrack.clips.isNotEmpty()) {
-                        add(overlayTrack)
-                    }
-                }
 
                 if (displayTracks.isEmpty()) {
                     Spacer(Modifier.width(contentWidthDp).height(TRACK_HEIGHT.dp))
@@ -161,7 +228,7 @@ fun EditorTimeline(
                         onMoveCommit = onMoveCommit,
                         onLoadWaveform = onLoadWaveform,
                         onAddMedia = onAddMedia,
-                        playheadMs = playheadMs,
+                        playheadMsProvider = { currentPlayheadMs },
                     )
                 }
             }
@@ -225,7 +292,7 @@ private fun TrackLane(
     onMoveCommit: () -> Unit,
     onLoadWaveform: (suspend (String) -> FloatArray)?,
     onAddMedia: () -> Unit,
-    playheadMs: Long,
+    playheadMsProvider: () -> Long,
 ) {
     val density = LocalDensity.current
     Box(
@@ -249,7 +316,7 @@ private fun TrackLane(
                     onMoveClip = onMoveClip,
                     onMoveCommit = onMoveCommit,
                     onLoadWaveform = onLoadWaveform,
-                    playheadMs = playheadMs,
+                    playheadMsProvider = playheadMsProvider,
                 )
             }
         }
@@ -300,7 +367,7 @@ private fun ClipBlock(
     onMoveClip: (String, Long) -> Unit = { _, _ -> },
     onMoveCommit: () -> Unit = {},
     onLoadWaveform: (suspend (String) -> FloatArray)? = null,
-    playheadMs: Long = 0L,
+    playheadMsProvider: () -> Long = { 0L },
 ) {
     val density = LocalDensity.current
     val widthDp = with(density) { (clip.timelineDurationMs / 1000f * pxPerSecond).toDp() }
@@ -381,40 +448,33 @@ private fun ClipBlock(
             )
         }
 
-        if (trackType == TrackType.OVERLAY && clip.keyframes.isNotEmpty()) {
-            clip.keyframes.forEach { kf ->
-                val kfOffsetDp = with(density) { (kf.timeMs / 1000f * pxPerSecond).toDp() }
-                val isCurrent = abs(playheadMs - (clip.timelineStartMs + kf.timeMs)) <= 150L
+        val hasOverlayKfs = trackType == TrackType.OVERLAY && clip.keyframes.isNotEmpty()
+        val scKfs = clip.scorecard?.keyframes
+        if (hasOverlayKfs || !scKfs.isNullOrEmpty()) {
+            Canvas(modifier = Modifier.matchParentSize()) {
+                val curPlayhead = playheadMsProvider()
+                val pxPerMs = pxPerSecond / 1000f
+                val cy = size.height / 2f
 
-                Box(
-                    modifier = Modifier
-                        .offset(x = kfOffsetDp - 5.dp)
-                        .align(Alignment.CenterStart)
-                        .size(11.dp)
-                        .graphicsLayer { rotationZ = 45f }
-                        .background(if (isCurrent) Color(0xFFFF3B5C) else Color(0xFFFFD700))
-                        .border(1.dp, Color.Black, RoundedCornerShape(1.dp)),
-                )
-            }
-        }
+                if (hasOverlayKfs) {
+                    val side = 11.dp.toPx()
+                    clip.keyframes.forEach { kf ->
+                        val cx = kf.timeMs * pxPerMs
+                        val isCurrent = abs(curPlayhead - (clip.timelineStartMs + kf.timeMs)) <= 150L
+                        val color = if (isCurrent) Color(0xFFFF3B5C) else Color(0xFFFFD700)
+                        drawRotatedDiamond(cx, cy, side, color)
+                    }
+                }
 
-        // ==================== Scorecard Keyframe Diamonds (Smart Cast Safe) ====================
-        val sc = clip.scorecard
-        if (sc != null) {
-            val kfs = sc.keyframes
-            kfs.forEach { kf ->
-                val kfOffsetDp = with(density) { (kf.timeMs / 1000f * pxPerSecond).toDp() }
-                val isCurrent = abs(playheadMs - (clip.timelineStartMs + kf.timeMs)) <= 200L
-
-                Box(
-                    modifier = Modifier
-                        .offset(x = kfOffsetDp - 5.dp)
-                        .align(Alignment.CenterStart)
-                        .size(10.dp)
-                        .graphicsLayer { rotationZ = 45f }
-                        .background(if (isCurrent) Color(0xFFFF3B5C) else Color(0xFFFFE300))
-                        .border(1.dp, Color.Black, RoundedCornerShape(1.dp)),
-                )
+                if (!scKfs.isNullOrEmpty()) {
+                    val side = 10.dp.toPx()
+                    scKfs.forEach { kf ->
+                        val cx = kf.timeMs * pxPerMs
+                        val isCurrent = abs(curPlayhead - (clip.timelineStartMs + kf.timeMs)) <= 200L
+                        val color = if (isCurrent) Color(0xFFFF3B5C) else Color(0xFFFFE300)
+                        drawRotatedDiamond(cx, cy, side, color)
+                    }
+                }
             }
         }
 
@@ -427,6 +487,16 @@ private fun ClipBlock(
                 onTrimCommit = onTrimCommit,
             )
         }
+    }
+}
+
+private fun DrawScope.drawRotatedDiamond(cx: Float, cy: Float, sidePx: Float, color: Color) {
+    val half = sidePx / 2f
+    val topLeft = Offset(cx - half, cy - half)
+    val boxSize = Size(sidePx, sidePx)
+    rotate(degrees = 45f, pivot = Offset(cx, cy)) {
+        drawRect(color = color, topLeft = topLeft, size = boxSize)
+        drawRect(color = Color.Black, topLeft = topLeft, size = boxSize, style = Stroke(width = 1.dp.toPx()))
     }
 }
 
