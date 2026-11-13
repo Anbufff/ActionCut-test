@@ -36,10 +36,9 @@ enum class ScoreCardType(val label: String, val accent: Int) {
 
 /**
  * Turns a cropped scoreboard screenshot into the TEXT layer of a broadcast-style card:
- * rows are split at the separator lines (see [ScoreRowSplitter]), each row has its white
- * background punched out (a coloured header bar keeps only its text), and for the dark designs the
- * text is re-painted light. The row containers (glass / gold / pop) are drawn by [ScoreCardComposer].
- * The result is a transparent-background ARGB bitmap.
+ * rows are split at the separator lines (see [ScoreRowSplitter]), each row has its white/light-gray
+ * background punched out cleanly (a coloured header bar keeps only pure crisp white text), and for
+ * dark designs the text is re-painted light.
  */
 object ScoreCardRenderer {
 
@@ -51,14 +50,14 @@ object ScoreCardRenderer {
     /** null = keep the screenshot's own (dark) text colours, used on light row designs. */
     private fun schemeFor(themeIdx: Int, selected: Boolean): TextScheme? = when (ScoreCardComposer.normTheme(themeIdx)) {
         0 -> if (selected) {
-            TextScheme(WHITE, 0xFFFFD400.toInt(), 0xFFFFB3C0.toInt())
+            TextScheme(WHITE, 0xFFFFD400.toInt(), 0xFFFFC4CE.toInt())
         } else {
-            TextScheme(WHITE, WHITE, 0xFF8DA2CC.toInt())
+            TextScheme(WHITE, WHITE, 0xFF9FB4DC.toInt())
         }
         1 -> if (selected) {
-            TextScheme(0xFF1A1208.toInt(), 0xFF1A1208.toInt(), 0xFF6B4E12.toInt())
+            TextScheme(0xFF1A1208.toInt(), 0xFF1A1208.toInt(), 0xFF5C420E.toInt())
         } else {
-            TextScheme(WHITE, WHITE, 0xFF9A9AA8.toInt())
+            TextScheme(WHITE, WHITE, 0xFFAAB0C2.toInt())
         }
         else -> null
     }
@@ -148,8 +147,7 @@ object ScoreCardRenderer {
 
     /**
      * Dark text on a (made-transparent) white row -> light text for dark row designs.
-     * Opacity comes from how dark the pixel was, so anti-aliased edges stay smooth and the pale
-     * background haze disappears. Blue = names, near-black = numbers, grey = dismissal text.
+     * Blue = names, near-black = numbers, grey = dismissal text.
      */
     private fun recolorForDark(px: IntArray, scheme: TextScheme) {
         for (i in px.indices) {
@@ -160,15 +158,15 @@ object ScoreCardRenderer {
             val g = (p shr 8) and 0xFF
             val b = p and 0xFF
             val lum = (r * 299 + g * 587 + b * 114) / 1000
-            val coverage = ((235 - lum) * 255 / 150).coerceIn(0, 255)
+            val coverage = ((230 - lum) * 255 / 135).coerceIn(0, 255)
             val alpha = coverage * a0 / 255
             if (alpha <= 6) {
                 px[i] = 0
                 continue
             }
             val target = when {
-                b - r > 40 -> scheme.name
-                lum < 90 -> scheme.number
+                b - r > 35 -> scheme.name
+                lum < 95 -> scheme.number
                 else -> scheme.muted
             }
             px[i] = (alpha shl 24) or (target and 0x00FFFFFF)
@@ -207,31 +205,46 @@ object ScoreCardRenderer {
         return Rgbn((r / n).toInt(), (g / n).toInt(), (b / n).toInt(), n)
     }
 
-    /** Near-white -> transparent so the pastel gradient behind shows through; soft edge for AA text. */
+    /**
+     * Near-white & light neutral-gray (column header / separator residue) -> transparent,
+     * keeping smooth anti-aliased edges on dark/colored text.
+     */
     private fun whiteToTransparent(px: IntArray) {
         for (i in px.indices) {
             val p = px[i]
-            val m = minOf((p shr 16) and 0xFF, (p shr 8) and 0xFF, p and 0xFF)
-            if (m >= 246) {
+            val r = (p shr 16) and 0xFF
+            val g = (p shr 8) and 0xFF
+            val b = p and 0xFF
+            val m = minOf(r, g, b)
+            val spread = maxOf(r, g, b) - m
+            if (m >= 244 || (m >= 224 && spread < 12)) {
                 px[i] = 0
-            } else if (m > 214) {
-                val a = (246 - m) * 255 / 32
+            } else if (m > 205 && spread < 14) {
+                val a = (224 - m).coerceAtLeast(0) * 255 / 19
                 px[i] = (a shl 24) or (p and 0x00FFFFFF)
             }
         }
     }
 
-    /** Remove the row's own flat background colour (keep the text) so the navy gradient shows. */
+    /**
+     * Remove the row's flat coloured background (e.g. Cricbuzz green header) and render
+     * its light lettering as pure crisp white with zero coloured fringe.
+     */
     private fun removeBackground(px: IntArray, w: Int, h: Int) {
         val (br, bg, bb, _) = edgeAverage(px, w, h)
+        val bgSum = br + bg + bb
         for (i in px.indices) {
             val p = px[i]
-            val d = abs(((p shr 16) and 0xFF) - br) + abs(((p shr 8) and 0xFF) - bg) + abs((p and 0xFF) - bb)
-            if (d < 60) {
+            val r = (p shr 16) and 0xFF
+            val g = (p shr 8) and 0xFF
+            val b = p and 0xFF
+            val d = abs(r - br) + abs(g - bg) + abs(b - bb)
+            if (d < 55) {
                 px[i] = 0
-            } else if (d < 120) {
-                val a = (d - 60) * 255 / 60
-                px[i] = (a shl 24) or (p and 0x00FFFFFF)
+            } else {
+                val alpha = ((d - 55) * 255 / 140).coerceIn(0, 255)
+                val outRgb = if (r + g + b > bgSum + 30) 0x00FFFFFF else (p and 0x00FFFFFF)
+                px[i] = (alpha shl 24) or outRgb
             }
         }
     }
