@@ -199,6 +199,7 @@ object ScorecardManager {
 
     fun getActiveBitmap(clipId: String, data: ScorecardClipData, timeInClipMs: Long): Bitmap? {
         val (baseBmp, targetRect) = resolveRowBitmapAndRect(data, timeInClipMs) ?: return null
+        val isCdnVector = data.sourceImageUri.endsWith(".json", ignoreCase = true)
         synchronized(previewFrameLock) {
             val idx = previewFrameIdx
             previewFrameIdx = (previewFrameIdx + 1) and 1
@@ -215,7 +216,13 @@ object ScorecardManager {
             canvas.drawColor(0, PorterDuff.Mode.CLEAR)
             canvas.drawBitmap(baseBmp, 0f, 0f, null)
             if (targetRect != null) {
-                ScoreCardComposer.drawBouncingArrow(canvas, targetRect, timeInClipMs, data.themeIdx)
+                ScoreCardComposer.drawBouncingArrow(
+                    canvas,
+                    targetRect,
+                    timeInClipMs,
+                    data.themeIdx,
+                    compact = isCdnVector,
+                )
             }
             return out
         }
@@ -223,6 +230,7 @@ object ScorecardManager {
 
     fun getExportBitmap(clipId: String, data: ScorecardClipData, timeInClipMs: Long): Bitmap? {
         val (baseBmp, targetRect) = resolveRowBitmapAndRect(data, timeInClipMs) ?: return null
+        val isCdnVector = data.sourceImageUri.endsWith(".json", ignoreCase = true)
         synchronized(exportFrameLock) {
             val idx = exportFrameIdx
             exportFrameIdx = (exportFrameIdx + 1) and 1
@@ -239,7 +247,13 @@ object ScorecardManager {
             canvas.drawColor(0, PorterDuff.Mode.CLEAR)
             canvas.drawBitmap(baseBmp, 0f, 0f, null)
             if (targetRect != null) {
-                ScoreCardComposer.drawBouncingArrow(canvas, targetRect, timeInClipMs, data.themeIdx)
+                ScoreCardComposer.drawBouncingArrow(
+                    canvas,
+                    targetRect,
+                    timeInClipMs,
+                    data.themeIdx,
+                    compact = isCdnVector,
+                )
             }
             return out
         }
