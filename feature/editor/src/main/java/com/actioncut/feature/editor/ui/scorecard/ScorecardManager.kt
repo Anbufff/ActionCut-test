@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.PorterDuff
 import android.graphics.RectF
 import android.net.Uri
 import com.actioncut.core.media.export.ScorecardBridge
@@ -109,6 +110,8 @@ object ScorecardManager {
                 dynamicFrameCanvas = Canvas(dynamicFrameBitmap!!)
             }
             val canvas = dynamicFrameCanvas ?: return baseBmp
+            // பழைய பிரேமை முழுமையாக அழிக்கவும் (இல்லையெனில் பழைய அம்புகளும் சிவப்புக் கோடுகளும் தங்கிவிடும்)
+            canvas.drawColor(0, PorterDuff.Mode.CLEAR)
             canvas.drawBitmap(baseBmp, 0f, 0f, null)
             if (targetRect != null) {
                 ScoreCardComposer.drawBouncingArrow(canvas, targetRect, timeInClipMs)
