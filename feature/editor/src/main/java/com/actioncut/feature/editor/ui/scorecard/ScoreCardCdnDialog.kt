@@ -96,6 +96,7 @@ fun ScoreCardCdnDialog(
                 library = library,
                 themeIdx = themeIdx,
                 opponentName = opponent,
+                staticRunsTimeMs = 0L,
             )
         }
         val rows = CdnVectorScoreCardComposer.buildRows(inn, type)
