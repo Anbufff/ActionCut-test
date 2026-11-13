@@ -79,7 +79,6 @@ fun ScoreCardCdnDialog(
     var photoVersion by remember { mutableIntStateOf(0) }
     var composed by remember { mutableStateOf<ComposedCard?>(null) }
 
-    // Render preview frame and fetch selected player's photo on-demand if not yet cached
     LaunchedEffect(matchData, inningsIdx, type, selectedRow, themeIdx, photoVersion) {
         val inn = matchData?.innings?.getOrNull(inningsIdx) ?: return@LaunchedEffect
         composed = withContext(Dispatchers.Default) {
@@ -93,7 +92,6 @@ fun ScoreCardCdnDialog(
         }
     }
 
-    // Background prefetch for the rest of the current innings photos
     LaunchedEffect(matchData, inningsIdx) {
         val inn = matchData?.innings?.getOrNull(inningsIdx) ?: return@LaunchedEffect
         CdnScorecardClient.downloadInningsPhotos(context, workerUrl, inn)
@@ -242,7 +240,6 @@ fun ScoreCardCdnDialog(
                             val inn = data?.innings?.getOrNull(inningsIdx) ?: return@Button
                             saving = true
                             scope.launch {
-                                // Ensure all photos in this innings are downloaded before baking timeline frames
                                 CdnScorecardClient.downloadInningsPhotos(context, workerUrl, inn)
 
                                 val clipId = "sc_${System.currentTimeMillis()}"
