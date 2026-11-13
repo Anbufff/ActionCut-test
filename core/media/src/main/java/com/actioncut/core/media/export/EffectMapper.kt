@@ -39,7 +39,6 @@ import com.actioncut.core.model.SpeedRamp
 import com.actioncut.core.model.SpeedRamps
 import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.VisualEffectType
-import com.google.common.collect.ImmutableList
 import java.io.File
 
 object ScorecardBridge {
@@ -129,7 +128,7 @@ object EffectMapper {
 
         if (clip.scorecard != null) {
             val scOverlay = DynamicScorecardOverlay(clip.id, clip.scorecard!!, targetWidth, targetHeight, isFbTemplate)
-            effects += OverlayEffect(ImmutableList.of(scOverlay))
+            effects += OverlayEffect(listOf<TextureOverlay>(scOverlay))
         }
 
         if (templateOverlay != null) {
@@ -164,9 +163,9 @@ object EffectMapper {
             TextOverlay.createStaticTextOverlay(span, settings)
         }
         val imageOverlays: List<TextureOverlay> = images.mapNotNull { imageOverlay(it, clip, targetWidth) }
-        val textureOverlays = textOverlays + imageOverlays
+        val textureOverlays: List<TextureOverlay> = textOverlays + imageOverlays
         if (textureOverlays.isEmpty()) return null
-        return OverlayEffect(ImmutableList.copyOf(textureOverlays))
+        return OverlayEffect(textureOverlays)
     }
 
     private fun imageOverlay(ov: Clip, clip: Clip, targetWidth: Int): TextureOverlay? {
