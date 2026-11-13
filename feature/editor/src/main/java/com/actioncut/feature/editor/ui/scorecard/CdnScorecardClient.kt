@@ -4,6 +4,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -74,7 +79,8 @@ object CdnScorecardClient {
             .apply()
     }
 
-    suspend fun fetch(context: Context, workerBaseUrl: String, matchInput: String): Result<Pair<CdnMatchScorecard, String>> =
+    /** Fetches match scorecard JSON immediately without blocking on all player photos. */
+    suspend fun fetchMatchOnly(workerBaseUrl: String, matchInput: String): Result<Pair<CdnMatchScorecard, String>> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val base = workerBaseUrl.trim().trimEnd('/')
@@ -100,11 +106,87 @@ object CdnScorecardClient {
 
                 val parsed = parseJson(body)
                 require(parsed.innings.isNotEmpty()) { "Scorecard data not available for this match yet." }
-
-                downloadPlayerPhotos(context, base, parsed)
                 parsed to body
             }
         }
+
+    /** Downloads all batter & bowler photos for an innings in parallel (up to 6 concurrent). */
+    suspend fun downloadInningsPhotos(
+        context: Context,
+        workerBaseUrl: String,
+        innings: CdnInnings,
+    ) = withContext(Dispatchers.IO) {
+        val base = workerBaseUrl.trim().trimEnd('/')
+        if (!base.startsWith("http")) return@withContext
+        val players = buildList {
+            innings.batters.forEach { add(Triple(it.imageId, it.id, it.name)) }
+            innings.bowlers.forEach { add(Triple(it.imageId, it.id, it.name)) }
+        }.distinctBy { (imgId, pid, _) -> "${imgId.orEmpty()}_${pid.orEmpty()}" }
+
+        val gate = Semaphore(6)
+        coroutineScope {
+            players.map { (imgId, pid, name) ->
+                async {
+                    gate.withPermit {
+                        ensurePlayerPhoto(context, base, imgId, pid, name)
+                    }
+                }
+            }.awaitAll()
+        }
+    }
+
+    /** Ensures a single player's 600x600 Cricbuzz photo is cached locally and returns true if downloaded/present. */
+    suspend fun ensurePlayerPhoto(
+        context: Context,
+        workerBaseUrl: String,
+        imageId: String?,
+        playerId: String?,
+        playerName: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val dir = File(context.filesDir, "scorecards/cdn_players").apply { mkdirs() }
+        val target = when {
+            !imageId.isNullOrBlank() -> File(dir, "img_$imageId.jpg")
+            !playerId.isNullOrBlank() -> File(dir, "pid_$playerId.jpg")
+            else -> return@withContext false
+        }
+        if (target.exists() && target.length() > 0L) return@withContext true
+
+        val base = workerBaseUrl.trim().trimEnd('/')
+        if (!base.startsWith("http")) return@withContext false
+        val sep = if (base.contains("?")) "&" else "?"
+        val imgUrl = when {
+            !imageId.isNullOrBlank() -> "${base}${sep}imgId=$imageId"
+            else -> "${base}${sep}playerId=$playerId&name=${URLEncoder.encode(playerName, "UTF-8")}"
+        }
+
+        runCatching {
+            val conn = (URL(imgUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 8_000
+                readTimeout = 10_000
+            }
+            val ok = if (conn.responseCode in 200..299) {
+                val bmp = conn.inputStream.use { BitmapFactory.decodeStream(it) }
+                if (bmp != null) {
+                    val tmp = File(dir, "${target.name}.tmp")
+                    FileOutputStream(tmp).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+                    bmp.recycle()
+                    tmp.renameTo(target)
+                } else false
+            } else false
+            conn.disconnect()
+            ok
+        }.getOrDefault(false)
+    }
+
+    fun cachedPlayerPhoto(context: Context, imageId: String?, playerId: String?): Bitmap? {
+        val dir = File(context.filesDir, "scorecards/cdn_players")
+        val candidates = buildList {
+            if (!imageId.isNullOrBlank()) add(File(dir, "img_$imageId.jpg"))
+            if (!playerId.isNullOrBlank()) add(File(dir, "pid_$playerId.jpg"))
+        }
+        val file = candidates.firstOrNull { it.exists() && it.length() > 0L } ?: return null
+        return runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()
+    }
 
     fun parseJson(raw: String): CdnMatchScorecard {
         val root = JSONObject(raw)
@@ -161,54 +243,5 @@ object CdnScorecardClient {
             source = root.optString("source", ""),
             innings = inningsList,
         )
-    }
-
-    private fun downloadPlayerPhotos(context: Context, workerBase: String, match: CdnMatchScorecard) {
-        val dir = File(context.filesDir, "scorecards/cdn_players").apply { mkdirs() }
-        val sep = if (workerBase.contains("?")) "&" else "?"
-
-        val triples = buildList {
-            match.innings.forEach { inn ->
-                inn.batters.forEach { add(Triple(it.imageId, it.id, it.name)) }
-                inn.bowlers.forEach { add(Triple(it.imageId, it.id, it.name)) }
-            }
-        }.distinctBy { (imgId, pid, _) -> "${imgId.orEmpty()}_${pid.orEmpty()}" }
-
-        triples.forEach { (imgId, pid, pName) ->
-            val target = when {
-                !imgId.isNullOrBlank() -> File(dir, "img_$imgId.jpg")
-                !pid.isNullOrBlank() -> File(dir, "pid_$pid.jpg")
-                else -> return@forEach
-            }
-            if (target.exists() && target.length() > 0L) return@forEach
-            val imgUrl = when {
-                !imgId.isNullOrBlank() -> "${workerBase}${sep}imgId=$imgId"
-                else -> "${workerBase}${sep}playerId=$pid&name=${URLEncoder.encode(pName, "UTF-8")}"
-            }
-            runCatching {
-                val conn = (URL(imgUrl).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 8_000
-                    readTimeout = 10_000
-                }
-                if (conn.responseCode in 200..299) {
-                    val bmp = conn.inputStream.use { BitmapFactory.decodeStream(it) }
-                    if (bmp != null) {
-                        FileOutputStream(target).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
-                        bmp.recycle()
-                    }
-                }
-                conn.disconnect()
-            }
-        }
-    }
-
-    fun cachedPlayerPhoto(context: Context, imageId: String?, playerId: String?): Bitmap? {
-        val dir = File(context.filesDir, "scorecards/cdn_players")
-        val candidates = buildList {
-            if (!imageId.isNullOrBlank()) add(File(dir, "img_$imageId.jpg"))
-            if (!playerId.isNullOrBlank()) add(File(dir, "pid_$playerId.jpg"))
-        }
-        val file = candidates.firstOrNull { it.exists() && it.length() > 0L } ?: return null
-        return runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()
     }
 }
