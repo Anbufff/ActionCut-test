@@ -128,7 +128,7 @@ object EffectMapper {
         }
 
         if (clip.scorecard != null) {
-            val scOverlay = DynamicScorecardOverlay(clip.id, clip.scorecard!!)
+            val scOverlay = DynamicScorecardOverlay(clip.id, clip.scorecard!!, targetWidth, targetHeight, isFbTemplate)
             effects += OverlayEffect(ImmutableList.of(scOverlay))
         }
 
@@ -228,12 +228,29 @@ object EffectMapper {
     }
 }
 
+/** Width of the scorecard bitmap. Keep in sync with ScoreCardComposer.CANVAS_W (feature module). */
+private const val SCORECARD_CANVAS_W = 1920f
+
 private class DynamicScorecardOverlay(
     private val clipId: String,
-    private val data: ScorecardClipData
+    private val data: ScorecardClipData,
+    targetWidth: Int,
+    targetHeight: Int,
+    isFbTemplate: Boolean,
 ) : BitmapOverlay() {
 
-    private val defaultSettings = OverlaySettings.Builder().build()
+    // The card is a 1920x1080 (16:9) bitmap. Overlays are drawn at their pixel size, so scale it to the
+    // output frame width. In the 4:5 TPL layout it must sit inside the top 16:9 box (the same place the
+    // main video is moved to), not in the middle of the frame where the bar and bottom image cover it.
+    private val settings: OverlaySettings = run {
+        val factor = targetWidth / SCORECARD_CANVAS_W
+        val builder = OverlaySettings.Builder().setScale(factor, factor)
+        if (isFbTemplate && targetHeight > 0) {
+            val boxHeight = targetWidth * 9f / 16f
+            builder.setBackgroundFrameAnchor(0f, 1f - boxHeight / targetHeight)
+        }
+        builder.build()
+    }
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         val timeInClipMs = presentationTimeUs / 1000L
@@ -242,7 +259,7 @@ private class DynamicScorecardOverlay(
     }
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings {
-        return defaultSettings
+        return settings
     }
 }
 
