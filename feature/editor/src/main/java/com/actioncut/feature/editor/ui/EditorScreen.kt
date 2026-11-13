@@ -181,19 +181,25 @@ fun EditorScreen(
             },
         )
 
-        val activePipClips = uiState.timeline.tracks
-            .filter { it.type == TrackType.OVERLAY }
-            .flatMap { it.clips }
-            .filter { it.mediaUri?.contains("news_banner") != true }
+        val activePipClips = remember(uiState.timeline) {
+            uiState.timeline.tracks
+                .filter { it.type == TrackType.OVERLAY }
+                .flatMap { it.clips }
+                .filter { it.mediaUri?.contains("news_banner") != true }
+        }
+
+        val activeOverlays = remember(uiState.timeline) {
+            uiState.timeline.allClips.filter {
+                it.type == ClipType.TEXT || it.type == ClipType.STICKER
+            }
+        }
 
         PreviewPlayer(
             player = viewModel.playerController.player,
             aspectRatio = uiState.aspectRatio,
             isPlaying = uiState.isPlaying,
             onTogglePlay = viewModel::togglePlayPause,
-            overlays = uiState.timeline.allClips.filter {
-                it.type == ClipType.TEXT || it.type == ClipType.STICKER
-            },
+            overlays = activeOverlays,
             playheadMs = uiState.playheadMs,
             selectedClipId = uiState.selectedClipId,
             onSelectOverlay = viewModel::selectClip,
@@ -231,7 +237,7 @@ fun EditorScreen(
             pxPerSecond = uiState.pxPerSecond,
             isPlaying = uiState.isPlaying,
             selectedClipId = uiState.selectedClipId,
-            onScrub = viewModel::seekTo,
+            onScrub = viewModel::scrubTo,
             onSelectClip = viewModel::selectClip,
             onTrimStart = viewModel::trimStart,
             onTrimEnd = viewModel::trimEnd,
@@ -240,6 +246,9 @@ fun EditorScreen(
             onMoveCommit = viewModel::commitArrangement,
             onLoadWaveform = viewModel::loadWaveform,
             onAddMedia = { addMediaPicker.launch(arrayOf("image/*", "video/*")) },
+            onPause = viewModel::pause,
+            onScrubStart = viewModel::beginScrub,
+            onScrubEnd = viewModel::endScrub,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(120.dp),
