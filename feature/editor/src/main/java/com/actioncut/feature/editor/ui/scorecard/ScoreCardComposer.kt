@@ -19,7 +19,7 @@ data class ComposedCard(val bitmap: Bitmap, val rowRects: List<RectF>)
 
 /**
  * Draws the whole scorecard frame (rows list on the left, key-player panel on the right) in one of
- * three designs: 0 = Neon Night (default), 1 = Royal Gold, 2 = Sunset Pop.
+ * three broadcast designs: 0 = Neon Night (default), 1 = Royal Gold, 2 = Sunset Pop.
  * The background of the frame is left fully transparent so the match video shows through.
  */
 object ScoreCardComposer {
@@ -27,11 +27,11 @@ object ScoreCardComposer {
     const val CANVAS_H = 1080f
     const val THEME_COUNT = 3
 
-    /** Row text is shifted right by this many px so the first letter clears the coloured bar. */
-    private const val TEXT_LEFT_INSET = 30f
-
-    /** Gap between the rows list and the key-player panel (was ~116px). */
-    private const val PANEL_GAP = 12f
+    private const val LIST_LEFT = 24f
+    private const val LIST_WIDTH = 860f
+    private const val PANEL_LEFT = LIST_LEFT + LIST_WIDTH // 884f — 0px gap between names & player photo
+    private const val TEXT_PAD_LEFT = 36f
+    private const val TEXT_PAD_RIGHT = 14f
 
     fun normTheme(idx: Int): Int = ((idx % THEME_COUNT) + THEME_COUNT) % THEME_COUNT
 
@@ -69,16 +69,17 @@ object ScoreCardComposer {
         // 1. பின்னணி வெளிப்படையாக (transparent) - அசல் மைதான வீடியோ பின்னால் தெரியும்
 
         // 2. இடதுபுறம்: ஸ்கோர்கார்டு வரிகள்
-        val listLeft = 24f
-        val listWidth = 820f
-        val listTop = 32f
-        val listBottom = CANVAS_H - 32f
+        val listLeft = LIST_LEFT
+        val listWidth = LIST_WIDTH
+        val listTop = 28f
+        val listBottom = CANVAS_H - 28f
         val listHeight = listBottom - listTop
+        val textWidth = listWidth - TEXT_PAD_LEFT - TEXT_PAD_RIGHT
 
         val rowHeights = card.rows.map { r ->
             val srcW = r.rect.width().coerceAtLeast(1f)
             val srcH = r.rect.height().coerceAtLeast(1f)
-            listWidth * (srcH / srcW)
+            textWidth * (srcH / srcW)
         }
         val gap = 6f
         val totalH = rowHeights.sum() + gap * (card.rows.size - 1)
@@ -99,7 +100,7 @@ object ScoreCardComposer {
 
         val renderedRowRects = ArrayList<RectF>()
         c.save()
-        c.clipRect(listLeft - 10f, listTop - 12f, listLeft + listWidth + 20f, listBottom + 12f)
+        c.clipRect(listLeft - 10f, listTop - 10f, listLeft + listWidth + 10f, listBottom + 10f)
 
         val selBitmap = card.selectedBitmap
         var currY = cY
@@ -115,9 +116,13 @@ object ScoreCardComposer {
                 rInfo.rect.right.toInt(),
                 rInfo.rect.bottom.toInt()
             )
-            // எழுத்துகளை வலப்புறம் நகர்த்துகிறோம்: முதல் எழுத்து நிறக் கோட்டின் (accent bar) மேல்
-            // மறைந்து போகாமல் தெளிவாகத் தெரியும். வரிசையின் அளவு/இடம் மாறாது.
-            val dstRect = RectF(rowRect.left + TEXT_LEFT_INSET, rowRect.top, rowRect.right, rowRect.bottom)
+            // அனைத்துப் பெயர்களின் முதல் எழுத்தும் தெளிவாகத் தெரிய வலதுபுறம் நகர்த்தப்பட்டுள்ளது
+            val dstRect = RectF(
+                rowRect.left + TEXT_PAD_LEFT,
+                rowRect.top,
+                rowRect.right - TEXT_PAD_RIGHT,
+                rowRect.bottom
+            )
 
             val isSel = i == selected
             val accentIdx = if (!rInfo.isHeader && !rInfo.isColumnHeader) playerCounter++ else 0
@@ -133,14 +138,14 @@ object ScoreCardComposer {
         }
         c.restore()
 
-        // 3. வலதுபுறம்: பிளேயர் பேனல்
+        // 3. வலதுபுறம்: பிளேயர் பேனல் (இடைவெளி இல்லாமல் இடதுபுறத்துடன் இணைக்கப்பட்டுள்ளது)
         drawPlayerPanel(c, p, bmpPaint, theme, type, player, photo, fallbackName)
 
         return ComposedCard(out, renderedRowRects)
     }
 
     // ------------------------------------------------------------------------------------------
-    //  Row containers
+    //  Row containers (Pro TV Broadcast Style)
     // ------------------------------------------------------------------------------------------
 
     private fun fillRR(c: Canvas, p: Paint, r: RectF, rad: Float, color: Int) {
@@ -183,6 +188,16 @@ object ScoreCardComposer {
         p.maskFilter = null
     }
 
+    private fun drawGlassHighlight(c: Canvas, p: Paint, r: RectF, rad: Float, alphaTop: Int = 0x22) {
+        val h = r.height()
+        val topRect = RectF(r.left + 1.5f, r.top + 1.5f, r.right - 1.5f, r.top + h * 0.44f)
+        gradRR(
+            c, p, topRect, max(rad - 2f, 4f),
+            intArrayOf((alphaTop shl 24) or 0xFFFFFF, 0x00FFFFFF),
+            null, false
+        )
+    }
+
     private fun drawRowContainer(
         c: Canvas,
         p: Paint,
@@ -193,87 +208,129 @@ object ScoreCardComposer {
         accentIdx: Int,
     ) {
         val h = rect.height()
-        val rad = min(h * 0.22f, 22f)
-        val barRect = RectF(rect.left + 14f, rect.top + h * 0.2f, rect.left + 21f, rect.bottom - h * 0.2f)
+        val rad = min(h * 0.22f, 20f)
+        val barRect = RectF(rect.left + 12f, rect.top + h * 0.18f, rect.left + 18f, rect.bottom - h * 0.18f)
+
         when (theme) {
-            0 -> { // Neon Night
+            0 -> { // Neon Night Broadcast
                 if (selected) {
-                    glowRR(c, p, rect, rad, 0xAAFF2D4A.toInt(), 16f, 2f, 0f)
-                    gradRR(c, p, rect, rad, intArrayOf(0xFF58102A.toInt(), 0xFF1B0B33.toInt()), null, true)
-                    strokeRR(c, p, rect, rad, 0xFFFF3B5C.toInt(), 4f)
-                    fillRR(c, p, barRect, 3.5f, 0xFFFFD400.toInt())
+                    glowRR(c, p, rect, rad, 0xCCFF2D4A.toInt(), 18f, 3f, 0f)
+                    gradRR(
+                        c, p, rect, rad,
+                        intArrayOf(0xFF7A1236.toInt(), 0xFF3E0F40.toInt(), 0xFF150A30.toInt()),
+                        floatArrayOf(0f, 0.55f, 1f), true
+                    )
+                    drawGlassHighlight(c, p, rect, rad, 0x26)
+                    strokeRR(c, p, rect, rad, 0xFFFF3B5C.toInt(), 3.5f)
+                    val innerBevel = RectF(rect.left + 3f, rect.top + 3f, rect.right - 3f, rect.bottom - 3f)
+                    strokeRR(c, p, innerBevel, max(rad - 2f, 4f), 0x38FFFFFF, 1.2f)
+                    fillRR(c, p, barRect, 3f, 0xFFFFD400.toInt())
                 } else if (info.isHeader) {
-                    glowRR(c, p, rect, rad, 0x962563FF.toInt(), 14f, 0f, 0f)
-                    gradRR(c, p, rect, rad, intArrayOf(0xFF0A2596.toInt(), 0xFF2B6BFF.toInt()), null, true)
-                    fillRR(c, p, RectF(rect.left, rect.top, rect.right, rect.top + h * 0.45f), rad, 0x1AFFFFFF)
-                    fillRR(c, p, barRect, 3.5f, 0xFF00E5FF.toInt())
-                } else if (info.isColumnHeader) {
-                    fillRR(c, p, rect, rad, 0xB90A1430.toInt())
-                    strokeRR(c, p, rect, rad, 0x18FFFFFF, 1.5f)
-                } else {
-                    fillRR(c, p, rect, rad, 0xDE0A1430.toInt())
-                    strokeRR(c, p, rect, rad, 0x1EFFFFFF, 1.5f)
-                    fillRR(c, p, barRect, 3.5f, NEON_ACCENTS[accentIdx % NEON_ACCENTS.size])
-                }
-            }
-            1 -> { // Royal Gold
-                val goldA = 0xFFF6D77A.toInt()
-                val goldB = 0xFFC8922A.toInt()
-                if (selected) {
-                    glowRR(c, p, rect, rad, 0xA0FFC83D.toInt(), 18f, 2f, 0f)
-                    gradRR(c, p, rect, rad, intArrayOf(0xFFFBE49A.toInt(), 0xFFD6A03A.toInt()), null, true)
-                    strokeRR(c, p, rect, rad, 0xFFFFF6D6.toInt(), 3f)
-                    fillRR(c, p, barRect, 3.5f, 0xFF1A1208.toInt())
-                } else if (info.isHeader) {
-                    glowRR(c, p, rect, rad, 0xA0000000.toInt(), 12f, 0f, 5f)
-                    gradRR(c, p, rect, rad, intArrayOf(0xFF6E1429.toInt(), 0xFF2A0710.toInt()), null, true)
-                    fillRR(c, p, RectF(rect.left, rect.top, rect.right, rect.top + h * 0.42f), rad, 0x12FFFFFF)
+                    glowRR(c, p, rect, rad, 0xAA2563FF.toInt(), 16f, 1f, 0f)
+                    gradRR(
+                        c, p, rect, rad,
+                        intArrayOf(0xFF071B73.toInt(), 0xFF1446C8.toInt(), 0xFF009CE8.toInt()),
+                        floatArrayOf(0f, 0.58f, 1f), true
+                    )
+                    drawGlassHighlight(c, p, rect, rad, 0x2A)
+                    strokeRR(c, p, rect, rad, 0x6600E5FF, 1.8f)
+                    fillRR(c, p, barRect, 3f, 0xFF00E5FF.toInt())
                     gradRR(
                         c, p,
-                        RectF(rect.left + 26f, rect.bottom - 6f, rect.right - 26f, rect.bottom - 3f),
+                        RectF(rect.left + 26f, rect.bottom - 4f, rect.right - 20f, rect.bottom - 1.5f),
                         1.5f,
-                        intArrayOf(0x00C8922A, goldA, goldB, 0x00C8922A),
-                        floatArrayOf(0f, 0.25f, 0.75f, 1f),
-                        true,
+                        intArrayOf(0xFF00E5FF.toInt(), 0x8000E5FF.toInt(), 0x0000E5FF),
+                        floatArrayOf(0f, 0.5f, 1f), true
                     )
                 } else if (info.isColumnHeader) {
-                    fillRR(c, p, rect, rad, 0xCD0C0C10.toInt())
-                    strokeRR(c, p, rect, rad, 0x50C8922A, 1.5f)
+                    gradRR(c, p, rect, rad, intArrayOf(0xD2081228.toInt(), 0xC80F1E42.toInt()), null, true)
+                    strokeRR(c, p, rect, rad, 0x3300E5FF, 1.5f)
                 } else {
-                    fillRR(c, p, rect, rad, 0xE4101015.toInt())
-                    strokeRR(c, p, rect, rad, 0x55C8922A, 1.5f)
-                    gradRR(c, p, barRect, 3.5f, intArrayOf(goldA, goldB), null, false)
+                    gradRR(
+                        c, p, rect, rad,
+                        intArrayOf(0xEB09132B.toInt(), 0xE20F1D3D.toInt()),
+                        null, true
+                    )
+                    drawGlassHighlight(c, p, rect, rad, 0x0E)
+                    strokeRR(c, p, rect, rad, 0x24FFFFFF, 1.5f)
+                    fillRR(c, p, barRect, 3f, NEON_ACCENTS[accentIdx % NEON_ACCENTS.size])
                 }
             }
-            else -> { // Sunset Pop
+            1 -> { // Royal Gold Broadcast
+                val goldA = 0xFFFFE28A.toInt()
+                val goldB = 0xFFC68A20.toInt()
+                if (selected) {
+                    glowRR(c, p, rect, rad, 0xB8FFC83D.toInt(), 18f, 3f, 0f)
+                    gradRR(
+                        c, p, rect, rad,
+                        intArrayOf(0xFFFFEEAC.toInt(), 0xFFF3C65F.toInt(), 0xFFD4972C.toInt()),
+                        floatArrayOf(0f, 0.5f, 1f), true
+                    )
+                    drawGlassHighlight(c, p, rect, rad, 0x36)
+                    strokeRR(c, p, rect, rad, 0xFFFFF8DC.toInt(), 3f)
+                    fillRR(c, p, barRect, 3f, 0xFF1A1208.toInt())
+                } else if (info.isHeader) {
+                    glowRR(c, p, rect, rad, 0xA8000000.toInt(), 14f, 0f, 5f)
+                    gradRR(
+                        c, p, rect, rad,
+                        intArrayOf(0xFF7D152E.toInt(), 0xFF470B1A.toInt(), 0xFF22050C.toInt()),
+                        floatArrayOf(0f, 0.55f, 1f), true
+                    )
+                    drawGlassHighlight(c, p, rect, rad, 0x1A)
+                    strokeRR(c, p, rect, rad, 0x88F6D77A.toInt(), 1.8f)
+                    fillRR(c, p, barRect, 3f, goldA)
+                    gradRR(
+                        c, p,
+                        RectF(rect.left + 26f, rect.bottom - 5f, rect.right - 22f, rect.bottom - 2f),
+                        1.5f,
+                        intArrayOf(0x00C8922A, goldA, goldB, 0x00C8922A),
+                        floatArrayOf(0f, 0.25f, 0.75f, 1f), true
+                    )
+                } else if (info.isColumnHeader) {
+                    fillRR(c, p, rect, rad, 0xD80D0D12.toInt())
+                    strokeRR(c, p, rect, rad, 0x60C8922A, 1.5f)
+                } else {
+                    gradRR(
+                        c, p, rect, rad,
+                        intArrayOf(0xEC121218.toInt(), 0xE61B1920.toInt()),
+                        null, true
+                    )
+                    drawGlassHighlight(c, p, rect, rad, 0x0C)
+                    strokeRR(c, p, rect, rad, 0x60C8922A, 1.5f)
+                    gradRR(c, p, barRect, 3f, intArrayOf(goldA, goldB), null, false)
+                }
+            }
+            else -> { // Sunset Pop Broadcast
                 val from = POP_FROM[accentIdx % POP_FROM.size]
                 val to = POP_TO[accentIdx % POP_TO.size]
                 if (selected) {
-                    glowRR(c, p, rect, rad, 0xBEFF7A2D.toInt(), 20f, 2f, 0f)
+                    glowRR(c, p, rect, rad, 0xCEFF7A2D.toInt(), 20f, 3f, 0f)
                     gradRR(
                         c, p, rect, rad,
-                        intArrayOf(0xFFFFB300.toInt(), 0xFFFF4D4D.toInt(), 0xFFE61E8C.toInt()),
-                        floatArrayOf(0f, 0.5f, 1f),
-                        true,
+                        intArrayOf(0xFFFFC107.toInt(), 0xFFFF4D4D.toInt(), 0xFFE61E8C.toInt()),
+                        floatArrayOf(0f, 0.5f, 1f), true
                     )
-                    val inner = RectF(rect.left + 5f, rect.top + 5f, rect.right - 5f, rect.bottom - 5f)
+                    val inner = RectF(rect.left + 4.5f, rect.top + 4.5f, rect.right - 4.5f, rect.bottom - 4.5f)
                     fillRR(c, p, inner, max(rad - 2f, 4f), 0xFFFFFFFF.toInt())
-                    gradRR(c, p, barRect, 3.5f, intArrayOf(0xFFFF8A00.toInt(), 0xFFE61E8C.toInt()), null, false)
+                    gradRR(c, p, barRect, 3f, intArrayOf(0xFFFF8A00.toInt(), 0xFFE61E8C.toInt()), null, false)
                 } else if (info.isHeader) {
-                    glowRR(c, p, rect, rad, 0x96C026D3.toInt(), 16f, 0f, 0f)
+                    glowRR(c, p, rect, rad, 0xA4C026D3.toInt(), 16f, 0f, 0f)
                     gradRR(
                         c, p, rect, rad,
-                        intArrayOf(0xFF5B2BFF.toInt(), 0xFFC026D3.toInt(), 0xFFFF6A3D.toInt()),
-                        floatArrayOf(0f, 0.55f, 1f),
-                        true,
+                        intArrayOf(0xFF4F24E8.toInt(), 0xFFC026D3.toInt(), 0xFFFF6A3D.toInt()),
+                        floatArrayOf(0f, 0.55f, 1f), true
                     )
-                    fillRR(c, p, RectF(rect.left, rect.top, rect.right, rect.top + h * 0.45f), rad, 0x22FFFFFF)
+                    drawGlassHighlight(c, p, rect, rad, 0x26)
+                    strokeRR(c, p, rect, rad, 0x55FFFFFF, 1.8f)
+                    fillRR(c, p, barRect, 3f, 0xFFFFE600.toInt())
                 } else if (info.isColumnHeader) {
-                    fillRR(c, p, rect, rad, 0xE1FFFFFF.toInt())
+                    fillRR(c, p, rect, rad, 0xEAFFFFFF.toInt())
+                    strokeRR(c, p, rect, rad, 0x336C2BD9, 1.5f)
                 } else {
-                    glowRR(c, p, rect, rad, 0x5A000000, 10f, 0f, 5f)
-                    fillRR(c, p, rect, rad, 0xF0FFFFFF.toInt())
-                    gradRR(c, p, barRect, 3.5f, intArrayOf(from, to), null, false)
+                    glowRR(c, p, rect, rad, 0x5A000000, 10f, 0f, 4f)
+                    fillRR(c, p, rect, rad, 0xF5FFFFFF.toInt())
+                    strokeRR(c, p, rect, rad, 0x1E000000, 1.2f)
+                    gradRR(c, p, barRect, 3f, intArrayOf(from, to), null, false)
                 }
             }
         }
@@ -283,7 +340,7 @@ object ScoreCardComposer {
     }
 
     // ------------------------------------------------------------------------------------------
-    //  Right-hand key player panel
+    //  Right-hand key player panel (flush with left scorecard rows)
     // ------------------------------------------------------------------------------------------
 
     private fun drawPlayerPanel(
@@ -296,7 +353,7 @@ object ScoreCardComposer {
         photo: Bitmap?,
         fallbackName: String?,
     ) {
-        val pl = 24f + 820f + PANEL_GAP // rows list முடியும் இடத்தை ஒட்டி (இடைவெளி நீக்கப்பட்டது)
+        val pl = PANEL_LEFT
         val pr = CANVAS_W - 28f
         val pt = 28f
         val pb = CANVAS_H - 28f
@@ -306,7 +363,7 @@ object ScoreCardComposer {
         val corner = when (theme) {
             0 -> 22f
             1 -> 26f
-            else -> 34f
+            else -> 32f
         }
 
         // வெளிப்புற ஒளி / நிழல்
@@ -316,20 +373,38 @@ object ScoreCardComposer {
             else -> glowRR(c, p, panelRect, corner, 0x96E61E8C.toInt(), 20f, 0f, 0f)
         }
 
-        // பின்னணி
+        // பின்னணி + Stadium Spotlight
         when (theme) {
             0 -> {
                 p.shader = RadialGradient(
-                    pl + pw * 0.5f, pt + ph * 0.25f, pw * 0.8f,
-                    intArrayOf(0xFF183B6B.toInt(), 0xFF0C1C38.toInt(), 0xFF030814.toInt()),
-                    floatArrayOf(0f, 0.5f, 1f),
+                    pl + pw * 0.5f, pt + ph * 0.30f, pw * 0.85f,
+                    intArrayOf(0xFF1B4580.toInt(), 0xFF0C1D3B.toInt(), 0xFF030814.toInt()),
+                    floatArrayOf(0f, 0.55f, 1f),
                     Shader.TileMode.CLAMP
                 )
                 c.drawRoundRect(panelRect, corner, corner, p)
                 p.shader = null
             }
-            1 -> fillRR(c, p, panelRect, corner, 0xFF14070C.toInt())
-            else -> fillRR(c, p, panelRect, corner, 0xFF1A0B3B.toInt())
+            1 -> {
+                p.shader = RadialGradient(
+                    pl + pw * 0.5f, pt + ph * 0.30f, pw * 0.85f,
+                    intArrayOf(0xFF3A101E.toInt(), 0xFF1A070E.toInt(), 0xFF0B0306.toInt()),
+                    floatArrayOf(0f, 0.55f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+                c.drawRoundRect(panelRect, corner, corner, p)
+                p.shader = null
+            }
+            else -> {
+                p.shader = RadialGradient(
+                    pl + pw * 0.5f, pt + ph * 0.30f, pw * 0.85f,
+                    intArrayOf(0xFF3B1373.toInt(), 0xFF1E0B42.toInt(), 0xFF0E0522.toInt()),
+                    floatArrayOf(0f, 0.55f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+                c.drawRoundRect(panelRect, corner, corner, p)
+                p.shader = null
+            }
         }
 
         c.save()
@@ -349,96 +424,110 @@ object ScoreCardComposer {
             c.drawBitmap(playerBmp, null, RectF(dl, pt, dl + dw, pt + dh), bmpPaint)
         }
 
-        // படத்தின் மேல் இருள் படலம்
-        when (theme) {
-            0 -> {
-                val barTop = pb - ph * 0.32f
-                p.shader = LinearGradient(0f, barTop, 0f, pb, 0x00000000, 0xFA02060F.toInt(), Shader.TileMode.CLAMP)
-                c.drawRect(pl, barTop, pr, pb, p)
-                p.shader = null
-            }
-            1 -> {
-                p.shader = RadialGradient(
-                    pl + pw / 2f, pt + ph / 2f, max(pw, ph) * 0.75f,
-                    intArrayOf(0x00000000, 0x00000000, 0xAA000000.toInt()),
-                    floatArrayOf(0f, 0.55f, 1f),
-                    Shader.TileMode.CLAMP
-                )
-                c.drawRect(panelRect, p)
-                val barTop = pb - ph * 0.40f
-                p.shader = LinearGradient(0f, barTop, 0f, pb, 0x00000000, 0xFC0E0408.toInt(), Shader.TileMode.CLAMP)
-                c.drawRect(pl, barTop, pr, pb, p)
-                p.shader = null
-            }
-            else -> {
-                val barTop = pb - ph * 0.38f
-                p.shader = LinearGradient(0f, barTop, 0f, pb, 0x00000000, 0xF81A0B3B.toInt(), Shader.TileMode.CLAMP)
-                c.drawRect(pl, barTop, pr, pb, p)
-                p.shader = null
-            }
+        // படத்தின் ஓரங்களில் Vignette + கீழே Pro Lower-Third Nameplate Gradient
+        p.shader = RadialGradient(
+            pl + pw / 2f, pt + ph * 0.45f, max(pw, ph) * 0.72f,
+            intArrayOf(0x00000000, 0x00000000, 0x88000000.toInt()),
+            floatArrayOf(0f, 0.58f, 1f),
+            Shader.TileMode.CLAMP
+        )
+        c.drawRect(panelRect, p)
+        p.shader = null
+
+        val barTop = pb - ph * 0.36f
+        val plateEndColor = when (theme) {
+            0 -> 0xFC030816.toInt()
+            1 -> 0xFC100409.toInt()
+            else -> 0xFC15082E.toInt()
         }
+        p.shader = LinearGradient(0f, barTop, 0f, pb, 0x00000000, plateEndColor, Shader.TileMode.CLAMP)
+        c.drawRect(pl, barTop, pr, pb, p)
+        p.shader = null
+
+        // Lower-third frosted glass bar behind the player name
+        val npLeft = pl + pw * 0.035f
+        val npRight = pr - pw * 0.035f
+        val npTop = pb - ph * 0.21f
+        val npBottom = pb - ph * 0.03f
+        val npRect = RectF(npLeft, npTop, npRight, npBottom)
+        fillRR(c, p, npRect, 16f, 0xA8050914.toInt())
+        strokeRR(
+            c, p, npRect, 16f,
+            when (theme) {
+                0 -> 0x5500E5FF
+                1 -> 0x66F6D77A
+                else -> 0x55FFFFFF
+            },
+            1.8f
+        )
 
         val displayName = (player?.name ?: fallbackName ?: if (type == ScoreCardType.BOWLING) "BOWLER" else "BATTER").trim()
         val tagText = if (type == ScoreCardType.BOWLING) "KEY BOWLER" else "KEY BATSMAN"
 
-        p.style = Paint.Style.FILL
-        p.typeface = Typeface.DEFAULT_BOLD
-        p.textAlign = Paint.Align.LEFT
-        p.color = when (theme) {
+        // Role pill badge inside nameplate
+        val roleColor = when (theme) {
             0 -> 0xFF00E5FF.toInt()
             1 -> 0xFFF6D77A.toInt()
             else -> 0xFFFFD84D.toInt()
         }
-        p.textSize = ph * 0.034f
-        p.letterSpacing = 0.15f
-        c.drawText(tagText, pl + pw * 0.05f, pb - ph * 0.13f, p)
+        p.style = Paint.Style.FILL
+        p.typeface = Typeface.DEFAULT_BOLD
+        p.textAlign = Paint.Align.LEFT
+        p.color = roleColor
+        p.textSize = ph * 0.030f
+        p.letterSpacing = 0.16f
+        c.drawText("● $tagText", npLeft + pw * 0.035f, npTop + ph * 0.052f, p)
 
+        // Player Name
         p.color = 0xFFFFFFFF.toInt()
-        p.textSize = ph * 0.068f
-        p.letterSpacing = 0.04f
+        p.textSize = ph * 0.064f
+        p.letterSpacing = 0.03f
         val nm = displayName.uppercase()
-        while (p.measureText(nm) > pw * 0.88f && p.textSize > 18f) {
+        while (p.measureText(nm) > (npRect.width() - pw * 0.07f) && p.textSize > 18f) {
             p.textSize -= 2f
         }
-        c.drawText(nm, pl + pw * 0.05f, pb - ph * 0.062f, p)
+        c.drawText(nm, npLeft + pw * 0.035f, npTop + ph * 0.125f, p)
         p.letterSpacing = 0f
 
-        // பெயருக்குக் கீழ் கோடுகள்
+        // பெயருக்குக் கீழ் Accent கோடுகள்
+        val lineY1 = npBottom - ph * 0.025f
+        val lineY2 = npBottom - ph * 0.017f
         when (theme) {
             0 -> {
-                fillRR(c, p, RectF(pl + pw * 0.05f, pb - ph * 0.035f, pl + pw * 0.32f, pb - ph * 0.027f), 3f, 0xFFFFCC00.toInt())
-                fillRR(c, p, RectF(pl + pw * 0.34f, pb - ph * 0.035f, pr - pw * 0.05f, pb - ph * 0.029f), 2f, 0xFF00E5FF.toInt())
+                fillRR(c, p, RectF(npLeft + pw * 0.035f, lineY1, npLeft + pw * 0.30f, lineY2), 3f, 0xFFFFCC00.toInt())
+                fillRR(c, p, RectF(npLeft + pw * 0.32f, lineY1, npRight - pw * 0.035f, lineY2 - 1f), 2f, 0xFF00E5FF.toInt())
             }
             1 -> gradRR(
                 c, p,
-                RectF(pl + pw * 0.05f, pb - ph * 0.036f, pr - pw * 0.05f, pb - ph * 0.030f),
+                RectF(npLeft + pw * 0.035f, lineY1, npRight - pw * 0.035f, lineY2),
                 3f,
                 intArrayOf(0xFFF6D77A.toInt(), 0xFFC8922A.toInt(), 0x00C8922A),
-                floatArrayOf(0f, 0.6f, 1f),
+                floatArrayOf(0f, 0.65f, 1f),
                 true,
             )
             else -> {
-                fillRR(c, p, RectF(pl + pw * 0.05f, pb - ph * 0.037f, pl + pw * 0.30f, pb - ph * 0.029f), 4f, 0xFFFF8A00.toInt())
-                fillRR(c, p, RectF(pl + pw * 0.32f, pb - ph * 0.037f, pr - pw * 0.05f, pb - ph * 0.031f), 3f, 0xFFE61E8C.toInt())
+                fillRR(c, p, RectF(npLeft + pw * 0.035f, lineY1, npLeft + pw * 0.30f, lineY2), 4f, 0xFFFF8A00.toInt())
+                fillRR(c, p, RectF(npLeft + pw * 0.32f, lineY1, npRight - pw * 0.035f, lineY2 - 1f), 3f, 0xFFE61E8C.toInt())
             }
         }
 
-        // மேலே "NEWS CRICK" பேட்ஜ்
+        // மேலே "⚡ NEWS CRICK" பேட்ஜ்
         val bw = pw * 0.30f
         val bh = ph * 0.055f
         val bx = pl + pw * 0.035f
         val by = pt + ph * 0.035f
         val badge = RectF(bx, by, bx + bw, by + bh)
+        glowRR(c, p, badge, 8f, 0x80000000.toInt(), 10f, 0f, 3f)
         val badgeTextColor: Int
         when (theme) {
             0 -> {
-                fillRR(c, p, badge, 6f, 0xFFD50000.toInt())
+                gradRR(c, p, badge, 8f, intArrayOf(0xFFE50000.toInt(), 0xFFA80000.toInt()), null, true)
                 p.color = 0xFFFFE600.toInt()
                 c.drawRect(bx, by, bx + 5f, by + bh, p)
                 badgeTextColor = 0xFFFFFFFF.toInt()
             }
             1 -> {
-                gradRR(c, p, badge, bh / 2f, intArrayOf(0xFFF6D77A.toInt(), 0xFFC8922A.toInt()), null, true)
+                gradRR(c, p, badge, bh / 2f, intArrayOf(0xFFFFE28A.toInt(), 0xFFC68A20.toInt()), null, true)
                 badgeTextColor = 0xFF2A0710.toInt()
             }
             else -> {
@@ -450,20 +539,28 @@ object ScoreCardComposer {
         p.shader = null
         p.color = badgeTextColor
         p.textAlign = Paint.Align.CENTER
-        p.textSize = bh * 0.58f
-        c.drawText("⚡ NEWS CRICK", bx + bw / 2f + 2f, by + bh * 0.72f, p)
+        p.textSize = bh * 0.56f
+        c.drawText("⚡ NEWS CRICK", bx + bw / 2f + 2f, by + bh * 0.71f, p)
 
         c.restore()
 
-        // பேனல் சட்டம் (frame)
+        // பேனல் சட்டம் (double-bevel TV frame)
         when (theme) {
-            0 -> strokeRR(c, p, panelRect, corner, 0xFF00E5FF.toInt(), 5f)
+            0 -> {
+                strokeRR(c, p, panelRect, corner, 0xFF00E5FF.toInt(), 4.5f)
+                val inner = RectF(pl + 10f, pt + 10f, pr - 10f, pb - 10f)
+                strokeRR(c, p, inner, corner - 6f, 0x33FFFFFF, 1.2f)
+            }
             1 -> {
                 strokeRR(c, p, panelRect, corner, 0xFFF6D77A.toInt(), 5f)
                 val inner = RectF(pl + 12f, pt + 12f, pr - 12f, pb - 12f)
                 strokeRR(c, p, inner, corner - 6f, 0x6EF6D77A, 1.5f)
             }
-            else -> strokeRR(c, p, panelRect, corner, 0xFFFFFFFF.toInt(), 6f)
+            else -> {
+                strokeRR(c, p, panelRect, corner, 0xFFFFFFFF.toInt(), 5.5f)
+                val inner = RectF(pl + 11f, pt + 11f, pr - 11f, pb - 11f)
+                strokeRR(c, p, inner, corner - 6f, 0x44FF8A00, 1.5f)
+            }
         }
         p.style = Paint.Style.FILL
         p.textAlign = Paint.Align.LEFT
@@ -471,7 +568,7 @@ object ScoreCardComposer {
 
     /**
      * தேர்ந்தெடுத்த வரியின் வலது பக்கம் முன்னும் பின்னும் துடிக்கும் பெரிய அம்பு.
-     * ஒவ்வொரு டிசைனுக்கும் தனி நிறம்.
+     * ஒவ்வொரு டிசைனுக்கும் தனி நிறம் & 3D highlight.
      */
     fun drawBouncingArrow(canvas: Canvas, targetRow: RectF, timeInClipMs: Long, themeIdx: Int = 0) {
         val theme = normTheme(themeIdx)
@@ -497,6 +594,15 @@ object ScoreCardComposer {
             lineTo(tailX, cy + halfStemH)
             lineTo(tipX + headLen, cy + halfStemH)
             lineTo(tipX + headLen, cy + halfHeadH)
+            close()
+        }
+
+        val topHalfPath = Path().apply {
+            moveTo(tipX, cy)
+            lineTo(tipX + headLen, cy - halfHeadH)
+            lineTo(tipX + headLen, cy - halfStemH)
+            lineTo(tailX, cy - halfStemH)
+            lineTo(tailX, cy)
             close()
         }
 
@@ -530,6 +636,10 @@ object ScoreCardComposer {
             style = Paint.Style.FILL
             color = fillColor
         }
+        val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = 0x38FFFFFF
+        }
         val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             color = outlineColor
@@ -539,6 +649,7 @@ object ScoreCardComposer {
 
         canvas.drawPath(arrowPath, glowPaint)
         canvas.drawPath(arrowPath, fillPaint)
+        canvas.drawPath(topHalfPath, highlightPaint)
         canvas.drawPath(arrowPath, strokePaint)
     }
 }
