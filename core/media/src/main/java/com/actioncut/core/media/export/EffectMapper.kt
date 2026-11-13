@@ -9,6 +9,7 @@ import android.text.style.AbsoluteSizeSpan
 import android.text.style.ForegroundColorSpan
 import androidx.media3.common.C
 import androidx.media3.common.Effect
+import androidx.media3.common.OverlaySettings
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
@@ -22,12 +23,12 @@ import androidx.media3.effect.GaussianBlur
 import androidx.media3.effect.HslAdjustment
 import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.OverlayEffect
-import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.RgbAdjustment
 import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.SingleColorLut
 import androidx.media3.effect.SpeedChangeEffect
+import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.effect.TextOverlay
 import androidx.media3.effect.TextureOverlay
 import com.actioncut.core.model.Clip
@@ -153,7 +154,7 @@ object EffectMapper {
             val sizePx = (props.fontSizeSp * ov.transform.scale * 2.5f).toInt().coerceAtLeast(24)
             span.setSpan(AbsoluteSizeSpan(sizePx), 0, span.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
             span.setSpan(ForegroundColorSpan(props.colorArgb), 0, span.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
-            val settings = OverlaySettings.Builder()
+            val settings = StaticOverlaySettings.Builder()
                 .setBackgroundFrameAnchor(
                     ov.transform.offsetX.coerceIn(-1f, 1f),
                     -ov.transform.offsetY.coerceIn(-1f, 1f),
@@ -179,7 +180,7 @@ object EffectMapper {
         } ?: return null
 
         val factor = (targetWidth * ov.transform.scale) / bitmap.width.toFloat()
-        val visible = OverlaySettings.Builder()
+        val visible = StaticOverlaySettings.Builder()
             .setBackgroundFrameAnchor(
                 ov.transform.offsetX.coerceIn(-1f, 1f),
                 -ov.transform.offsetY.coerceIn(-1f, 1f),
@@ -187,7 +188,7 @@ object EffectMapper {
             .setScale(factor, factor)
             .setRotationDegrees(ov.transform.rotationDegrees)
             .build()
-        val hidden = OverlaySettings.Builder().setAlphaScale(0f).build()
+        val hidden = StaticOverlaySettings.Builder().setAlphaScale(0f).build()
         val startUs = (ov.timelineStartMs - clip.timelineStartMs).coerceAtLeast(0L) * 1_000L
         val endUs = (ov.timelineEndMs - clip.timelineStartMs).coerceAtLeast(0L) * 1_000L
         return TimedBitmapOverlay(bitmap, visible, hidden, startUs, endUs)
@@ -240,7 +241,7 @@ private class DynamicScorecardOverlay(
 
     private val settings: OverlaySettings = run {
         val factor = targetWidth / SCORECARD_CANVAS_W
-        val builder = OverlaySettings.Builder().setScale(factor, factor)
+        val builder = StaticOverlaySettings.Builder().setScale(factor, factor)
         if (isFbTemplate && targetHeight > 0) {
             val boxHeight = targetWidth * 9f / 16f
             builder.setBackgroundFrameAnchor(0f, 1f - boxHeight / targetHeight)
