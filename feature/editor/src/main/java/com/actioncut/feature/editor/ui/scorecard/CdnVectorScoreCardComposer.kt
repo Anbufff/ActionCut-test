@@ -211,12 +211,14 @@ object CdnVectorScoreCardComposer {
             is VectorRow.Header -> {
                 p.typeface = Typeface.DEFAULT_BOLD
                 p.color = 0xFFFFFFFF.toInt()
-                p.textSize = 31f
+                p.textSize = 30f
+                val rightW = p.measureText(row.rightScore)
+                val maxTitleW = (rightX - leftX - rightW - 24f).coerceAtLeast(120f)
                 p.textAlign = Paint.Align.LEFT
-                c.drawText(row.leftTitle, leftX, rect.centerY() + 11f, p)
+                c.drawText(ellipsize(row.leftTitle, p, maxTitleW), leftX, rect.centerY() + 10f, p)
 
                 p.textAlign = Paint.Align.RIGHT
-                c.drawText(row.rightScore, rightX, rect.centerY() + 11f, p)
+                c.drawText(row.rightScore, rightX, rect.centerY() + 10f, p)
             }
             is VectorRow.Columns -> {
                 p.typeface = Typeface.DEFAULT_BOLD
