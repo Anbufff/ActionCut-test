@@ -8,11 +8,6 @@ import kotlin.math.roundToInt
 /**
  * Finds where one row ends and the next begins in a cricket scoreboard screenshot.
  *
- * Port of the HTML editor's `processScoreCrop` separator detection: scoreboard apps draw a thin
- * light-gray line (RGB ~230..246, no tint) between player rows, and a thicker gray band around the
- * column-header bar. Those gray pixel-rows are grouped, converted to cut positions and
- * de-duplicated using a gap that adapts to the real row spacing.
- *
  * Pure Kotlin (works on ARGB pixel arrays) so it is unit-testable on the JVM.
  */
 object ScoreRowSplitter {
@@ -20,15 +15,6 @@ object ScoreRowSplitter {
     private class Cluster(var first: Int, var last: Int, var count: Int)
     private class Candidate(val y: Int, val count: Int)
 
-    /**
-     * @param pixels ARGB pixels of the cropped region, row-major, size >= width * height.
-     * @param width region width in pixels.
-     * @param height region height in pixels.
-     * @param referenceHeight height of the whole source image; all thresholds scale with it
-     *   (a phone screenshot's row is only ~4% of its height).
-     * @return ascending cut positions that always start with 0 and end with [height];
-     *   each consecutive pair is one row.
-     */
     fun boundaries(pixels: IntArray, width: Int, height: Int, referenceHeight: Int): List<Int> {
         if (width <= 0 || height <= 0 || pixels.size < width * height) {
             return listOf(0, max(height, 0))
@@ -36,7 +22,7 @@ object ScoreRowSplitter {
         val xFrom = (width * 0.15f).toInt()
         val xTo = (width * 0.85f).toInt()
 
-        // 1. Every pixel-row that looks like a gray separator.
+        // 1. Every pixel-row that looks like a neutral light-gray separator.
         val clusters = ArrayList<Cluster>()
         for (y in 0 until height) {
             var count = 0
@@ -46,7 +32,7 @@ object ScoreRowSplitter {
                 val r = (p shr 16) and 0xFF
                 val g = (p shr 8) and 0xFF
                 val b = p and 0xFF
-                if (abs(r - g) < 4 && abs(g - b) < 4 && r > 230 && r < 246) count++
+                if (abs(r - g) < 7 && abs(g - b) < 7 && r in 222..248) count++
                 x += 8
             }
             if (count > 12) {
@@ -98,10 +84,6 @@ object ScoreRowSplitter {
         return result
     }
 
-    /**
-     * Convenience: the row ranges (start inclusive, end exclusive) after dropping slivers
-     * shorter than 2% of [referenceHeight]. Never empty - falls back to the whole region.
-     */
     fun rows(pixels: IntArray, width: Int, height: Int, referenceHeight: Int): List<IntRange> {
         val cuts = boundaries(pixels, width, height, referenceHeight)
         val minRow = referenceHeight * 0.02f
