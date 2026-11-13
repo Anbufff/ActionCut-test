@@ -118,7 +118,6 @@ object EffectMapper {
             presentationLayout,
         )
 
-        // 🌟 4:5 TPL-ல் மெயின் வீடியோ / போட்டோவை மேலே உள்ள 16:9 பாக்ஸிற்கு நகர்த்துதல்
         if (isFbTemplate) {
             effects += MatrixTransformation { _ ->
                 android.graphics.Matrix().apply {
@@ -169,7 +168,6 @@ object EffectMapper {
         return OverlayEffect(ImmutableList.copyOf(textureOverlays))
     }
 
-    // 🌟 PiP Overlay-ஐ ஃபைல் பாத்திலிருந்து பாதுகாப்பாக எடுத்து எக்ஸ்போர்ட் செய்வது
     private fun imageOverlay(ov: Clip, clip: Clip, targetWidth: Int): TextureOverlay? {
         val uriStr = ov.mediaUri ?: return null
         val uri = Uri.parse(uriStr)
@@ -228,7 +226,6 @@ object EffectMapper {
     }
 }
 
-/** Width of the scorecard bitmap. Keep in sync with ScoreCardComposer.CANVAS_W (feature module). */
 private const val SCORECARD_CANVAS_W = 1920f
 
 private class DynamicScorecardOverlay(
@@ -239,9 +236,8 @@ private class DynamicScorecardOverlay(
     isFbTemplate: Boolean,
 ) : BitmapOverlay() {
 
-    // The card is a 1920x1080 (16:9) bitmap. Overlays are drawn at their pixel size, so scale it to the
-    // output frame width. In the 4:5 TPL layout it must sit inside the top 16:9 box (the same place the
-    // main video is moved to), not in the middle of the frame where the bar and bottom image cover it.
+    private var baseUs = Long.MIN_VALUE
+
     private val settings: OverlaySettings = run {
         val factor = targetWidth / SCORECARD_CANVAS_W
         val builder = OverlaySettings.Builder().setScale(factor, factor)
@@ -253,7 +249,8 @@ private class DynamicScorecardOverlay(
     }
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
-        val timeInClipMs = presentationTimeUs / 1000L
+        if (baseUs == Long.MIN_VALUE) baseUs = presentationTimeUs
+        val timeInClipMs = (presentationTimeUs - baseUs).coerceAtLeast(0L) / 1000L
         return ScorecardBridge.getActiveBitmap(clipId, data, timeInClipMs)
             ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
     }
