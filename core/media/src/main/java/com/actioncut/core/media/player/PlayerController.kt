@@ -1,12 +1,14 @@
 package com.actioncut.core.media.player
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import com.actioncut.core.media.export.EffectMapper
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
@@ -48,7 +50,9 @@ class PlayerController @Inject constructor(
     private var lastPreviewSignature: String? = null
 
     private var videoStartsMs: List<Long> = emptyList()
+    private var videoDurationsMs: List<Long> = emptyList()
     private var pipStartsMs: List<Long> = emptyList()
+    private var pipDurationsMs: List<Long> = emptyList()
 
     var totalTimelineMs: Long = 0L
     var totalVideoMs: Long = 0L
@@ -56,6 +60,9 @@ class PlayerController @Inject constructor(
 
     private var masterPlayheadMs: Long = 0L
     private var isTimelinePlaying: Boolean = false
+    private var isScrubbing: Boolean = false
+    private var lastScrubSeekRealMs: Long = 0L
+    private var scrubSeekJob: Job? = null
     private var clockJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Main)
 
@@ -85,8 +92,9 @@ class PlayerController @Inject constructor(
         val clips = previewClips(timeline)
         previewClips = clips
         clipVolumes = clips.map { it.volume }
-        videoStartsMs = cumulativeStarts(clips.map { previewDurationMs(it) })
-        totalVideoMs = (videoStartsMs.lastOrNull() ?: 0L) + (clips.lastOrNull()?.let { previewDurationMs(it) } ?: 0L)
+        videoDurationsMs = clips.map { previewDurationMs(it) }
+        videoStartsMs = cumulativeStarts(videoDurationsMs)
+        totalVideoMs = (videoStartsMs.lastOrNull() ?: 0L) + (videoDurationsMs.lastOrNull() ?: 0L)
 
         val items = clips.map { clip ->
             val builder = MediaItem.Builder().setUri(clip.mediaUri)
@@ -126,7 +134,8 @@ class PlayerController @Inject constructor(
         }
 
         val pipClips = pipClipsOf(timeline)
-        pipStartsMs = cumulativeStarts(pipClips.map { previewDurationMs(it) })
+        pipDurationsMs = pipClips.map { previewDurationMs(it) }
+        pipStartsMs = cumulativeStarts(pipDurationsMs)
         pipPlayer.setMediaItems(pipClips.map { it.toClippedMediaItem() })
         pipPlayer.prepare()
 
@@ -149,13 +158,28 @@ class PlayerController @Inject constructor(
 
     fun masterPositionMs(): Long = masterPlayheadMs
 
-    private fun seekAbsolute(p: ExoPlayer, starts: List<Long>, absMs: Long) {
+    private fun seekAbsolute(
+        p: ExoPlayer,
+        starts: List<Long>,
+        durations: List<Long>,
+        absMs: Long,
+        forScrub: Boolean,
+    ) {
         if (p.mediaItemCount == 0) return
         var idx = 0
         for (i in 0 until p.mediaItemCount) {
             if (absMs >= (starts.getOrElse(i) { 0L })) idx = i else break
         }
-        val within = (absMs - starts.getOrElse(idx) { 0L }).coerceAtLeast(0L)
+        var within = (absMs - starts.getOrElse(idx) { 0L }).coerceAtLeast(0L)
+        if (forScrub) {
+            val clipDur = durations.getOrElse(idx) { 0L }
+            if (clipDur > 120L && within > clipDur - 60L) {
+                within = clipDur - 60L
+            }
+        }
+        if (p.currentMediaItemIndex == idx && abs(p.currentPosition - within) < 16L) {
+            return
+        }
         p.seekTo(idx, within)
     }
 
@@ -232,6 +256,11 @@ class PlayerController @Inject constructor(
     }
 
     fun play() {
+        scrubSeekJob?.cancel()
+        if (isScrubbing) {
+            isScrubbing = false
+            setScrubMode(false)
+        }
         if (masterPlayheadMs >= totalTimelineMs) {
             seekTo(0)
         }
@@ -260,7 +289,64 @@ class PlayerController @Inject constructor(
         }
     }
 
+    fun beginScrub() {
+        if (isTimelinePlaying) {
+            pause()
+        }
+        if (!isScrubbing) {
+            isScrubbing = true
+            setScrubMode(true)
+        }
+    }
+
+    fun scrubTo(positionMs: Long) {
+        masterPlayheadMs = positionMs.coerceIn(0L, totalTimelineMs)
+        val now = SystemClock.elapsedRealtime()
+        val elapsed = now - lastScrubSeekRealMs
+        if (elapsed >= SCRUB_SEEK_INTERVAL_MS) {
+            scrubSeekJob?.cancel()
+            lastScrubSeekRealMs = now
+            syncVideoState(forceSeek = true, forScrub = true)
+            syncPipState(forceSeek = true, forScrub = true)
+        } else {
+            scrubSeekJob?.cancel()
+            val waitMs = SCRUB_SEEK_INTERVAL_MS - elapsed
+            scrubSeekJob = scope.launch {
+                delay(waitMs)
+                lastScrubSeekRealMs = SystemClock.elapsedRealtime()
+                syncVideoState(forceSeek = true, forScrub = true)
+                syncPipState(forceSeek = true, forScrub = true)
+            }
+        }
+    }
+
+    fun endScrub(positionMs: Long) {
+        scrubSeekJob?.cancel()
+        isScrubbing = false
+        setScrubMode(false)
+        masterPlayheadMs = positionMs.coerceIn(0L, totalTimelineMs)
+        syncVideoState(forceSeek = true, forScrub = false)
+        syncAudioState(forceSeek = true)
+        syncPipState(forceSeek = true, forScrub = false)
+        pushState()
+    }
+
+    private fun setScrubMode(enabled: Boolean) {
+        val params = if (enabled) SeekParameters.CLOSEST_SYNC else SeekParameters.EXACT
+        runCatching {
+            player.setScrubbingModeEnabled(enabled)
+            player.setSeekParameters(params)
+        }
+        if (pipPlayer.mediaItemCount > 0) {
+            runCatching {
+                pipPlayer.setScrubbingModeEnabled(enabled)
+                pipPlayer.setSeekParameters(params)
+            }
+        }
+    }
+
     fun seekTo(positionMs: Long) {
+        scrubSeekJob?.cancel()
         masterPlayheadMs = positionMs.coerceIn(0, totalTimelineMs)
         syncVideoState(forceSeek = true)
         syncAudioState(forceSeek = true)
@@ -268,16 +354,15 @@ class PlayerController @Inject constructor(
         pushState()
     }
 
-    private fun syncVideoState(forceSeek: Boolean) {
+    private fun syncVideoState(forceSeek: Boolean, forScrub: Boolean = false) {
         if (masterPlayheadMs < totalVideoMs) {
             if (forceSeek) {
-                seekAbsolute(player, videoStartsMs, masterPlayheadMs)
+                seekAbsolute(player, videoStartsMs, videoDurationsMs, masterPlayheadMs, forScrub)
             }
             if (isTimelinePlaying && !player.isPlaying) {
                 player.play()
             }
         } else {
-            // படங்கள் முடிந்த பிறகு பழைய கடைசி பிரேமில் தங்காமல் பிளேயரை பாஸ் செய்தல்
             if (player.isPlaying) {
                 player.pause()
             }
@@ -309,10 +394,10 @@ class PlayerController @Inject constructor(
         }
     }
 
-    private fun syncPipState(forceSeek: Boolean) {
+    private fun syncPipState(forceSeek: Boolean, forScrub: Boolean = false) {
         if (pipPlayer.mediaItemCount > 0) {
             if (forceSeek) {
-                seekAbsolute(pipPlayer, pipStartsMs, masterPlayheadMs)
+                seekAbsolute(pipPlayer, pipStartsMs, pipDurationsMs, masterPlayheadMs, forScrub)
             }
             if (isTimelinePlaying && !pipPlayer.isPlaying) {
                 pipPlayer.play()
@@ -359,6 +444,7 @@ class PlayerController @Inject constructor(
     }
 
     fun release() {
+        scrubSeekJob?.cancel()
         clockJob?.cancel()
         player.removeListener(listener)
         player.release()
@@ -375,5 +461,9 @@ class PlayerController @Inject constructor(
             durationMs = totalTimelineMs,
             isEnded = masterPlayheadMs >= totalTimelineMs && !isTimelinePlaying,
         )
+    }
+
+    private companion object {
+        const val SCRUB_SEEK_INTERVAL_MS = 40L
     }
 }
