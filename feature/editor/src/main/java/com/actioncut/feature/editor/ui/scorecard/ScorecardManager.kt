@@ -34,7 +34,6 @@ object ScorecardManager {
     private var appContext: Context? = null
     private val prepLock = Any()
 
-    // Preview மற்றும் Export இரண்டும் தனித்தனி Ping-Pong Bitmaps பயன்படுத்தும் (0% flicker / black frame, Media3 always uploads fresh frame)
     private val previewFrameLock = Any()
     private val previewFrames = arrayOfNulls<Bitmap>(2)
     private var previewFrameIdx = 0
@@ -73,8 +72,11 @@ object ScorecardManager {
 
         if (isCdnVector) {
             val inningsIdx = data.cropStartF.toInt().coerceAtLeast(0)
-            val inn = CdnVectorScoreCardComposer.loadInnings(context, data.sourceImageUri, inningsIdx)
-                ?: return@withContext ""
+            val (inn, opponent) = CdnVectorScoreCardComposer.loadInningsWithOpponent(
+                context,
+                data.sourceImageUri,
+                inningsIdx,
+            ) ?: return@withContext ""
             val scoreType = if (data.type == "BOWLING") ScoreCardType.BOWLING else ScoreCardType.BATTING
             for (i in data.rows.indices) {
                 val composed = CdnVectorScoreCardComposer.composeFrame(
@@ -84,6 +86,7 @@ object ScorecardManager {
                     selected = i,
                     library = library,
                     themeIdx = data.themeIdx,
+                    opponentName = opponent,
                 )
                 rowMap[i] = composed.bitmap
                 rectsMap[i] = composed.rowRects
@@ -266,15 +269,29 @@ object ScorecardManager {
         touchYFraction: Float,
         touchXFraction: Float
     ): Int {
-        if (touchXFraction > 0.52f) return -1
+        if (touchXFraction > 0.48f) return -1
         val key = cacheKey(data)
         val activeRow = getActiveRowIndex(data, timeInClipMs)
         val rects = synchronized(prepLock) { rowRectsCache[key]?.get(activeRow) } ?: return -1
         val yInCanvas = touchYFraction * ScoreCardComposer.CANVAS_H
+        val isCdn = data.sourceImageUri.endsWith(".json", ignoreCase = true)
 
-        return rects.indexOfFirst { rect ->
-            yInCanvas >= (rect.top - 5f) && yInCanvas <= (rect.bottom + 5f)
+        var bestIdx = -1
+        var bestDist = Float.MAX_VALUE
+        rects.forEachIndexed { idx, rect ->
+            if (isCdn && idx < 2) return@forEachIndexed
+            if (rect.bottom < 120f || rect.top > 1020f) return@forEachIndexed
+            val dist = when {
+                yInCanvas < rect.top -> rect.top - yInCanvas
+                yInCanvas > rect.bottom -> yInCanvas - rect.bottom
+                else -> 0f
+            }
+            if (dist <= 36f && dist < bestDist) {
+                bestDist = dist
+                bestIdx = idx
+            }
         }
+        return bestIdx
     }
 
     fun clearCache(clipId: String) {
