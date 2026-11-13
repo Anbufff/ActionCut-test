@@ -13,12 +13,13 @@ import android.os.Looper
 import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
+import androidx.media3.common.OverlaySettings
+import androidx.media3.common.VideoCompositorSettings
 import androidx.media3.common.util.Size
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.OverlayEffect
-import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.Presentation
-import androidx.media3.effect.VideoCompositorSettings
+import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
@@ -538,7 +539,7 @@ class Media3VideoExporter @Inject constructor(
                 if (inputId == 1) {
                     val props = com.actioncut.core.model.Keyframes.propsAt(pip, presentationTimeUs / 1000L)
                     val t = props.transform
-                    OverlaySettings.Builder()
+                    StaticOverlaySettings.Builder()
                         .setScale(t.scale, t.scale)
                         .setOverlayFrameAnchor(0f, 0f)
                         .setBackgroundFrameAnchor(
@@ -547,7 +548,7 @@ class Media3VideoExporter @Inject constructor(
                         )
                         .build()
                 } else {
-                    OverlaySettings.Builder().build()
+                    StaticOverlaySettings.Builder().build()
                 }
         }
 
@@ -586,7 +587,7 @@ private class NewsCrickWatermarkOverlay(
     private val buffers: PingPongBuffers,
 ) : BitmapOverlay() {
 
-    private val defaultSettings = OverlaySettings.Builder().build()
+    private val defaultSettings: OverlaySettings = StaticOverlaySettings.Builder().build()
     private var baseUs = Long.MIN_VALUE
 
     private val logoW = targetWidth * 0.082f
@@ -618,7 +619,7 @@ private class FbTemplateOverlay(
     private val clipStartMs: Long = 0L,
 ) : BitmapOverlay() {
 
-    private val defaultSettings = OverlaySettings.Builder().build()
+    private val defaultSettings: OverlaySettings = StaticOverlaySettings.Builder().build()
     private var cachedBottomBitmap: Bitmap? = null
     private var baseUs = Long.MIN_VALUE
 
