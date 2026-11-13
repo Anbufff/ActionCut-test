@@ -187,7 +187,7 @@ class Media3VideoExporter @Inject constructor(
                         watermarkBuffers = sharedWatermarkBuffers,
                     )
                 }
-                val videoSequence = EditedMediaItemSequence(editedItems)
+                val videoSequence = EditedMediaItemSequence.withAudioAndVideoFrom(editedItems)
 
                 val sequences = mutableListOf(videoSequence)
 
@@ -197,7 +197,7 @@ class Media3VideoExporter @Inject constructor(
                     .filter { it.mediaUri != null && it.type == ClipType.VIDEO }
                     .sortedBy { it.timelineStartMs }
                 if (pipVideoClips.isNotEmpty()) {
-                    sequences += EditedMediaItemSequence(
+                    sequences += EditedMediaItemSequence.withVideoFrom(
                         pipVideoClips.map {
                             it.toEditedMediaItem(
                                 targetWidth, targetHeight, settings, emptyList(),
@@ -213,11 +213,12 @@ class Media3VideoExporter @Inject constructor(
                     .filter { it.mediaUri != null && it.volume > 0f }
                     .sortedBy { it.timelineStartMs }
                 if (audioClips.isNotEmpty()) {
-                    sequences += EditedMediaItemSequence(audioClips.map { it.toAudioEditedMediaItem() })
+                    sequences += EditedMediaItemSequence.withAudioFrom(
+                        audioClips.map { it.toAudioEditedMediaItem() },
+                    )
                 }
 
                 val compositionBuilder = Composition.Builder(sequences)
-                    .experimentalSetForceAudioTrack(true)
                 if (pipVideoClips.isNotEmpty()) {
                     compositionBuilder.setVideoCompositorSettings(pipCompositorSettings(pipVideoClips.first()))
                 }
@@ -447,7 +448,9 @@ class Media3VideoExporter @Inject constructor(
         watermarkBuffers: PingPongBuffers,
     ): EditedMediaItem {
         val mediaItemBuilder = MediaItem.Builder().setUri(mediaUri)
-        if (type != ClipType.IMAGE) {
+        if (type == ClipType.IMAGE) {
+            mediaItemBuilder.setImageDurationMs(timelineDurationMs)
+        } else {
             mediaItemBuilder.setClippingConfiguration(
                 MediaItem.ClippingConfiguration.Builder()
                     .setStartPositionMs(sourceInMs)
