@@ -79,6 +79,9 @@ object CdnScorecardClient {
             .apply()
     }
 
+    suspend fun fetch(context: Context, workerBaseUrl: String, matchInput: String): Result<Pair<CdnMatchScorecard, String>> =
+        fetchMatchOnly(workerBaseUrl, matchInput)
+
     /** Fetches match scorecard JSON immediately without blocking on all player photos. */
     suspend fun fetchMatchOnly(workerBaseUrl: String, matchInput: String): Result<Pair<CdnMatchScorecard, String>> =
         withContext(Dispatchers.IO) {
