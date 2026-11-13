@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -80,9 +82,21 @@ fun ScoreCardCdnDialog(
     var composed by remember { mutableStateOf<ComposedCard?>(null) }
 
     LaunchedEffect(matchData, inningsIdx, type, selectedRow, themeIdx, photoVersion) {
-        val inn = matchData?.innings?.getOrNull(inningsIdx) ?: return@LaunchedEffect
+        val data = matchData ?: return@LaunchedEffect
+        val inn = data.innings.getOrNull(inningsIdx) ?: return@LaunchedEffect
+        val opponent = data.innings.firstOrNull { it.inningsId != inn.inningsId }?.let {
+            it.teamName.ifBlank { it.teamShortName }
+        }
         composed = withContext(Dispatchers.Default) {
-            CdnVectorScoreCardComposer.composeFrame(context, inn, type, selectedRow, library, themeIdx)
+            CdnVectorScoreCardComposer.composeFrame(
+                context = context,
+                innings = inn,
+                type = type,
+                selected = selectedRow,
+                library = library,
+                themeIdx = themeIdx,
+                opponentName = opponent,
+            )
         }
         val rows = CdnVectorScoreCardComposer.buildRows(inn, type)
         val sel = rows.getOrNull(selectedRow) as? CdnVectorScoreCardComposer.VectorRow.PlayerRow
@@ -164,6 +178,7 @@ fun ScoreCardCdnDialog(
                 }
 
                 val data = matchData
+                val currentInnings = data?.innings?.getOrNull(inningsIdx)
                 if (data != null) {
                     Row(
                         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -217,8 +232,21 @@ fun ScoreCardCdnDialog(
                                             val rh = bmp.height * sc
                                             val top = (boxSize.height - rh) / 2f
                                             val y = (off.y - top) / rh * bmp.height
-                                            val idx = comp.rowRects.indexOfFirst { y >= it.top && y <= it.bottom }
-                                            if (idx >= 2) selectedRow = idx
+                                            var bestIdx = -1
+                                            var bestDist = Float.MAX_VALUE
+                                            comp.rowRects.forEachIndexed { idx, rect ->
+                                                if (idx < 2) return@forEachIndexed
+                                                val d = when {
+                                                    y < rect.top -> rect.top - y
+                                                    y > rect.bottom -> y - rect.bottom
+                                                    else -> 0f
+                                                }
+                                                if (d <= 36f && d < bestDist) {
+                                                    bestDist = d
+                                                    bestIdx = idx
+                                                }
+                                            }
+                                            if (bestIdx >= 2) selectedRow = bestIdx
                                         }
                                     },
                             )
@@ -228,6 +256,27 @@ fun ScoreCardCdnDialog(
                             color = Color(0xFFBBBBBB),
                             modifier = Modifier.align(Alignment.Center),
                         )
+                    }
+                }
+
+                // Quick-tap player chips below preview for effortless selection
+                if (currentInnings != null) {
+                    val playerRows = remember(currentInnings, type) {
+                        CdnVectorScoreCardComposer.buildRows(currentInnings, type)
+                    }
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        itemsIndexed(playerRows) { idx, row ->
+                            if (row is CdnVectorScoreCardComposer.VectorRow.PlayerRow) {
+                                SelectableChip(
+                                    label = "${idx - 1}. ${row.name}",
+                                    selected = selectedRow == idx,
+                                    onClick = { selectedRow = idx },
+                                )
+                            }
+                        }
                     }
                 }
 
