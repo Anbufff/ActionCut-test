@@ -27,6 +27,12 @@ object ScoreCardComposer {
     const val CANVAS_H = 1080f
     const val THEME_COUNT = 3
 
+    /** Row text is shifted right by this many px so the first letter clears the coloured bar. */
+    private const val TEXT_LEFT_INSET = 30f
+
+    /** Gap between the rows list and the key-player panel (was ~116px). */
+    private const val PANEL_GAP = 12f
+
     fun normTheme(idx: Int): Int = ((idx % THEME_COUNT) + THEME_COUNT) % THEME_COUNT
 
     fun themeName(idx: Int): String = when (normTheme(idx)) {
@@ -109,7 +115,9 @@ object ScoreCardComposer {
                 rInfo.rect.right.toInt(),
                 rInfo.rect.bottom.toInt()
             )
-            val dstRect = RectF(rowRect)
+            // எழுத்துகளை வலப்புறம் நகர்த்துகிறோம்: முதல் எழுத்து நிறக் கோட்டின் (accent bar) மேல்
+            // மறைந்து போகாமல் தெளிவாகத் தெரியும். வரிசையின் அளவு/இடம் மாறாது.
+            val dstRect = RectF(rowRect.left + TEXT_LEFT_INSET, rowRect.top, rowRect.right, rowRect.bottom)
 
             val isSel = i == selected
             val accentIdx = if (!rInfo.isHeader && !rInfo.isColumnHeader) playerCounter++ else 0
@@ -288,7 +296,7 @@ object ScoreCardComposer {
         photo: Bitmap?,
         fallbackName: String?,
     ) {
-        val pl = 960f
+        val pl = 24f + 820f + PANEL_GAP // rows list முடியும் இடத்தை ஒட்டி (இடைவெளி நீக்கப்பட்டது)
         val pr = CANVAS_W - 28f
         val pt = 28f
         val pb = CANVAS_H - 28f
