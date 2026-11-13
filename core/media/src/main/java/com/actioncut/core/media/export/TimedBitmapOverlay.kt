@@ -1,8 +1,8 @@
 package com.actioncut.core.media.export
 
 import android.graphics.Bitmap
+import androidx.media3.common.OverlaySettings
 import androidx.media3.effect.BitmapOverlay
-import androidx.media3.effect.OverlaySettings
 
 /**
  * A static bitmap overlay that is only visible between [startUs] and [endUs]
