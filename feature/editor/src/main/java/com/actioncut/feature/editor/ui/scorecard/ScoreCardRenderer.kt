@@ -14,40 +14,23 @@ data class RowInfo(
     val rect: RectF,
     val srcTop: Int,
     val srcBottom: Int,
-    /** The coloured innings/title bar (team name + score). */
     val isHeader: Boolean = false,
-    /** The slim "Batter  R  B  4s  6s  SR" column-title strip. */
     val isColumnHeader: Boolean = false,
 )
 
-/**
- * The rendered rows card plus where each row sits.
- * [bitmap] holds only the row TEXT on a transparent background (the row containers are drawn by
- * [ScoreCardComposer] for the chosen design). [selectedBitmap] is the same text recoloured for the
- * highlighted row when that design needs different colours there (null = use [bitmap]).
- */
 data class RenderedCard(val bitmap: Bitmap, val rows: List<RowInfo>, val selectedBitmap: Bitmap? = null)
 
-/** Which kind of scoreboard the screenshot is. Only changes the accent colour for now. */
 enum class ScoreCardType(val label: String, val accent: Int) {
     BATTING("SCORE", 0xFF00E5FF.toInt()),
     BOWLING("BOWL", 0xFF76FF03.toInt()),
 }
 
-/**
- * Turns a cropped scoreboard screenshot into the TEXT layer of a broadcast-style card:
- * rows are split at the separator lines (see [ScoreRowSplitter]), each row has its white/light-gray
- * background punched out cleanly (a coloured header bar keeps only pure crisp white text), and for
- * dark designs the text is re-painted light.
- */
 object ScoreCardRenderer {
 
     private const val WHITE = 0xFFFFFFFF.toInt()
 
-    /** Colours used to re-paint the (originally dark) row text on dark row designs. */
     private class TextScheme(val name: Int, val number: Int, val muted: Int)
 
-    /** null = keep the screenshot's own (dark) text colours, used on light row designs. */
     private fun schemeFor(themeIdx: Int, selected: Boolean): TextScheme? = when (ScoreCardComposer.normTheme(themeIdx)) {
         0 -> if (selected) {
             TextScheme(WHITE, 0xFFFFD400.toInt(), 0xFFFFC4CE.toInt())
@@ -62,9 +45,6 @@ object ScoreCardRenderer {
         else -> null
     }
 
-    /**
-     * @param startFraction / [endFraction] vertical crop lines as fractions (0..1) of [source] height.
-     */
     fun render(
         source: Bitmap,
         startFraction: Float,
@@ -99,7 +79,6 @@ object ScoreCardRenderer {
         val outH = totalRowsH + gap * (rows.size - 1) + pad * 2
         val median = if (rowHeights.isEmpty()) 0 else rowHeights.sorted()[rowHeights.size / 2]
 
-        // 1) where every row sits + what kind of row it is
         val isHeaderRow = BooleanArray(rows.size)
         val infos = ArrayList<RowInfo>()
         var y = pad
@@ -115,7 +94,6 @@ object ScoreCardRenderer {
             y += rowH + gap
         }
 
-        // 2) draw the row text only (transparent background), optionally recoloured
         fun drawText(scheme: TextScheme?): Bitmap {
             val out = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(out)
@@ -145,10 +123,6 @@ object ScoreCardRenderer {
         return RenderedCard(bitmap, infos, selectedBitmap)
     }
 
-    /**
-     * Dark text on a (made-transparent) white row -> light text for dark row designs.
-     * Blue = names, near-black = numbers, grey = dismissal text.
-     */
     private fun recolorForDark(px: IntArray, scheme: TextScheme) {
         for (i in px.indices) {
             val p = px[i]
@@ -173,7 +147,6 @@ object ScoreCardRenderer {
         }
     }
 
-    /** A row whose left/right edge is clearly tinted (e.g. the green innings header). */
     private fun hasColoredBackground(px: IntArray, w: Int, h: Int): Boolean {
         val (r, g, b, n) = edgeAverage(px, w, h)
         if (n == 0) return false
@@ -205,10 +178,6 @@ object ScoreCardRenderer {
         return Rgbn((r / n).toInt(), (g / n).toInt(), (b / n).toInt(), n)
     }
 
-    /**
-     * Near-white & light neutral-gray (column header / separator residue) -> transparent,
-     * keeping smooth anti-aliased edges on dark/colored text.
-     */
     private fun whiteToTransparent(px: IntArray) {
         for (i in px.indices) {
             val p = px[i]
@@ -226,10 +195,6 @@ object ScoreCardRenderer {
         }
     }
 
-    /**
-     * Remove the row's flat coloured background (e.g. Cricbuzz green header) and render
-     * its light lettering as pure crisp white with zero coloured fringe.
-     */
     private fun removeBackground(px: IntArray, w: Int, h: Int) {
         val (br, bg, bb, _) = edgeAverage(px, w, h)
         val bgSum = br + bg + bb
