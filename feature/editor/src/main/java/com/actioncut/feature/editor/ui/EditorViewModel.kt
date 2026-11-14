@@ -459,8 +459,8 @@ class EditorViewModel @Inject constructor(
 
     /**
      * AI Auto-Sync:
-     * Places a Flash News card at EVERY player or team mention (no 8-card limit), synced accurately
-     * to the actual Audio Track voiceover and guaranteed NEVER to overlap any CRIC CDN Scorecard.
+     * Places ONE combined NEWS ALERT clip (Flash News cards + Player Cutout baked together)
+     * at EVERY player or team mention, synced to the voiceover and never overlapping Scorecards.
      */
     fun addAiFlashNewsSequence(segments: List<FlashNewsSegment>) {
         if (segments.isEmpty()) return
@@ -471,7 +471,16 @@ class EditorViewModel @Inject constructor(
                 .filter { it.mediaUri != null && it.volume > 0f }
                 .sortedBy { it.timelineStartMs }
 
-            val audioEndMs = audioClips.maxOfOrNull { it.timelineEndMs } ?: 0L
+            val syncAudioClips = if (audioClips.isNotEmpty()) {
+                audioClips
+            } else {
+                currentTimeline.videoTracks
+                    .flatMap { it.clips }
+                    .filter { it.type == ClipType.VIDEO && it.mediaUri != null && it.volume > 0f }
+                    .sortedBy { it.timelineStartMs }
+            }
+
+            val audioEndMs = syncAudioClips.maxOfOrNull { it.timelineEndMs } ?: 0L
             val videoEndMs = currentTimeline.videoTracks
                 .flatMap { it.clips }
                 .maxOfOrNull { it.timelineEndMs } ?: 0L
@@ -488,7 +497,7 @@ class EditorViewModel @Inject constructor(
 
             val windows = AiFlashNewsEngine.detectVoicePauseStartsMs(
                 context = context,
-                audioClips = audioClips,
+                audioClips = syncAudioClips,
                 segments = segments,
                 totalDurationMs = targetDurationMs,
                 blockedRanges = scorecardRanges,
@@ -507,7 +516,34 @@ class EditorViewModel @Inject constructor(
                     val window = windows.getOrNull(idx) ?: return@forEachIndexed
                     val (startMs, endMs) = window
 
-                    val bannerUri = NewsBannerRenderer.createSegmentBannerBitmap(context, seg.title, seg.bullets)
+                    var cutoutUri: String? = null
+                    val rawPlayerName = seg.playerName?.trim().orEmpty()
+                    if (rawPlayerName.isNotEmpty() && !isLikelyTeamName(rawPlayerName)) {
+                        val photoFile = resolvePlayerPhotoFile(rawPlayerName, libraryPlayers, cdnIndex)
+                        if (photoFile != null && photoFile.exists() && photoFile.length() > 0L) {
+                            val photoUri = Uri.fromFile(photoFile).toString()
+                            cutoutUri = AiCutoutManager.getOrCreateCutoutUri(
+                                context = context,
+                                imageUriStr = photoUri,
+                                forceRefresh = false,
+                                softBottomFade = false,
+                            )
+                            if (!cutoutUri.isNullOrBlank()) {
+                                cutoutCount++
+                            } else {
+                                missingPlayers.add(rawPlayerName)
+                            }
+                        } else {
+                            missingPlayers.add(rawPlayerName)
+                        }
+                    }
+
+                    val bannerUri = NewsBannerRenderer.createSegmentBannerBitmap(
+                        context = context,
+                        title = seg.title,
+                        bullets = seg.bullets,
+                        playerCutoutUri = cutoutUri,
+                    )
                     val bannerClip = Clip(
                         id = "banner_ai_${System.currentTimeMillis()}_$idx",
                         type = ClipType.STICKER,
@@ -518,37 +554,6 @@ class EditorViewModel @Inject constructor(
                     )
                     generatedClips.add(bannerClip)
                     bannerCount++
-
-                    val rawPlayerName = seg.playerName?.trim().orEmpty()
-                    if (rawPlayerName.isNotEmpty() && !isLikelyTeamName(rawPlayerName)) {
-                        val photoFile = resolvePlayerPhotoFile(rawPlayerName, libraryPlayers, cdnIndex)
-                        if (photoFile != null && photoFile.exists() && photoFile.length() > 0L) {
-                            val photoUri = Uri.fromFile(photoFile).toString()
-                            AiCutoutManager.getOrCreateCutoutUri(
-                                context = context,
-                                imageUriStr = photoUri,
-                                forceRefresh = true,
-                                softBottomFade = true,
-                            )
-                            cutoutCount++
-                            generatedClips.add(
-                                Clip(
-                                    id = "pip_ai_${System.currentTimeMillis()}_$idx",
-                                    type = ClipType.IMAGE,
-                                    mediaUri = photoUri,
-                                    timelineStartMs = startMs,
-                                    timelineEndMs = endMs,
-                                    transform = Transform(offsetX = 0.50f, offsetY = 0.04f, scale = 0.84f),
-                                    crop = CropRect(0f, 0f, 1f, 1f),
-                                    filter = Filter("ai_cutout", "AI Cutout", FilterCategory.NONE),
-                                    effects = emptyList(),
-                                    keyframes = emptyList(),
-                                ),
-                            )
-                        } else {
-                            missingPlayers.add(rawPlayerName)
-                        }
-                    }
                 }
             }
 
@@ -586,7 +591,7 @@ class EditorViewModel @Inject constructor(
             }
             Toast.makeText(
                 context,
-                "$bannerCount Flash News + $cutoutCount Cutouts synced!$missingNote",
+                "$bannerCount Flash News ($cutoutCount with Cutout) synced as single clips!$missingNote",
                 Toast.LENGTH_LONG,
             ).show()
         }
