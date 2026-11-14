@@ -459,8 +459,8 @@ class EditorViewModel @Inject constructor(
 
     /**
      * AI Auto-Sync:
-     * Places ~8-9 timed Stadium Broadcast Flash News bursts aligned with Voiceover pauses,
-     * and places transparent bottom-faded Player Cutout Photos standing tall on the right pitch.
+     * Places a Flash News card at EVERY player or team mention (no 8-card limit), synced accurately
+     * to the actual Audio Track voiceover and guaranteed NEVER to overlap any CRIC CDN Scorecard.
      */
     fun addAiFlashNewsSequence(segments: List<FlashNewsSegment>) {
         if (segments.isEmpty()) return
@@ -475,13 +475,23 @@ class EditorViewModel @Inject constructor(
             val videoEndMs = currentTimeline.videoTracks
                 .flatMap { it.clips }
                 .maxOfOrNull { it.timelineEndMs } ?: 0L
-            val targetDurationMs = maxOf(audioEndMs, videoEndMs, currentTimeline.durationMs, segments.size * 20_000L)
+            val targetDurationMs = if (audioEndMs > 0L) {
+                audioEndMs
+            } else {
+                maxOf(videoEndMs, currentTimeline.durationMs, segments.size * 15_000L)
+            }
+
+            // Never place Flash News / Player Cutouts over any CRIC or CRIC CDN Scorecard clip!
+            val scorecardRanges = currentTimeline.allClips
+                .filter { it.scorecard != null }
+                .map { it.timelineStartMs..it.timelineEndMs }
 
             val windows = AiFlashNewsEngine.detectVoicePauseStartsMs(
                 context = context,
                 audioClips = audioClips,
                 segments = segments,
                 totalDurationMs = targetDurationMs,
+                blockedRanges = scorecardRanges,
             )
 
             val libraryPlayers = withContext(Dispatchers.IO) { PlayerLibrary(context).all() }
@@ -489,11 +499,14 @@ class EditorViewModel @Inject constructor(
 
             val generatedClips = ArrayList<Clip>()
             val missingPlayers = LinkedHashSet<String>()
+            var bannerCount = 0
             var cutoutCount = 0
 
             withContext(Dispatchers.IO) {
                 segments.forEachIndexed { idx, seg ->
-                    val (startMs, endMs) = windows.getOrNull(idx) ?: return@forEachIndexed
+                    val window = windows.getOrNull(idx) ?: return@forEachIndexed
+                    val (startMs, endMs) = window
+
                     val bannerUri = NewsBannerRenderer.createSegmentBannerBitmap(context, seg.title, seg.bullets)
                     val bannerClip = Clip(
                         id = "banner_ai_${System.currentTimeMillis()}_$idx",
@@ -504,10 +517,11 @@ class EditorViewModel @Inject constructor(
                         transform = Transform(offsetX = 0f, offsetY = 0f, scale = 1.0f),
                     )
                     generatedClips.add(bannerClip)
+                    bannerCount++
 
-                    val playerName = seg.playerName?.trim().orEmpty()
-                    if (playerName.isNotEmpty()) {
-                        val photoFile = resolvePlayerPhotoFile(playerName, libraryPlayers, cdnIndex)
+                    val rawPlayerName = seg.playerName?.trim().orEmpty()
+                    if (rawPlayerName.isNotEmpty() && !isLikelyTeamName(rawPlayerName)) {
+                        val photoFile = resolvePlayerPhotoFile(rawPlayerName, libraryPlayers, cdnIndex)
                         if (photoFile != null && photoFile.exists() && photoFile.length() > 0L) {
                             val photoUri = Uri.fromFile(photoFile).toString()
                             AiCutoutManager.getOrCreateCutoutUri(
@@ -524,7 +538,6 @@ class EditorViewModel @Inject constructor(
                                     mediaUri = photoUri,
                                     timelineStartMs = startMs,
                                     timelineEndMs = endMs,
-                                    // Higher & larger on the right pitch like Hardik Pandya reference
                                     transform = Transform(offsetX = 0.50f, offsetY = 0.04f, scale = 0.84f),
                                     crop = CropRect(0f, 0f, 1f, 1f),
                                     filter = Filter("ai_cutout", "AI Cutout", FilterCategory.NONE),
@@ -533,13 +546,20 @@ class EditorViewModel @Inject constructor(
                                 ),
                             )
                         } else {
-                            missingPlayers.add(playerName)
+                            missingPlayers.add(rawPlayerName)
                         }
                     }
                 }
             }
 
-            if (generatedClips.isEmpty()) return@launch
+            if (generatedClips.isEmpty()) {
+                Toast.makeText(
+                    context,
+                    "All Flash News fell inside Scorecard — none added.",
+                    Toast.LENGTH_LONG,
+                ).show()
+                return@launch
+            }
 
             val existingTrack = _uiState.value.timeline.tracks.firstOrNull { it.type == TrackType.OVERLAY }
             mutate(structural = false) { timeline ->
@@ -566,10 +586,22 @@ class EditorViewModel @Inject constructor(
             }
             Toast.makeText(
                 context,
-                "${segments.size} Flash News + $cutoutCount Cutouts synced!$missingNote",
+                "$bannerCount Flash News + $cutoutCount Cutouts synced!$missingNote",
                 Toast.LENGTH_LONG,
             ).show()
         }
+    }
+
+    private fun isLikelyTeamName(name: String): Boolean {
+        val n = name.trim().lowercase()
+        val teams = setOf(
+            "india", "team india", "new zealand", "australia", "england", "south africa",
+            "pakistan", "sri lanka", "bangladesh", "afghanistan", "west indies", "ireland",
+            "zimbabwe", "netherlands", "scotland", "csk", "mi", "rcb", "kkr", "srh", "rr",
+            "dc", "pbks", "gt", "lsg", "chennai super kings", "mumbai indians",
+            "royal challengers bengaluru", "kolkata knight riders",
+        )
+        return n in teams || n.startsWith("team ")
     }
 
     private fun resolvePlayerPhotoFile(
