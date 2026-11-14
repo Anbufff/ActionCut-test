@@ -98,6 +98,10 @@ fun PreviewPlayer(
     val currentMainIndex = mainClips.indexOfFirst { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
     val currentMainClip = if (currentMainIndex >= 0) mainClips[currentMainIndex] else null
 
+    val isScorecardActiveNow = allClips.any {
+        it.scorecard != null && playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -494,7 +498,7 @@ fun PreviewPlayer(
                     )
                 }
 
-                // 1. News Banner / Stadium Background Layer goes UNDER the Player Cutout
+                // 1. News Banner / Stadium Background Layer goes UNDER the Player Cutout (and NEVER over a Scorecard)
                 val newsBannerOverlays = remember(overlays) {
                     overlays.filter { it.mediaUri?.contains("news_banner") == true }
                 }
@@ -502,20 +506,27 @@ fun PreviewPlayer(
                     overlays.filter { it.mediaUri?.contains("news_banner") != true }
                 }
 
-                OverlayLayer(
-                    overlays = newsBannerOverlays,
-                    playheadMs = playheadMs,
-                    selectedClipId = selectedClipId,
-                    onSelect = onSelectOverlay,
-                    onMove = onMoveOverlay,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                if (!isScorecardActiveNow) {
+                    OverlayLayer(
+                        overlays = newsBannerOverlays,
+                        playheadMs = playheadMs,
+                        selectedClipId = selectedClipId,
+                        onSelect = onSelectOverlay,
+                        onMove = onMoveOverlay,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
 
-                // 2. Player Cutout / PiP Layer sits ON TOP of the Stadium Background
+                // 2. Player Cutout / PiP Layer sits ON TOP of the Stadium Background (AI cutouts hidden on Scorecard)
                 if (pipPlayer != null) {
+                    val allowedPipClips = if (isScorecardActiveNow) {
+                        pipClips.filterNot { it.id.startsWith("pip_ai_") }
+                    } else {
+                        pipClips
+                    }
                     PipLayer(
                         pipPlayer = pipPlayer,
-                        pipClips = pipClips,
+                        pipClips = allowedPipClips,
                         playheadMs = playheadMs,
                         selectedClipId = selectedClipId,
                         onSelect = onSelectOverlay,
