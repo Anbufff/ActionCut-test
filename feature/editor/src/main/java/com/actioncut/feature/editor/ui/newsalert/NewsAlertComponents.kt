@@ -7,7 +7,6 @@ import android.graphics.Color as AndroidColor
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.media.MediaExtractor
@@ -130,24 +129,33 @@ fun NewsAlertTemplatesDialog(
                         .fillMaxWidth()
                         .height(130.dp)
                         .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF1E1E1E))
+                        .background(Color(0xFF0A144A))
                         .clickable { onSelectTemplate() }
                         .padding(14.dp),
                 ) {
                     ComposeCanvas(modifier = Modifier.fillMaxSize()) {
-                        val path = ComposePath().apply {
-                            moveTo(0f, 0f)
-                            lineTo(size.width * 0.65f, 0f)
-                            lineTo(size.width * 0.76f, size.height)
-                            lineTo(0f, size.height)
+                        val goldWedge = ComposePath().apply {
+                            moveTo(20f, 10f)
+                            lineTo(66f, 10f)
+                            lineTo(46f, size.height - 10f)
+                            lineTo(0f, size.height - 10f)
                             close()
                         }
-                        drawPath(path, color = Color(0xFF900C18))
+                        drawPath(goldWedge, color = Color(0xFFFFC107))
+
+                        val mainCard = ComposePath().apply {
+                            moveTo(74f, 10f)
+                            lineTo(size.width * 0.72f, 10f)
+                            lineTo(size.width * 0.67f, size.height - 10f)
+                            lineTo(54f, size.height - 10f)
+                            close()
+                        }
+                        drawPath(mainCard, color = Color(0xFF280A82))
                     }
                     Text(
-                        text = "o FLASH NEWS",
-                        style = TextStyle(color = Color(0xFFFFD700), fontSize = 16.sp, fontWeight = FontWeight.Bold),
-                        modifier = Modifier.align(Alignment.CenterStart).padding(start = 24.dp),
+                        text = "⚡ BROADCAST FLASH NEWS",
+                        style = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold),
+                        modifier = Modifier.align(Alignment.CenterStart).padding(start = 64.dp),
                     )
                 }
 
@@ -175,12 +183,12 @@ fun NewsAlertTemplatesDialog(
                         }
                         Column {
                             Text(
-                                text = "NEWS BANNER CARD",
+                                text = "TV BROADCAST SLANTED CARDS",
                                 style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold),
                             )
                             Spacer(Modifier.height(3.dp))
                             Text(
-                                text = "Full 16:9 · Voiceover-க்கு ஏற்ப Auto-Sync & Player Cutout சேரும்",
+                                text = "Gold + Indigo Slanted Cards · Voiceover Auto-Sync & Player Cutout",
                                 style = TextStyle(color = Color(0xFFFFC107), fontSize = 12.sp, fontWeight = FontWeight.Medium),
                             )
                         }
@@ -297,7 +305,7 @@ fun FlashNewsTextDialog(
                     }
 
                     Text(
-                        text = "முழு Voiceover கட்டுரையை Paste செய்து 'AI Auto-Sync' அழுத்தினால் 8–9 முக்கிய Flash News + Player Cutout தானாக Timeline-ல் செட் ஆகும். அல்லது 'Apply' மூலம் தனி Banner சேர்க்கலாம்.",
+                        text = "முழு Voiceover கட்டுரையை Paste செய்து 'AI Auto-Sync' அழுத்தினால் 8–9 முக்கிய Broadcast Flash News + Player Cutout தானாக Timeline-ல் செட் ஆகும். அல்லது 'Apply' மூலம் தனி Card சேர்க்கலாம்.",
                         style = TextStyle(color = Color(0xFFB0B0B0), fontSize = 11.5.sp, lineHeight = 16.sp),
                     )
 
@@ -466,7 +474,6 @@ object AiFlashNewsEngine {
         article: String,
         knownPlayers: List<String>,
     ): Result<List<FlashNewsSegment>> {
-        // Active 2026 Gemini Flash models first, with legacy fallback
         val models = listOf(
             "gemini-3.5-flash-lite",
             "gemini-3.8-flash",
@@ -600,7 +607,6 @@ object AiFlashNewsEngine {
         knownPlayers: List<String>,
     ): List<FlashNewsSegment> {
         val cleaned = normalizeCommonTamilNumbers(fullArticle)
-        // Merge short lines (<28 chars like "ஆனா இங்க") into paragraphs so fragments never clip
         val rawParas = cleaned.split(Regex("\\n+"))
             .map { it.trim() }
             .filter { it.isNotEmpty() }
@@ -648,7 +654,6 @@ object AiFlashNewsEngine {
             val b2 = sentences.getOrNull(1)?.takeIf { it.length >= 16 }?.take(135)
             val bullets = listOfNotNull(b1.takeIf { it.isNotEmpty() }, b2)
 
-            // Detect player in block; if pronoun-only block ("அவர்", "இவர்", "கேப்டன்"), carry context
             val directPlayer = detectMentionedPlayer(block, knownPlayers)
             val player = directPlayer ?: if (
                 lastPlayer != null &&
@@ -674,7 +679,6 @@ object AiFlashNewsEngine {
 
     private fun detectMentionedPlayer(text: String, knownPlayers: List<String>): String? {
         val lower = text.lowercase()
-        // 1. Exact full-name or last-name match against user's CARD ADD + CRIC CDN library
         knownPlayers.firstOrNull { p ->
             val pn = p.trim().lowercase()
             pn.length >= 4 && lower.contains(pn)
@@ -685,7 +689,6 @@ object AiFlashNewsEngine {
             parts.any { token -> lower.contains(token) }
         }?.let { return it }
 
-        // 2. Tamil + English cricketer/coach keyword map
         val commonMap = listOf(
             "nitish" to "Nitish Kumar Reddy",
             "நிதீஷ்" to "Nitish Kumar Reddy",
@@ -877,9 +880,16 @@ object AiFlashNewsEngine {
     private fun abs(v: Long): Long = if (v < 0L) -v else v
 }
 
+/**
+ * TV Broadcast Slanted Parallelogram Renderer (inspired by Star Sports / BCCI graphic):
+ * - Gold-Amber slanted wedge + Deep Royal Indigo Hero Header Card
+ * - Floating Silver-White slanted bullet bars with Indigo+Gold number tabs (01, 02, ...)
+ * - Transparent gaps & right side so background photo & player cutout shine through!
+ */
 object NewsBannerRenderer {
 
     private val fileCounter = AtomicInteger(0)
+    private val highlightWordRegex = Regex("[A-Za-z0-9]")
 
     fun createBannerBitmap(context: Context, rawText: String): String {
         val rawLines = rawText.split(Regex("\\r?\\n"))
@@ -896,7 +906,7 @@ object NewsBannerRenderer {
             val sentences = rawText.split(Regex("(?<!\\d)\\.(?!\\d)\\s+"))
                 .map { it.trim().trimEnd('.') }
                 .filter { it.isNotEmpty() }
-            val title = if (sentences.size >= 2) sentences.first().take(48) else ""
+            val title = if (sentences.size >= 2) sentences.first().take(48) else "FLASH NEWS"
             val bullets = if (sentences.size >= 2) sentences.drop(1) else sentences
             createSegmentBannerBitmap(context, title, bullets)
         }
@@ -912,114 +922,207 @@ object NewsBannerRenderer {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
-        val bannerWidth = width * 0.52f
-        val slantOffset = width * 0.08f
+        val cleanTitle = title.trim().ifEmpty { "FLASH NEWS" }
+        val cleanBullets = bullets.map { it.trim() }.filter { it.isNotEmpty() }
 
-        val path = Path().apply {
-            moveTo(0f, 0f)
-            lineTo(bannerWidth, 0f)
-            lineTo(bannerWidth - slantOffset, height.toFloat())
-            lineTo(0f, height.toFloat())
-            close()
+        val cardLeft = 78f
+        val cardWidth = 948f
+        val goldWedgeW = 72f
+        val tabWidth = 76f
+        val skew = 34f
+        val textPadL = 28f
+        val textPadR = 30f
+        val topMargin = 104f
+        val maxBottom = height - 80f
+
+        val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            setShadowLayer(6f, 0f, 3f, AndroidColor.argb(180, 0, 0, 0))
+        }
+        val tagPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textSize = 23f
+            color = AndroidColor.parseColor("#FFD500")
+            letterSpacing = 0.08f
+        }
+        val bulletPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
 
-        val bannerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        // Auto-fit sizes so Hero Header + all slanted bullet bars fit cleanly on 1080p
+        var titleSize = 42f
+        var bulletSize = 33f
+        var headerH = 144f
+        var bulletHeights = emptyList<Float>()
+
+        while (bulletSize >= 23f) {
+            titlePaint.textSize = titleSize
+            val titleMaxW = cardWidth - goldWedgeW - textPadL - textPadR - skew
+            val titleLines = wrapLines(cleanTitle, titlePaint, titleMaxW)
+            headerH = 54f + titleLines.size * (titleSize * 1.24f) + 22f
+
+            bulletPaint.textSize = bulletSize
+            val bLineH = bulletSize * 1.32f
+            val bMaxW = cardWidth - tabWidth - textPadL - textPadR - skew
+            bulletHeights = cleanBullets.map { b ->
+                val bLines = wrapLines(b, bulletPaint, bMaxW)
+                bLines.size * bLineH + 34f
+            }
+
+            val totalH = headerH + 18f + bulletHeights.sum() + (cleanBullets.size * 14f)
+            if (topMargin + totalH <= maxBottom) break
+
+            bulletSize -= 2f
+            titleSize = (titleSize - 2f).coerceAtLeast(30f)
+        }
+
+        val totalBlockH = headerH + 18f + bulletHeights.sum() + maxOf(0, cleanBullets.size - 1) * 14f
+        var currY = topMargin + ((maxBottom - topMargin - totalBlockH).coerceAtLeast(0f) * 0.35f)
+
+        val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = AndroidColor.argb(135, 0, 0, 0)
+            setShadowLayer(18f, 4f, 8f, AndroidColor.argb(170, 0, 0, 0))
+        }
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2.8f
+        }
+
+        // 1. HERO HEADER PARALLELOGRAM (Gold Wedge + Royal Indigo Card)
+        val hdrSkew = skew * (headerH / 120f).coerceIn(0.85f, 1.3f)
+        val wedgePath = slantedRect(cardLeft, currY, goldWedgeW, headerH, hdrSkew)
+        val wedgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = LinearGradient(
-                0f, 0f, bannerWidth, height.toFloat(),
-                AndroidColor.parseColor("#8E0614"),
-                AndroidColor.parseColor("#4A0208"),
+                cardLeft, currY, cardLeft + goldWedgeW, currY + headerH,
+                AndroidColor.parseColor("#FFE600"),
+                AndroidColor.parseColor("#FF8800"),
                 Shader.TileMode.CLAMP,
             )
         }
-        canvas.drawPath(path, bannerPaint)
+        canvas.drawPath(wedgePath, shadowPaint)
+        canvas.drawPath(wedgePath, wedgePaint)
 
-        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 3.5f
-            color = AndroidColor.parseColor("#38FFFFFF")
+        val hdrMainX = cardLeft + goldWedgeW - 2f
+        val hdrMainW = cardWidth - goldWedgeW + 2f
+        val hdrPath = slantedRect(hdrMainX, currY, hdrMainW, headerH, hdrSkew)
+        val hdrPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = LinearGradient(
+                hdrMainX, currY, hdrMainX + hdrMainW, currY + headerH,
+                intArrayOf(
+                    AndroidColor.parseColor("#18056B"),
+                    AndroidColor.parseColor("#2E0CA8"),
+                    AndroidColor.parseColor("#0C1C6B"),
+                ),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP,
+            )
         }
-        canvas.drawLine(bannerWidth, 0f, bannerWidth - slantOffset, height.toFloat(), borderPaint)
+        canvas.drawPath(hdrPath, shadowPaint)
+        canvas.drawPath(hdrPath, hdrPaint)
 
-        val cleanTitle = title.trim()
-        val cleanBullets = bullets.map { it.trim() }.filter { it.isNotEmpty() }
+        borderPaint.color = AndroidColor.parseColor("#D8E8FF")
+        borderPaint.strokeWidth = 3f
+        canvas.drawPath(slantedRect(cardLeft, currY, cardWidth, headerH, hdrSkew), borderPaint)
 
-        val startX = 64f
-        val textStartX = startX + 36f
-        val maxTextWidth = bannerWidth - slantOffset - 92f
-        val topY = 120f
-        val maxBottomY = height - 85f
+        // Header Text
+        val hdrTextX = hdrMainX + textPadL
+        canvas.drawText("⚡ FLASH NEWS", hdrTextX, currY + 38f, tagPaint)
 
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        titlePaint.textSize = titleSize
+        titlePaint.color = AndroidColor.WHITE
+        val titleLines = wrapLines(cleanTitle, titlePaint, cardWidth - goldWedgeW - textPadL - textPadR - hdrSkew)
+        var ty = currY + 48f + titleSize
+        titleLines.forEach { line ->
+            canvas.drawText(line, hdrTextX, ty, titlePaint)
+            ty += titleSize * 1.24f
+        }
+
+        currY += headerH + 18f
+
+        // 2. FLOATING SLANTED BULLET CARDS (White/Silver Card + Indigo/Gold Number Tab)
+        bulletPaint.textSize = bulletSize
+        val bLineH = bulletSize * 1.32f
+        val bMaxW = cardWidth - tabWidth - textPadL - textPadR - skew
+
+        val numPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            setShadowLayer(4f, 1f, 2f, AndroidColor.argb(140, 0, 0, 0))
-        }
-        val highlightBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 26f
             color = AndroidColor.parseColor("#FFE600")
-            style = Paint.Style.FILL
+            textAlign = Paint.Align.CENTER
         }
-        val bulletPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = 4f
+        val goldStripPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = AndroidColor.parseColor("#FFB300")
         }
 
-        var chosenSize = 36f
-        while (chosenSize >= 22f) {
-            textPaint.textSize = chosenSize
-            val lineH = chosenSize * 1.38f
-            var simY = topY
-            if (cleanTitle.isNotEmpty()) {
-                val tLines = wrapLines(cleanTitle, textPaint, maxTextWidth - 18f)
-                simY += tLines.size * lineH + 26f
-            }
-            cleanBullets.forEach { b ->
-                val bLines = wrapLines(b, textPaint, maxTextWidth)
-                simY += bLines.size * lineH + 28f
-            }
-            if (simY <= maxBottomY) break
-            chosenSize -= 2f
-        }
+        cleanBullets.forEachIndexed { idx, sentence ->
+            val bh = bulletHeights.getOrElse(idx) { 80f }
+            val rowSkew = skew * (bh / 100f).coerceIn(0.65f, 1.15f)
+            val rowLeft = cardLeft - 6f
 
-        textPaint.textSize = chosenSize
-        val lineHeight = chosenSize * 1.38f
-        var currY = topY
+            // Full slanted card shadow
+            val fullCardPath = slantedRect(rowLeft, currY, cardWidth, bh, rowSkew)
+            canvas.drawPath(fullCardPath, shadowPaint)
 
-        if (cleanTitle.isNotEmpty()) {
-            bulletPaint.color = AndroidColor.parseColor("#FFB300")
-            canvas.drawCircle(startX, currY - chosenSize * 0.30f, 9f, bulletPaint)
-
-            val titleLines = wrapLines(cleanTitle, textPaint, maxTextWidth - 20f)
-            textPaint.color = AndroidColor.parseColor("#140A00")
-            textPaint.clearShadowLayer()
-            titleLines.forEach { line ->
-                val tw = textPaint.measureText(line)
-                val pillRect = RectF(
-                    textStartX - 10f,
-                    currY - chosenSize * 0.96f,
-                    textStartX + tw + 14f,
-                    currY + chosenSize * 0.24f,
+            // Left Indigo Number Tab ("01", "02"...)
+            val tabPath = slantedRect(rowLeft, currY, tabWidth, bh, rowSkew)
+            val tabPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = LinearGradient(
+                    rowLeft, currY, rowLeft + tabWidth, currY + bh,
+                    AndroidColor.parseColor("#2A0A8F"),
+                    AndroidColor.parseColor("#12044A"),
+                    Shader.TileMode.CLAMP,
                 )
-                canvas.drawRoundRect(pillRect, 8f, 8f, highlightBgPaint)
-                canvas.drawText(line, textStartX, currY, textPaint)
-                currY += lineHeight
             }
-            currY += 18f
-            textPaint.setShadowLayer(4f, 1f, 2f, AndroidColor.argb(140, 0, 0, 0))
-        }
+            canvas.drawPath(tabPath, tabPaint)
 
-        textPaint.color = AndroidColor.WHITE
-        cleanBullets.forEach { sentence ->
-            bulletPaint.color = AndroidColor.parseColor("#FF9800")
-            canvas.drawCircle(startX, currY - chosenSize * 0.30f, 9f, bulletPaint)
+            // Thin gold divider bar on right edge of tab
+            val stripPath = slantedRect(rowLeft + tabWidth - 5f, currY, 6f, bh, rowSkew)
+            canvas.drawPath(stripPath, goldStripPaint)
 
-            val lines = wrapLines(sentence, textPaint, maxTextWidth)
+            val numLabel = String.format("%02d", idx + 1)
+            canvas.drawText(
+                numLabel,
+                rowLeft + tabWidth / 2f + rowSkew * 0.45f,
+                currY + bh / 2f + 9f,
+                numPaint,
+            )
+
+            // Main Crisp White-Silver Body Card
+            val bodyX = rowLeft + tabWidth
+            val bodyW = cardWidth - tabWidth
+            val bodyPath = slantedRect(bodyX, currY, bodyW, bh, rowSkew)
+            val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = LinearGradient(
+                    bodyX, currY, bodyX + bodyW, currY + bh,
+                    AndroidColor.parseColor("#FFFFFF"),
+                    AndroidColor.parseColor("#E3EAF7"),
+                    Shader.TileMode.CLAMP,
+                )
+            }
+            canvas.drawPath(bodyPath, bodyPaint)
+
+            borderPaint.color = AndroidColor.parseColor("#CCFFFFFF")
+            borderPaint.strokeWidth = 2.2f
+            canvas.drawPath(fullCardPath, borderPaint)
+
+            // Dual-color text: Tamil in Deep Navy, Numbers & English Names in Vibrant Crimson
+            val lines = wrapLines(sentence, bulletPaint, bMaxW)
+            var ly = currY + 22f + bulletSize * 0.9f
+            val bxText = bodyX + textPadL + rowSkew * 0.32f
             lines.forEach { line ->
-                if (currY <= height - 36f) {
-                    canvas.drawText(line, textStartX, currY, textPaint)
-                    currY += lineHeight
-                }
+                drawHighlightedLine(
+                    canvas = canvas,
+                    line = line,
+                    startX = bxText,
+                    y = ly,
+                    paint = bulletPaint,
+                    tamilColor = AndroidColor.parseColor("#0F0A38"),
+                    highlightColor = AndroidColor.parseColor("#C80036"),
+                )
+                ly += bLineH
             }
-            currY += 24f
+
+            currY += bh + 14f
         }
 
         val dir = File(context.filesDir, "news_banners").apply { mkdirs() }
@@ -1029,6 +1132,35 @@ object NewsBannerRenderer {
         }
         bitmap.recycle()
         return Uri.fromFile(file).toString()
+    }
+
+    private fun slantedRect(x: Float, y: Float, w: Float, h: Float, skew: Float): Path =
+        Path().apply {
+            moveTo(x + skew, y)
+            lineTo(x + w + skew, y)
+            lineTo(x + w, y + h)
+            lineTo(x, y + h)
+            close()
+        }
+
+    private fun drawHighlightedLine(
+        canvas: Canvas,
+        line: String,
+        startX: Float,
+        y: Float,
+        paint: Paint,
+        tamilColor: Int,
+        highlightColor: Int,
+    ) {
+        val tokens = line.split(" ")
+        var cx = startX
+        val spaceW = paint.measureText(" ")
+        tokens.forEachIndexed { idx, tok ->
+            paint.color = if (highlightWordRegex.containsMatchIn(tok)) highlightColor else tamilColor
+            canvas.drawText(tok, cx, y, paint)
+            cx += paint.measureText(tok)
+            if (idx < tokens.lastIndex) cx += spaceW
+        }
     }
 
     private fun wrapLines(text: String, paint: Paint, maxWidth: Float): List<String> {
