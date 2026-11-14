@@ -154,7 +154,11 @@ class EditorViewModel @Inject constructor(
                 val uri = c.mediaUri
                 if (c.type == ClipType.IMAGE && uri != null && c.filter?.id?.contains("cutout") == true) {
                     launch(Dispatchers.IO) {
-                        AiCutoutManager.getOrCreateCutoutUri(context, uri)
+                        AiCutoutManager.getOrCreateCutoutUri(
+                            context = context,
+                            imageUriStr = uri,
+                            softBottomFade = c.id.startsWith("pip_ai_"),
+                        )
                     }
                 }
             }
@@ -455,8 +459,8 @@ class EditorViewModel @Inject constructor(
 
     /**
      * AI Auto-Sync:
-     * Places ~8-9 timed Flash News bursts (Yellow Badge + White Bullets) aligned with Voiceover
-     * pauses, and automatically pulls & cuts out matching Player Photos from CARD ADD / CRIC CDN Cache.
+     * Places ~8-9 timed Stadium Broadcast Flash News bursts aligned with Voiceover pauses,
+     * and places transparent bottom-faded Player Cutout Photos standing on the right pitch.
      */
     fun addAiFlashNewsSequence(segments: List<FlashNewsSegment>) {
         if (segments.isEmpty()) return
@@ -506,7 +510,12 @@ class EditorViewModel @Inject constructor(
                         val photoFile = resolvePlayerPhotoFile(playerName, libraryPlayers, cdnIndex)
                         if (photoFile != null && photoFile.exists() && photoFile.length() > 0L) {
                             val photoUri = Uri.fromFile(photoFile).toString()
-                            AiCutoutManager.getOrCreateCutoutUri(context, photoUri, forceRefresh = true)
+                            AiCutoutManager.getOrCreateCutoutUri(
+                                context = context,
+                                imageUriStr = photoUri,
+                                forceRefresh = true,
+                                softBottomFade = true,
+                            )
                             cutoutCount++
                             generatedClips.add(
                                 Clip(
@@ -515,7 +524,8 @@ class EditorViewModel @Inject constructor(
                                     mediaUri = photoUri,
                                     timelineStartMs = startMs,
                                     timelineEndMs = endMs,
-                                    transform = Transform(offsetX = 0.46f, offsetY = 0.08f, scale = 0.44f),
+                                    // Standing tall on the right stadium turf like Hardik Pandya reference
+                                    transform = Transform(offsetX = 0.52f, offsetY = 0.14f, scale = 0.76f),
                                     crop = CropRect(0f, 0f, 1f, 1f),
                                     filter = Filter("ai_cutout", "AI Cutout", FilterCategory.NONE),
                                     effects = emptyList(),
@@ -571,7 +581,6 @@ class EditorViewModel @Inject constructor(
         val tokens = playerName.lowercase().split(Regex("[^a-z]+")).filter { it.length >= 3 }
         val firstLast = if (tokens.size >= 2) "${tokens.first()}${tokens.last()}" else normTarget
 
-        // 1. Check CARD ADD (PlayerLibrary) — exact, partial, first+last, or surname match
         if (normTarget.length >= 3) {
             val libDir = File(context.filesDir, "players")
             val exactLib = libraryPlayers.firstOrNull { p ->
@@ -587,14 +596,12 @@ class EditorViewModel @Inject constructor(
             }
         }
 
-        // 2. Check CRIC CDN local cache (players_cdn/) with exact, first+last, and token match
         cdnIndex[normTarget]?.let { return it }
         cdnIndex[firstLast]?.let { return it }
         cdnIndex.entries.firstOrNull { (k, _) ->
             k.length >= 4 && (normTarget.contains(k) || k.contains(normTarget) || firstLast.contains(k) || k.contains(firstLast))
         }?.value?.let { return it }
 
-        // Surname / distinctive token fallback (e.g., "Kamboj", "Gambhir", "Kohli", "Nitish")
         val lastToken = tokens.lastOrNull()?.takeIf { it.length >= 5 }
         if (lastToken != null) {
             cdnIndex.entries.firstOrNull { (k, _) -> k.contains(lastToken) }?.value?.let { return it }
@@ -697,7 +704,12 @@ class EditorViewModel @Inject constructor(
         val mediaUri = clip.mediaUri
         if (isNowCutout && mediaUri != null) {
             viewModelScope.launch(Dispatchers.IO) {
-                AiCutoutManager.getOrCreateCutoutUri(context, mediaUri, forceRefresh = true)
+                AiCutoutManager.getOrCreateCutoutUri(
+                    context = context,
+                    imageUriStr = mediaUri,
+                    forceRefresh = true,
+                    softBottomFade = clip.id.startsWith("pip_ai_"),
+                )
             }
         }
     }
