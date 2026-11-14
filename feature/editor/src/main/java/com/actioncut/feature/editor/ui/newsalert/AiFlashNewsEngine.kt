@@ -73,15 +73,34 @@ object AiFlashNewsEngine {
         val error: String? = null,
     )
 
+    private fun sanitizeApiKey(raw: String): String =
+        raw.trim().trim('"', '\'', '`').replace(Regex("\\s+"), "")
+
+    /**
+     * Uses strictly ONE credential method per request:
+     * - `AQ.` keys -> `x-goog-api-key` header ONLY
+     * - `AIza...` (standard) keys -> `?key=` query param ONLY
+     */
+    private fun prepareAuthedUrlAndHeader(baseUrl: String, cleanKey: String): Pair<String, Boolean> {
+        if (cleanKey.startsWith("AQ.")) {
+            return baseUrl to true
+        }
+        val sep = if (baseUrl.contains("?")) "&" else "?"
+        val encoded = URLEncoder.encode(cleanKey, "UTF-8")
+        return "${baseUrl}${sep}key=$encoded" to false
+    }
+
     fun getSavedApiKey(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_API, "")
-            .orEmpty()
+        sanitizeApiKey(
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_API, "")
+                .orEmpty(),
+        )
 
     fun saveApiKey(context: Context, key: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_API, key.trim())
+            .putString(KEY_API, sanitizeApiKey(key))
             .apply()
     }
 
@@ -90,7 +109,7 @@ object AiFlashNewsEngine {
         fullArticle: String,
         knownPlayers: List<String>,
     ): Result<GenerationResult> = withContext(Dispatchers.IO) {
-        val key = getSavedApiKey(context).trim()
+        val key = getSavedApiKey(context)
         var aiErrorMsg: String? = null
         if (key.isNotEmpty()) {
             val aiResult = callGeminiWithFallback(key, fullArticle, knownPlayers)
@@ -126,6 +145,9 @@ object AiFlashNewsEngine {
             if (err != null) {
                 lastError = err
                 val msg = err.message.orEmpty()
+                if (msg.contains("HTTP 401") || msg.contains("HTTP 403")) {
+                    return Result.failure(err)
+                }
                 if (firstMeaningfulError == null && !msg.contains("HTTP 404")) {
                     firstMeaningfulError = err
                 }
@@ -143,9 +165,9 @@ object AiFlashNewsEngine {
         article: String,
         knownPlayers: List<String>,
     ): List<FlashNewsSegment> {
-        val cleanKey = apiKey.trim()
-        val encodedKey = URLEncoder.encode(cleanKey, "UTF-8")
-        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$encodedKey"
+        val cleanKey = sanitizeApiKey(apiKey)
+        val baseEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+        val (endpoint, useHeader) = prepareAuthedUrlAndHeader(baseEndpoint, cleanKey)
         val playerHint = if (knownPlayers.isNotEmpty()) {
             "Known human player names in local library (use exact spelling if mentioned): ${knownPlayers.take(120).joinToString(", ")}."
         } else {
@@ -208,7 +230,7 @@ object AiFlashNewsEngine {
             connectTimeout = 20_000
             readTimeout = 60_000
             doOutput = true
-            setRequestProperty("x-goog-api-key", cleanKey)
+            if (useHeader) setRequestProperty("x-goog-api-key", cleanKey)
             setRequestProperty("Content-Type", "application/json; charset=UTF-8")
             setFixedLengthStreamingMode(payloadBytes.size)
         }
@@ -318,10 +340,6 @@ object AiFlashNewsEngine {
         return raw.trim()
     }
 
-    /**
-     * Locates the exact character index in [article] starting from [fromIdx] so the Flash News
-     * aligns mathematically with the spoken voiceover position rather than LLM guess fractions.
-     */
     private fun findAnchorCharIndex(
         article: String,
         anchor: String?,
@@ -369,7 +387,7 @@ object AiFlashNewsEngine {
         val rawUnits = cleaned.split(Regex("\\n+"))
             .flatMap { para ->
                 val trimmed = para.trim()
-                if (trimmed.length > 220) {
+                if (trimmed.length > 190) {
                     trimmed.split(Regex("(?<!\\d)\\.(?!\\d)\\s+")).map { it.trim() }
                 } else {
                     listOf(trimmed)
@@ -396,10 +414,9 @@ object AiFlashNewsEngine {
             val sentences = unit.split(Regex("(?<!\\d)\\.(?!\\d)\\s+"))
                 .map { it.trim() }
                 .filter { it.length >= 10 }
-            val b1 = (sentences.getOrElse(0) { unit }).take(220)
-            val b2 = sentences.getOrNull(1)?.takeIf { it.length >= 14 }?.take(220)
+            val b1 = (sentences.getOrElse(0) { unit }).take(190)
+            val b2 = sentences.getOrNull(1)?.takeIf { it.length >= 14 }?.take(190)
 
-            // Merge back-to-back units about the exact same player/team if close together
             if (subjectKey == lastSubjectKey && out.isNotEmpty() && out.last().bullets.size < 2) {
                 val prev = out.last()
                 out[out.lastIndex] = prev.copy(bullets = prev.bullets + b1)
@@ -584,7 +601,6 @@ object AiFlashNewsEngine {
     /**
      * Sends the actual voiceover audio to Gemini (inline for <=4MB, Resumable Files API for >4MB)
      * and asks at which second each segment's player/team is FIRST spoken.
-     * Returns timeline-ms per segment (null when unknown). Never throws.
      */
     private fun locateSegmentsInAudio(
         context: Context,
@@ -592,14 +608,20 @@ object AiFlashNewsEngine {
         segments: List<FlashNewsSegment>,
     ): AudioSyncOutcome {
         val nothing = List<Long?>(segments.size) { null }
-        val key = getSavedApiKey(context).trim()
+        val key = getSavedApiKey(context)
         if (key.isEmpty()) return AudioSyncOutcome(nothing, "No API Key")
         if (segments.isEmpty()) return AudioSyncOutcome(nothing)
 
-        val clip = audioClips
-            .filter { it.mediaUri != null }
-            .maxByOrNull { it.timelineDurationMs }
+        val validClips = audioClips.filter { it.mediaUri != null }
+        val totalAudioMs = validClips.sumOf { it.timelineDurationMs }.coerceAtLeast(1L)
+        val clip = validClips.maxByOrNull { it.timelineDurationMs }
             ?: return AudioSyncOutcome(nothing, "No audio clip")
+
+        // If the voiceover is split across many separate audio clips, a single file doesn't cover the full timeline
+        if (validClips.size > 1 && clip.timelineDurationMs < (totalAudioMs * 0.65).toLong()) {
+            return AudioSyncOutcome(nothing, "Multi-clip audio")
+        }
+
         val uriStr = clip.mediaUri ?: return AudioSyncOutcome(nothing, "No audio URI")
 
         var tempCacheFile: File? = null
@@ -687,6 +709,10 @@ object AiFlashNewsEngine {
                 val msg = r.exceptionOrNull()?.message
                 if (!msg.isNullOrBlank()) {
                     lastErr = msg
+                    if (msg.contains("HTTP 401") || msg.contains("HTTP 403")) {
+                        firstErr = msg
+                        break
+                    }
                     if (firstErr == null && !msg.contains("HTTP 404")) {
                         firstErr = msg
                     }
@@ -850,15 +876,17 @@ object AiFlashNewsEngine {
         contentLength: Long,
         streamProvider: () -> InputStream?,
     ): Pair<String, String> {
-        val cleanKey = apiKey.trim()
-        val encodedKey = URLEncoder.encode(cleanKey, "UTF-8")
-        val startUrl = "https://generativelanguage.googleapis.com/upload/v1beta/files?key=$encodedKey"
+        val cleanKey = sanitizeApiKey(apiKey)
+        val (startUrl, useHeader) = prepareAuthedUrlAndHeader(
+            "https://generativelanguage.googleapis.com/upload/v1beta/files",
+            cleanKey,
+        )
         val startConn = (URL(startUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 20_000
             readTimeout = 30_000
             doOutput = true
-            setRequestProperty("x-goog-api-key", cleanKey)
+            if (useHeader) setRequestProperty("x-goog-api-key", cleanKey)
             setRequestProperty("X-Goog-Upload-Protocol", "resumable")
             setRequestProperty("X-Goog-Upload-Command", "start")
             setRequestProperty("X-Goog-Upload-Header-Content-Length", contentLength.toString())
@@ -922,12 +950,15 @@ object AiFlashNewsEngine {
         var polls = 0
         while (state == "PROCESSING" && fileName.isNotBlank() && polls++ < 25) {
             Thread.sleep(1500)
-            val pollUrl = "https://generativelanguage.googleapis.com/v1beta/$fileName?key=$encodedKey"
+            val (pollUrl, pollUseHeader) = prepareAuthedUrlAndHeader(
+                "https://generativelanguage.googleapis.com/v1beta/$fileName",
+                cleanKey,
+            )
             val pollConn = (URL(pollUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 10_000
                 readTimeout = 15_000
-                setRequestProperty("x-goog-api-key", cleanKey)
+                if (pollUseHeader) setRequestProperty("x-goog-api-key", cleanKey)
             }
             val pCode = pollConn.responseCode
             val pBody = (if (pCode in 200..299) pollConn.inputStream else pollConn.errorStream)
@@ -944,14 +975,16 @@ object AiFlashNewsEngine {
 
     private fun deleteGeminiUploadedFile(apiKey: String, fileName: String) {
         if (fileName.isBlank()) return
-        val cleanKey = apiKey.trim()
-        val encodedKey = URLEncoder.encode(cleanKey, "UTF-8")
-        val conn = (URL("https://generativelanguage.googleapis.com/v1beta/$fileName?key=$encodedKey")
-            .openConnection() as HttpURLConnection).apply {
+        val cleanKey = sanitizeApiKey(apiKey)
+        val (delUrl, useHeader) = prepareAuthedUrlAndHeader(
+            "https://generativelanguage.googleapis.com/v1beta/$fileName",
+            cleanKey,
+        )
+        val conn = (URL(delUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "DELETE"
             connectTimeout = 5_000
             readTimeout = 5_000
-            setRequestProperty("x-goog-api-key", cleanKey)
+            if (useHeader) setRequestProperty("x-goog-api-key", cleanKey)
         }
         runCatching { conn.responseCode }
         conn.disconnect()
@@ -964,9 +997,11 @@ object AiFlashNewsEngine {
         audioPart: JSONObject,
         count: Int,
     ): List<Double?> {
-        val cleanKey = apiKey.trim()
-        val encodedKey = URLEncoder.encode(cleanKey, "UTF-8")
-        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$encodedKey"
+        val cleanKey = sanitizeApiKey(apiKey)
+        val (endpoint, useHeader) = prepareAuthedUrlAndHeader(
+            "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent",
+            cleanKey,
+        )
         val parts = JSONArray()
             .put(JSONObject().put("text", prompt))
             .put(audioPart)
@@ -984,7 +1019,7 @@ object AiFlashNewsEngine {
             connectTimeout = 25_000
             readTimeout = 120_000
             doOutput = true
-            setRequestProperty("x-goog-api-key", cleanKey)
+            if (useHeader) setRequestProperty("x-goog-api-key", cleanKey)
             setRequestProperty("Content-Type", "application/json; charset=UTF-8")
             setFixedLengthStreamingMode(payloadBytes.size)
         }
@@ -1017,7 +1052,6 @@ object AiFlashNewsEngine {
         return out
     }
 
-    /** Accepts 12.4, "12.4", or "01:12" / "00:01:12" style values. */
     private fun parseSecondsValue(v: Any?): Double? {
         if (v == null || v == JSONObject.NULL) return null
         if (v is Number) return v.toDouble().takeIf { it >= 0.0 }
@@ -1034,7 +1068,7 @@ object AiFlashNewsEngine {
 
     /**
      * Maps each segment onto the ACTUAL Voice Audio span using non-cascading timestamps
-     * (never pushes later players late, and skips/trims around any CRIC CDN Scorecard range).
+     * across ALL audio clips on the timeline (never squeezes into one clip, never overlaps Scorecards).
      */
     suspend fun detectVoicePauseStartsMs(
         context: Context,
@@ -1181,11 +1215,26 @@ object AiFlashNewsEngine {
         result
     }
 
+    /** Analyzes ALL audio clips in timeline order so multi-clip voiceovers map accurately across the entire video. */
     private fun analyzeVoiceRuns(context: Context, audioClips: List<Clip>): List<LongRange>? {
-        val clip = audioClips
-            .filter { it.mediaUri != null }
-            .maxByOrNull { it.timelineDurationMs }
-            ?: return null
+        val validClips = audioClips.filter { it.mediaUri != null }.sortedBy { it.timelineStartMs }
+        if (validClips.isEmpty()) return null
+        val allRuns = ArrayList<LongRange>()
+        for (clip in validClips) {
+            val runs = analyzeSingleClipVoiceRuns(context, clip)
+            if (!runs.isNullOrEmpty()) {
+                allRuns.addAll(runs)
+            } else if (clip.timelineDurationMs >= 500L) {
+                allRuns.add(clip.timelineStartMs..clip.timelineEndMs)
+            }
+        }
+        if (allRuns.isEmpty()) return null
+        val sorted = allRuns.sortedBy { it.first }
+        val totalVoiced = sorted.sumOf { (it.last - it.first).coerceAtLeast(0L) }
+        return if (totalVoiced >= 3_000L) sorted else null
+    }
+
+    private fun analyzeSingleClipVoiceRuns(context: Context, clip: Clip): List<LongRange>? {
         val uriStr = clip.mediaUri ?: return null
         val speed = clip.speed.coerceAtLeast(0.01f).toDouble()
         val sourceDurMs = if (clip.sourceDurationMs > 0L) {
@@ -1339,10 +1388,9 @@ object AiFlashNewsEngine {
         audioStart: Long,
         audioEnd: Long,
     ): Pair<Long, Long> {
-        val primary = audioClips
-            .filter { it.mediaUri != null }
-            .maxByOrNull { it.timelineDurationMs }
-            ?: return audioStart to audioEnd
+        val valid = audioClips.filter { it.mediaUri != null }.sortedBy { it.timelineStartMs }
+        if (valid.size != 1) return audioStart to audioEnd
+        val primary = valid.first()
         val uriStr = primary.mediaUri ?: return audioStart to audioEnd
         val extractor = MediaExtractor()
         return runCatching {
@@ -1390,58 +1438,62 @@ object AiFlashNewsEngine {
         audioClips: List<Clip>,
         totalMs: Long,
     ): List<Long> {
-        val primary = audioClips
-            .filter { it.mediaUri != null }
-            .maxByOrNull { it.timelineDurationMs }
-            ?: return emptyList()
-        val uriStr = primary.mediaUri ?: return emptyList()
-        val extractor = MediaExtractor()
-        return runCatching {
-            extractor.setDataSource(context, Uri.parse(uriStr), null)
-            val trackIdx = (0 until extractor.trackCount).firstOrNull { i ->
-                extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
-            } ?: return@runCatching emptyList()
-            extractor.selectTrack(trackIdx)
+        val valid = audioClips.filter { it.mediaUri != null }.sortedBy { it.timelineStartMs }
+        if (valid.isEmpty()) return emptyList()
+        val allPauses = ArrayList<Long>()
+        valid.forEach { clip ->
+            allPauses.add(clip.timelineStartMs)
+            val uriStr = clip.mediaUri ?: return@forEach
+            val extractor = MediaExtractor()
+            val clipPauses = runCatching {
+                extractor.setDataSource(context, Uri.parse(uriStr), null)
+                val trackIdx = (0 until extractor.trackCount).firstOrNull { i ->
+                    extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+                } ?: return@runCatching emptyList()
+                extractor.selectTrack(trackIdx)
 
-            val bucketCount = 120
-            val byteSums = LongArray(bucketCount)
-            val byteCounts = IntArray(bucketCount)
-            val buf = ByteBuffer.allocate(16 * 1024)
-            val clipDurUs = primary.timelineDurationMs.coerceAtLeast(1_000L) * 1_000L
-            var frames = 0
+                val bucketCount = 120
+                val byteSums = LongArray(bucketCount)
+                val byteCounts = IntArray(bucketCount)
+                val buf = ByteBuffer.allocate(16 * 1024)
+                val clipDurUs = clip.timelineDurationMs.coerceAtLeast(1_000L) * 1_000L
+                var frames = 0
 
-            while (frames++ < 25_000) {
-                val sz = extractor.readSampleData(buf, 0)
-                if (sz < 0) break
-                val tUs = extractor.sampleTime - primary.sourceInMs * 1_000L
-                if (tUs in 0L..clipDurUs) {
-                    val b = ((tUs.toDouble() / clipDurUs) * (bucketCount - 1))
-                        .toInt().coerceIn(0, bucketCount - 1)
-                    byteSums[b] += sz.toLong()
-                    byteCounts[b]++
+                while (frames++ < 25_000) {
+                    val sz = extractor.readSampleData(buf, 0)
+                    if (sz < 0) break
+                    val tUs = extractor.sampleTime - clip.sourceInMs * 1_000L
+                    if (tUs in 0L..clipDurUs) {
+                        val b = ((tUs.toDouble() / clipDurUs) * (bucketCount - 1))
+                            .toInt().coerceIn(0, bucketCount - 1)
+                        byteSums[b] += sz.toLong()
+                        byteCounts[b]++
+                    }
+                    extractor.advance()
                 }
-                extractor.advance()
-            }
 
-            val avgs = DoubleArray(bucketCount) { i ->
-                if (byteCounts[i] > 0) byteSums[i].toDouble() / byteCounts[i] else Double.MAX_VALUE
-            }
-            val validAvgs = avgs.filter { it < Double.MAX_VALUE }.sorted()
-            if (validAvgs.isEmpty()) return@runCatching emptyList()
-            val threshold = validAvgs[(validAvgs.size * 0.25).toInt().coerceIn(0, validAvgs.size - 1)]
-
-            val pauses = ArrayList<Long>()
-            for (i in 1 until bucketCount - 1) {
-                if (avgs[i] <= threshold) {
-                    val timelineMs = primary.timelineStartMs +
-                        ((i.toDouble() / bucketCount) * primary.timelineDurationMs).roundToLong()
-                    if (timelineMs in 0L..totalMs) pauses.add(timelineMs)
+                val avgs = DoubleArray(bucketCount) { i ->
+                    if (byteCounts[i] > 0) byteSums[i].toDouble() / byteCounts[i] else Double.MAX_VALUE
                 }
+                val validAvgs = avgs.filter { it < Double.MAX_VALUE }.sorted()
+                if (validAvgs.isEmpty()) return@runCatching emptyList()
+                val threshold = validAvgs[(validAvgs.size * 0.25).toInt().coerceIn(0, validAvgs.size - 1)]
+
+                val pauses = ArrayList<Long>()
+                for (i in 1 until bucketCount - 1) {
+                    if (avgs[i] <= threshold) {
+                        val timelineMs = clip.timelineStartMs +
+                            ((i.toDouble() / bucketCount) * clip.timelineDurationMs).roundToLong()
+                        if (timelineMs in 0L..totalMs) pauses.add(timelineMs)
+                    }
+                }
+                pauses
+            }.getOrDefault(emptyList()).also {
+                runCatching { extractor.release() }
             }
-            pauses
-        }.getOrDefault(emptyList()).also {
-            runCatching { extractor.release() }
+            allPauses.addAll(clipPauses)
         }
+        return allPauses
     }
 
     private fun abs(v: Long): Long = if (v < 0L) -v else v
