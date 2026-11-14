@@ -3,6 +3,7 @@ package com.actioncut.feature.editor.ui.scorecard
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -17,6 +18,7 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import kotlin.math.abs
 
 data class CdnBatter(
     val id: String?,
@@ -64,8 +66,11 @@ data class CdnMatchScorecard(
 object CdnScorecardClient {
     private const val PREFS = "actioncut_cdn_scorecard"
     private const val KEY_WORKER_URL = "worker_url"
+    private const val PLACEHOLDER_IMAGE_ID = "174146"
 
     const val DEFAULT_WORKER_URL = "https://restless-field-a018.anbufff2.workers.dev"
+
+    private val nameIndexLock = Any()
 
     fun savedWorkerUrl(context: Context): String {
         val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -124,7 +129,7 @@ object CdnScorecardClient {
         val players = buildList {
             innings.batters.forEach { add(Triple(it.imageId, it.id, it.name)) }
             innings.bowlers.forEach { add(Triple(it.imageId, it.id, it.name)) }
-        }.distinctBy { (imgId, pid, _) -> "${imgId.orEmpty()}_${pid.orEmpty()}" }
+        }.distinctBy { (imgId, pid, name) -> "${imgId.orEmpty()}_${pid.orEmpty()}_${normName(name)}" }
 
         val gate = Semaphore(6)
         coroutineScope {
@@ -138,7 +143,10 @@ object CdnScorecardClient {
         }
     }
 
-    /** Ensures a single player's 600x600 Cricbuzz photo is cached locally and returns true if downloaded/present. */
+    /**
+     * Ensures a single player's real Cricbuzz photo is cached locally and indexed permanently by
+     * player name in `filesDir/players_cdn/`. Cricbuzz's "cb" placeholder ball is skipped.
+     */
     suspend fun ensurePlayerPhoto(
         context: Context,
         workerBaseUrl: String,
@@ -146,13 +154,27 @@ object CdnScorecardClient {
         playerId: String?,
         playerName: String,
     ): Boolean = withContext(Dispatchers.IO) {
+        if (imageId == PLACEHOLDER_IMAGE_ID || imageId == "0") return@withContext false
+
         val dir = File(context.filesDir, "scorecards/cdn_players").apply { mkdirs() }
         val target = when {
             !imageId.isNullOrBlank() -> File(dir, "img_$imageId.jpg")
             !playerId.isNullOrBlank() -> File(dir, "pid_$playerId.jpg")
             else -> return@withContext false
         }
-        if (target.exists() && target.length() > 0L) return@withContext true
+        if (target.exists() && target.length() > 0L) {
+            val existing = runCatching { BitmapFactory.decodeFile(target.absolutePath) }.getOrNull()
+            if (existing != null) {
+                val bad = isCricbuzzPlaceholder(existing)
+                existing.recycle()
+                if (!bad) {
+                    saveNameMapping(context, playerName, target)
+                    return@withContext true
+                }
+            }
+            runCatching { target.delete() }
+            return@withContext false
+        }
 
         val base = workerBaseUrl.trim().trimEnd('/')
         if (!base.startsWith("http")) return@withContext false
@@ -170,10 +192,17 @@ object CdnScorecardClient {
             val ok = if (conn.responseCode in 200..299) {
                 val bmp = conn.inputStream.use { BitmapFactory.decodeStream(it) }
                 if (bmp != null) {
-                    val tmp = File(dir, "${target.name}.tmp")
-                    FileOutputStream(tmp).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
-                    bmp.recycle()
-                    tmp.renameTo(target)
+                    if (isCricbuzzPlaceholder(bmp)) {
+                        bmp.recycle()
+                        false
+                    } else {
+                        val tmp = File(dir, "${target.name}.tmp")
+                        FileOutputStream(tmp).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+                        bmp.recycle()
+                        val moved = tmp.renameTo(target)
+                        if (moved) saveNameMapping(context, playerName, target)
+                        moved
+                    }
                 } else false
             } else false
             conn.disconnect()
@@ -181,14 +210,154 @@ object CdnScorecardClient {
         }.getOrDefault(false)
     }
 
-    fun cachedPlayerPhoto(context: Context, imageId: String?, playerId: String?): Bitmap? {
+    fun cachedPlayerPhoto(
+        context: Context,
+        imageId: String?,
+        playerId: String?,
+        playerName: String? = null,
+    ): Bitmap? {
+        if (imageId == PLACEHOLDER_IMAGE_ID || imageId == "0") return null
         val dir = File(context.filesDir, "scorecards/cdn_players")
         val candidates = buildList {
             if (!imageId.isNullOrBlank()) add(File(dir, "img_$imageId.jpg"))
             if (!playerId.isNullOrBlank()) add(File(dir, "pid_$playerId.jpg"))
         }
-        val file = candidates.firstOrNull { it.exists() && it.length() > 0L } ?: return null
-        return runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()
+        val file = candidates.firstOrNull { it.exists() && it.length() > 0L }
+            ?: playerName?.let { findCachedPhotoFileByName(context, it) }
+            ?: return null
+
+        val bmp = runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull() ?: return null
+        if (isCricbuzzPlaceholder(bmp)) {
+            bmp.recycle()
+            runCatching { file.delete() }
+            return null
+        }
+        return bmp
+    }
+
+    /** Finds a permanently cached player photo file in local storage by player name (exact or partial). */
+    fun findCachedPhotoFileByName(context: Context, playerName: String): File? {
+        val key = normName(playerName)
+        if (key.length < 3) return null
+        synchronized(nameIndexLock) {
+            val idxFile = nameIndexFile(context)
+            if (!idxFile.exists()) return null
+            val obj = runCatching { JSONObject(idxFile.readText()) }.getOrNull() ?: return null
+            val exactPath = obj.optString(key, "").takeIf { it.isNotBlank() }
+            if (exactPath != null) {
+                val f = File(exactPath)
+                if (f.exists() && f.length() > 0L) return f
+            }
+            val keys = obj.keys()
+            var bestPath: String? = null
+            var bestScore = 0
+            while (keys.hasNext()) {
+                val k = keys.next()
+                if (k.length >= 4 && (key.contains(k) || k.contains(key))) {
+                    val score = minOf(k.length, key.length)
+                    if (score > bestScore) {
+                        val p = obj.optString(k, "")
+                        val f = File(p)
+                        if (f.exists() && f.length() > 0L) {
+                            bestScore = score
+                            bestPath = p
+                        }
+                    }
+                }
+            }
+            return bestPath?.let { File(it) }
+        }
+    }
+
+    private fun saveNameMapping(context: Context, playerName: String, photoFile: File) {
+        val key = normName(playerName)
+        if (key.length < 3) return
+        val permDir = File(context.filesDir, "players_cdn").apply { mkdirs() }
+        val permFile = File(permDir, "$key.jpg")
+        runCatching {
+            if (!permFile.exists() || permFile.length() != photoFile.length()) {
+                photoFile.copyTo(permFile, overwrite = true)
+            }
+        }
+        val storedFile = if (permFile.exists() && permFile.length() > 0L) permFile else photoFile
+        synchronized(nameIndexLock) {
+            val idxFile = nameIndexFile(context)
+            val obj = if (idxFile.exists()) {
+                runCatching { JSONObject(idxFile.readText()) }.getOrElse { JSONObject() }
+            } else {
+                JSONObject()
+            }
+            obj.put(key, storedFile.absolutePath)
+            idxFile.writeText(obj.toString())
+        }
+    }
+
+    private fun nameIndexFile(context: Context): File =
+        File(File(context.filesDir, "players_cdn").apply { mkdirs() }, "name_index.json")
+
+    private fun normName(name: String): String =
+        name.lowercase().replace(Regex("[^a-z]"), "")
+
+    /**
+     * Detects Cricbuzz's generic "cb" cricket-ball placeholder image (transparent or solid corners,
+     * symmetrical white ball ring, and green/gray non-skin center) so it is never shown or cached.
+     */
+    fun isCricbuzzPlaceholder(bmp: Bitmap): Boolean {
+        val w = bmp.width
+        val h = bmp.height
+        if (w < 20 || h < 20) return false
+
+        fun px(fx: Float, fy: Float): Int =
+            bmp.getPixel((w * fx).toInt().coerceIn(0, w - 1), (h * fy).toInt().coerceIn(0, h - 1))
+
+        fun isPureWhite(c: Int): Boolean =
+            Color.alpha(c) > 200 && Color.red(c) > 232 && Color.green(c) > 232 && Color.blue(c) > 232
+
+        fun bandHasWhite(fx: Float?, fy: Float?, fromPct: Int, toPct: Int): Boolean {
+            for (pct in fromPct..toPct step 2) {
+                val p = if (fx != null) px(fx, pct / 100f) else px(pct / 100f, fy!!)
+                if (isPureWhite(p)) return true
+            }
+            return false
+        }
+
+        val hasSymmetricalWhiteRing =
+            bandHasWhite(0.50f, null, 12, 38) &&
+                bandHasWhite(0.50f, null, 62, 88) &&
+                bandHasWhite(null, 0.50f, 12, 38) &&
+                bandHasWhite(null, 0.50f, 62, 88)
+        if (!hasSymmetricalWhiteRing) return false
+
+        val corners = intArrayOf(
+            px(0.05f, 0.05f),
+            px(0.95f, 0.05f),
+            px(0.05f, 0.95f),
+            px(0.95f, 0.95f),
+        )
+        val cornersTransparent = corners.all { Color.alpha(it) < 35 }
+        val c0 = corners[0]
+        val cornersUniform = corners.all { c ->
+            abs(Color.red(c) - Color.red(c0)) < 18 &&
+                abs(Color.green(c) - Color.green(c0)) < 18 &&
+                abs(Color.blue(c) - Color.blue(c0)) < 18
+        }
+        if (!cornersTransparent && !cornersUniform) return false
+
+        // Reject if warm human skin tone is present in the center area (protects real player photos)
+        for (yp in 36..64 step 7) {
+            for (xp in 36..64 step 7) {
+                val c = px(xp / 100f, yp / 100f)
+                if (Color.alpha(c) > 180) {
+                    val r = Color.red(c)
+                    val g = Color.green(c)
+                    val b = Color.blue(c)
+                    if (r > g + 16 && r > b + 22 && r > 90) {
+                        return false
+                    }
+                }
+            }
+        }
+        return true
     }
 
     fun parseJson(raw: String): CdnMatchScorecard {
