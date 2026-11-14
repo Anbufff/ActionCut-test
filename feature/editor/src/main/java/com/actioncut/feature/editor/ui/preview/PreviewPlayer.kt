@@ -648,6 +648,17 @@ private fun PipLayer(
         val isSelected = active.id == selectedClipId
         val cyanColor = Color(0xFF00E5FF)
 
+        val autoAnimAlpha = if (active.id.startsWith("pip_ai_")) {
+            val elapsed = (playheadMs - active.timelineStartMs).coerceAtLeast(0L)
+            val remaining = (active.timelineEndMs - playheadMs).coerceAtLeast(0L)
+            val fadeMs = 280f
+            when {
+                elapsed < fadeMs -> (elapsed / fadeMs).coerceIn(0f, 1f)
+                remaining < fadeMs -> (remaining / fadeMs).coerceIn(0f, 1f)
+                else -> 1f
+            }
+        } else 1f
+
         var liveOffsetX by remember(active.id, t.offsetX) { mutableFloatStateOf(t.offsetX) }
         var liveOffsetY by remember(active.id, t.offsetY) { mutableFloatStateOf(t.offsetY) }
         var liveScale by remember(active.id, t.scale) { mutableFloatStateOf(t.scale) }
@@ -683,7 +694,7 @@ private fun PipLayer(
                     translationX = (liveOffsetX / 2f) * w
                     translationY = (liveOffsetY / 2f) * h
                     rotationZ = t.rotationDegrees
-                    alpha = active.opacity
+                    alpha = active.opacity * autoAnimAlpha
                 }
                 .pointerInput(active.id, isSelected, isCropModeActive) {
                     awaitEachGesture {
@@ -1023,12 +1034,23 @@ private fun OverlayLayer(
                 val baseSp = clip.text?.fontSizeSp ?: 24f
                 val isNewsBanner = clip.mediaUri?.contains("news_banner") == true
 
+                val bannerSlideFrac = if (isNewsBanner) {
+                    val elapsed = (playheadMs - clip.timelineStartMs).coerceAtLeast(0L)
+                    val remaining = (clip.timelineEndMs - playheadMs).coerceAtLeast(0L)
+                    val animMs = 320f
+                    when {
+                        elapsed < animMs -> 1f - (elapsed / animMs)
+                        remaining < animMs -> 1f - (remaining / animMs)
+                        else -> 0f
+                    }.coerceIn(0f, 1f)
+                } else 0f
+
                 val gestureModifier = Modifier
                     .graphicsLayer {
-                        translationX = (t.offsetX / 2f) * w
+                        translationX = (t.offsetX / 2f) * w - bannerSlideFrac * (w * 0.56f)
                         translationY = (t.offsetY / 2f) * h
                         rotationZ = t.rotationDegrees
-                        alpha = props.opacity
+                        alpha = props.opacity * (1f - bannerSlideFrac * 0.5f)
                     }
 
                 val imageUri = clip.mediaUri
@@ -1042,9 +1064,7 @@ private fun OverlayLayer(
                             StickerImage(
                                 uri = imageUri,
                                 widthPx = w,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .align(Alignment.Center),
+                                modifier = Modifier.align(Alignment.Center),
                             )
                             Box(
                                 modifier = Modifier
