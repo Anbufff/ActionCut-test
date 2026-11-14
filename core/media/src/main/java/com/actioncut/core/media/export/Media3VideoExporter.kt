@@ -179,11 +179,20 @@ class Media3VideoExporter @Inject constructor(
                     val outgoing = clip.transitionToNext
                         ?.takeIf { it.type != TransitionType.NONE && it.type != TransitionType.SEAMLESS_MERGE }
 
+                    // Never draw Flash News banners or AI Player Cutouts over any CRIC / CRIC CDN Scorecard!
+                    val overlaysForClip = if (clip.scorecard != null) {
+                        overlayClips.filterNot { ov ->
+                            ov.mediaUri?.contains("news_banner") == true || ov.id.startsWith("pip_ai_")
+                        }
+                    } else {
+                        overlayClips
+                    }
+
                     clip.toEditedMediaItem(
                         targetWidth = targetWidth,
                         targetHeight = targetHeight,
                         settings = settings,
-                        overlays = overlayClips,
+                        overlays = overlaysForClip,
                         presentationLayout = presentationLayout,
                         incoming = incoming,
                         outgoing = outgoing,
