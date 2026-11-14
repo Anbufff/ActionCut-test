@@ -41,6 +41,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import coil.request.CachePolicy
 import coil.request.ImageRequest
 import com.actioncut.core.designsystem.component.rememberHaptic
 import com.actioncut.core.media.template.FbTemplateBarRenderer
@@ -493,6 +494,24 @@ fun PreviewPlayer(
                     )
                 }
 
+                // 1. News Banner / Stadium Background Layer goes UNDER the Player Cutout
+                val newsBannerOverlays = remember(overlays) {
+                    overlays.filter { it.mediaUri?.contains("news_banner") == true }
+                }
+                val foregroundOverlays = remember(overlays) {
+                    overlays.filter { it.mediaUri?.contains("news_banner") != true }
+                }
+
+                OverlayLayer(
+                    overlays = newsBannerOverlays,
+                    playheadMs = playheadMs,
+                    selectedClipId = selectedClipId,
+                    onSelect = onSelectOverlay,
+                    onMove = onMoveOverlay,
+                    modifier = Modifier.fillMaxSize(),
+                )
+
+                // 2. Player Cutout / PiP Layer sits ON TOP of the Stadium Background
                 if (pipPlayer != null) {
                     PipLayer(
                         pipPlayer = pipPlayer,
@@ -508,8 +527,9 @@ fun PreviewPlayer(
                     )
                 }
 
+                // 3. Text & Sticker Overlays sit above PiP
                 OverlayLayer(
-                    overlays = overlays,
+                    overlays = foregroundOverlays,
                     playheadMs = playheadMs,
                     selectedClipId = selectedClipId,
                     onSelect = onSelectOverlay,
@@ -602,15 +622,24 @@ private fun PipLayer(
 
     LaunchedEffect(active.id, active.mediaUri, isAiCutoutOn) {
         if (isAiCutoutOn && active.mediaUri != null && active.type == ClipType.IMAGE) {
-            cutoutUri = AiCutoutManager.getOrCreateCutoutUri(context, active.mediaUri!!)
+            cutoutUri = AiCutoutManager.getOrCreateCutoutUri(
+                context = context,
+                imageUriStr = active.mediaUri!!,
+                softBottomFade = active.id.startsWith("pip_ai_"),
+            )
         } else {
             cutoutUri = null
         }
     }
 
     val displayUri = if (isAiCutoutOn && cutoutUri != null) cutoutUri else active.mediaUri
+    val cutoutStamp = remember(displayUri, isAiCutoutOn) {
+        if (isAiCutoutOn && displayUri != null) {
+            runCatching { java.io.File(Uri.parse(displayUri).path ?: "").lastModified() }.getOrDefault(0L)
+        } else 0L
+    }
 
-    var mediaAspectRatio by remember(active.id, displayUri) {
+    var mediaAspectRatio by remember(active.id, displayUri, cutoutStamp) {
         mutableFloatStateOf(
             runCatching {
                 val uriStr = displayUri ?: ""
@@ -878,11 +907,17 @@ private fun PipLayer(
                             },
                     )
                 } else {
-                    val pipImgReq = remember(displayUri) {
+                    val pipImgReq = remember(displayUri, cutoutStamp, isAiCutoutOn) {
                         ImageRequest.Builder(context)
                             .data(displayUri)
                             .size(1024, 1024)
                             .crossfade(false)
+                            .apply {
+                                if (isAiCutoutOn) {
+                                    memoryCacheKey("${displayUri}_$cutoutStamp")
+                                    diskCachePolicy(CachePolicy.DISABLED)
+                                }
+                            }
                             .build()
                     }
                     AsyncImage(
@@ -1037,7 +1072,7 @@ private fun OverlayLayer(
                 val bannerSlideFrac = if (isNewsBanner) {
                     val elapsed = (playheadMs - clip.timelineStartMs).coerceAtLeast(0L)
                     val remaining = (clip.timelineEndMs - playheadMs).coerceAtLeast(0L)
-                    val animMs = 320f
+                    val animMs = 300f
                     when {
                         elapsed < animMs -> 1f - (elapsed / animMs)
                         remaining < animMs -> 1f - (remaining / animMs)
@@ -1047,10 +1082,10 @@ private fun OverlayLayer(
 
                 val gestureModifier = Modifier
                     .graphicsLayer {
-                        translationX = (t.offsetX / 2f) * w - bannerSlideFrac * (w * 0.56f)
+                        translationX = (t.offsetX / 2f) * w
                         translationY = (t.offsetY / 2f) * h
                         rotationZ = t.rotationDegrees
-                        alpha = props.opacity * (1f - bannerSlideFrac * 0.5f)
+                        alpha = props.opacity * (1f - bannerSlideFrac)
                     }
 
                 val imageUri = clip.mediaUri
@@ -1069,7 +1104,7 @@ private fun OverlayLayer(
                             Box(
                                 modifier = Modifier
                                     .fillMaxHeight()
-                                    .fillMaxWidth(0.48f)
+                                    .fillMaxWidth(0.52f)
                                     .align(Alignment.CenterStart)
                                     .clickable { onSelect(clip.id) },
                             )
