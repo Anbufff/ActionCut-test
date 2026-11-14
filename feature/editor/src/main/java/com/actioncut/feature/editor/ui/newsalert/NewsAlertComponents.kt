@@ -7,6 +7,7 @@ import android.graphics.Color as AndroidColor
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.media.MediaExtractor
@@ -129,33 +130,38 @@ fun NewsAlertTemplatesDialog(
                         .fillMaxWidth()
                         .height(130.dp)
                         .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF0A144A))
+                        .background(Color(0xFF06166E))
                         .clickable { onSelectTemplate() }
                         .padding(14.dp),
                 ) {
                     ComposeCanvas(modifier = Modifier.fillMaxSize()) {
+                        drawRect(
+                            color = Color(0xFF45A817),
+                            topLeft = androidx.compose.ui.geometry.Offset(0f, size.height * 0.78f),
+                            size = androidx.compose.ui.geometry.Size(size.width, size.height * 0.22f),
+                        )
                         val goldWedge = ComposePath().apply {
-                            moveTo(20f, 10f)
-                            lineTo(66f, 10f)
-                            lineTo(46f, size.height - 10f)
-                            lineTo(0f, size.height - 10f)
+                            moveTo(20f, 12f)
+                            lineTo(64f, 12f)
+                            lineTo(44f, size.height * 0.72f)
+                            lineTo(0f, size.height * 0.72f)
                             close()
                         }
                         drawPath(goldWedge, color = Color(0xFFFFC107))
 
                         val mainCard = ComposePath().apply {
-                            moveTo(74f, 10f)
-                            lineTo(size.width * 0.72f, 10f)
-                            lineTo(size.width * 0.67f, size.height - 10f)
-                            lineTo(54f, size.height - 10f)
+                            moveTo(72f, 12f)
+                            lineTo(size.width * 0.72f, 12f)
+                            lineTo(size.width * 0.67f, size.height * 0.72f)
+                            lineTo(52f, size.height * 0.72f)
                             close()
                         }
                         drawPath(mainCard, color = Color(0xFF280A82))
                     }
                     Text(
-                        text = "⚡ BROADCAST FLASH NEWS",
+                        text = "⚡ STADIUM FLASH NEWS",
                         style = TextStyle(color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold),
-                        modifier = Modifier.align(Alignment.CenterStart).padding(start = 64.dp),
+                        modifier = Modifier.align(Alignment.CenterStart).padding(start = 60.dp, bottom = 14.dp),
                     )
                 }
 
@@ -183,12 +189,12 @@ fun NewsAlertTemplatesDialog(
                         }
                         Column {
                             Text(
-                                text = "TV BROADCAST SLANTED CARDS",
+                                text = "STADIUM BROADCAST CARD",
                                 style = TextStyle(color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold),
                             )
                             Spacer(Modifier.height(3.dp))
                             Text(
-                                text = "Gold + Indigo Slanted Cards · Voiceover Auto-Sync & Player Cutout",
+                                text = "Blue Stadium + Green Pitch Default · Tamil AI Auto-Sync & Cutout",
                                 style = TextStyle(color = Color(0xFFFFC107), fontSize = 12.sp, fontWeight = FontWeight.Medium),
                             )
                         }
@@ -305,7 +311,7 @@ fun FlashNewsTextDialog(
                     }
 
                     Text(
-                        text = "முழு Voiceover கட்டுரையை Paste செய்து 'AI Auto-Sync' அழுத்தினால் 8–9 முக்கிய Broadcast Flash News + Player Cutout தானாக Timeline-ல் செட் ஆகும். அல்லது 'Apply' மூலம் தனி Card சேர்க்கலாம்.",
+                        text = "முழு Voiceover கட்டுரையை Paste செய்து 'AI Auto-Sync' அழுத்தினால், ஸ்டேடியம் Background-ல் தமிழ் Flash News + Player Cutout தானாக Timeline-ல் செட் ஆகும்.",
                         style = TextStyle(color = Color(0xFFB0B0B0), fontSize = 11.5.sp, lineHeight = 16.sp),
                     )
 
@@ -508,17 +514,21 @@ object AiFlashNewsEngine {
             You are a Tamil Cricket TV News Flash Graphics editor.
             Read the following Tamil cricket voiceover script carefully and extract 8 to 9 key Flash News moments in exact chronological order from start to end of the article.
 
-            STRICT RULES:
-            1. Remove filler conversational phrases ("மக்களே", "யோசிச்சு பாருங்க", "கமெண்ட் பாக்ஸ்ல சொல்லுங்க").
-            2. Convert Tamil spoken numbers into crisp English digits + units (e.g., "முன்னூத்தி ஐம்பத்தியொன்னு" -> "351 runs", "ஆறு புள்ளி அஞ்சு ஓவர்" -> "6.5 overs", "ஒன்பது ஓவர்ல எண்பத்திரண்டு" -> "9 overs 82 runs", "பதினாறு பந்துல ஒன்பது" -> "16 balls 9 runs").
-            3. Keep cricket player and coach names in English (e.g., "Gautam Gambhir", "Nitish Kumar Reddy", "Anshul Kamboj", "Rohit Sharma", "Virat Kohli", "Shubman Gill", "Suryakumar Yadav").
-            4. $playerHint
-            5. IMPORTANT: Even if a paragraph refers to "கேப்டன்" (captain), "கோச்" (coach), or "அவர்" (he) without repeating the name, infer the actual cricketer/coach from the full article context and set "playerName" to their full English name so their photo appears on screen!
-            6. For each moment return:
-               - "title": short punchy Tamil badge title (2 to 4 words, e.g., "அதிர்ச்சி தோல்வி", "கம்பீர் எச்சரிக்கை", "Nitish Kumar சிக்கல்", "இறுதி முடிவு")
-               - "bullets": array of 1 or 2 complete, self-contained Tamil+English bullet points (each 8 to 18 words max; NEVER cut off a sentence mid-way)
-               - "playerName": English full name of the main cricketer/coach discussed in that segment (or "" only if no player/coach is involved)
-               - "startFraction": float from 0.02 to 0.90 representing where in the article this moment happens chronologically.
+            STRICT LANGUAGE & FORMAT RULES:
+            1. ALL "title" and "bullets" text MUST BE WRITTEN IN TAMIL SCRIPT (தமிழ் எழுத்துகளில் மட்டுமே இருக்க வேண்டும்)! NEVER translate the Tamil script into full English sentences!
+            2. ONLY cricket player/coach names (e.g., "Rohit Sharma", "Ruturaj Gaikwad", "Gautam Gambhir", "Nitish Kumar Reddy") and numeric stats + short English units (e.g., "351 runs", "6.5 overs", "13 balls 5 runs", "0 runs") should be in English inside the Tamil sentences!
+               GOOD example bullet: "முதல் பந்திலேயே டக் அவுட் ஆகி ஏமாற்றம் அளித்தார் Rohit Sharma."
+               GOOD example bullet: "13 balls-ல் வெறும் 5 runs மட்டுமே எடுத்து சொதப்பினார் Ruturaj Gaikwad."
+               BAD example (DO NOT DO THIS): "Rohit Sharma got out on a golden duck without scoring any runs."
+            3. Remove filler conversational phrases ("மக்களே", "யோசிச்சு பாருங்க", "கமெண்ட் பாக்ஸ்ல சொல்லுங்க").
+            4. Convert Tamil spoken numbers into crisp English digits + units (e.g., "முன்னூத்தி ஐம்பத்தியொன்னு" -> "351 runs", "ஆறு புள்ளி அஞ்சு ஓவர்" -> "6.5 overs").
+            5. $playerHint
+            6. Even if a paragraph refers to "கேப்டன்" (captain), "கோச்" (coach), or "அவர்" (he) without repeating the name, infer the actual cricketer/coach from context and set "playerName" to their full English name!
+            7. For each moment return:
+               - "title": short punchy Tamil badge title (2 to 4 words, e.g., "Rohit Sharma டக்", "Ruturaj சொதப்பல்", "இறுதி முடிவு")
+               - "bullets": array of 1 or 2 complete Tamil sentences (each 8 to 16 words max) with English player names & numeric stats
+               - "playerName": English full name of the main cricketer/coach discussed in that segment
+               - "startFraction": float from 0.02 to 0.90 representing chronological position in the article.
 
             Return ONLY a valid JSON array of objects, no extra text.
 
@@ -707,6 +717,10 @@ object AiFlashNewsEngine {
             "kohli" to "Virat Kohli",
             "விராட்" to "Virat Kohli",
             "கோலி" to "Virat Kohli",
+            "ruturaj" to "Ruturaj Gaikwad",
+            "gaikwad" to "Ruturaj Gaikwad",
+            "ருதுராஜ்" to "Ruturaj Gaikwad",
+            "கெய்க்வாட்" to "Ruturaj Gaikwad",
             "shubman" to "Shubman Gill",
             "gill" to "Shubman Gill",
             "சுப்மன்" to "Shubman Gill",
@@ -881,10 +895,10 @@ object AiFlashNewsEngine {
 }
 
 /**
- * TV Broadcast Slanted Parallelogram Renderer (inspired by Star Sports / BCCI graphic):
- * - Gold-Amber slanted wedge + Deep Royal Indigo Hero Header Card
- * - Floating Silver-White slanted bullet bars with Indigo+Gold number tabs (01, 02, ...)
- * - Transparent gaps & right side so background photo & player cutout shine through!
+ * Full 1920x1080 Star Sports / IPL Stadium Default Background + Slanted Flash News Cards:
+ * - Deep Royal Blue Stadium Sky + Glowing Floodlight Beams + Curved Green Turf Pitch at bottom
+ * - Gold-Amber slanted wedge + Royal Indigo Hero Header Card
+ * - Floating Silver-White slanted bullet bars with Tamil Navy text & Crimson Highlights
  */
 object NewsBannerRenderer {
 
@@ -922,18 +936,21 @@ object NewsBannerRenderer {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
+        // 0. Draw Default Stadium Arena + Floodlights + Curved Green Cricket Pitch Background
+        drawDefaultStadiumBackground(canvas, width.toFloat(), height.toFloat())
+
         val cleanTitle = title.trim().ifEmpty { "FLASH NEWS" }
         val cleanBullets = bullets.map { it.trim() }.filter { it.isNotEmpty() }
 
-        val cardLeft = 78f
-        val cardWidth = 948f
-        val goldWedgeW = 72f
-        val tabWidth = 76f
-        val skew = 34f
+        val cardLeft = 108f
+        val cardWidth = 960f
+        val goldWedgeW = 86f
+        val tabWidth = 80f
+        val skew = 36f
         val textPadL = 28f
         val textPadR = 30f
-        val topMargin = 104f
-        val maxBottom = height - 80f
+        val topMargin = 135f
+        val maxBottom = 875f // keeps cards neatly above the green pitch horizon curve
 
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -949,13 +966,12 @@ object NewsBannerRenderer {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
 
-        // Auto-fit sizes so Hero Header + all slanted bullet bars fit cleanly on 1080p
-        var titleSize = 42f
+        var titleSize = 44f
         var bulletSize = 33f
-        var headerH = 144f
+        var headerH = 148f
         var bulletHeights = emptyList<Float>()
 
-        while (bulletSize >= 23f) {
+        while (bulletSize >= 22f) {
             titlePaint.textSize = titleSize
             val titleMaxW = cardWidth - goldWedgeW - textPadL - textPadR - skew
             val titleLines = wrapLines(cleanTitle, titlePaint, titleMaxW)
@@ -966,29 +982,29 @@ object NewsBannerRenderer {
             val bMaxW = cardWidth - tabWidth - textPadL - textPadR - skew
             bulletHeights = cleanBullets.map { b ->
                 val bLines = wrapLines(b, bulletPaint, bMaxW)
-                bLines.size * bLineH + 34f
+                bLines.size * bLineH + 36f
             }
 
-            val totalH = headerH + 18f + bulletHeights.sum() + (cleanBullets.size * 14f)
+            val totalH = headerH + 16f + bulletHeights.sum() + (cleanBullets.size * 12f)
             if (topMargin + totalH <= maxBottom) break
 
             bulletSize -= 2f
             titleSize = (titleSize - 2f).coerceAtLeast(30f)
         }
 
-        val totalBlockH = headerH + 18f + bulletHeights.sum() + maxOf(0, cleanBullets.size - 1) * 14f
-        var currY = topMargin + ((maxBottom - topMargin - totalBlockH).coerceAtLeast(0f) * 0.35f)
+        val totalBlockH = headerH + 16f + bulletHeights.sum() + maxOf(0, cleanBullets.size - 1) * 12f
+        var currY = topMargin + ((maxBottom - topMargin - totalBlockH).coerceAtLeast(0f) * 0.40f)
 
         val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = AndroidColor.argb(135, 0, 0, 0)
-            setShadowLayer(18f, 4f, 8f, AndroidColor.argb(170, 0, 0, 0))
+            color = AndroidColor.argb(145, 0, 0, 0)
+            setShadowLayer(20f, 5f, 9f, AndroidColor.argb(180, 0, 0, 0))
         }
         val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = 2.8f
         }
 
-        // 1. HERO HEADER PARALLELOGRAM (Gold Wedge + Royal Indigo Card)
+        // 1. HERO HEADER PARALLELOGRAM (Gold Wedge + Deep Royal Indigo Card)
         val hdrSkew = skew * (headerH / 120f).coerceIn(0.85f, 1.3f)
         val wedgePath = slantedRect(cardLeft, currY, goldWedgeW, headerH, hdrSkew)
         val wedgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1020,11 +1036,10 @@ object NewsBannerRenderer {
         canvas.drawPath(hdrPath, shadowPaint)
         canvas.drawPath(hdrPath, hdrPaint)
 
-        borderPaint.color = AndroidColor.parseColor("#D8E8FF")
+        borderPaint.color = AndroidColor.parseColor("#E6F0FF")
         borderPaint.strokeWidth = 3f
         canvas.drawPath(slantedRect(cardLeft, currY, cardWidth, headerH, hdrSkew), borderPaint)
 
-        // Header Text
         val hdrTextX = hdrMainX + textPadL
         canvas.drawText("⚡ FLASH NEWS", hdrTextX, currY + 38f, tagPaint)
 
@@ -1037,9 +1052,9 @@ object NewsBannerRenderer {
             ty += titleSize * 1.24f
         }
 
-        currY += headerH + 18f
+        currY += headerH + 16f
 
-        // 2. FLOATING SLANTED BULLET CARDS (White/Silver Card + Indigo/Gold Number Tab)
+        // 2. FLOATING SLANTED BULLET CARDS
         bulletPaint.textSize = bulletSize
         val bLineH = bulletSize * 1.32f
         val bMaxW = cardWidth - tabWidth - textPadL - textPadR - skew
@@ -1059,11 +1074,9 @@ object NewsBannerRenderer {
             val rowSkew = skew * (bh / 100f).coerceIn(0.65f, 1.15f)
             val rowLeft = cardLeft - 6f
 
-            // Full slanted card shadow
             val fullCardPath = slantedRect(rowLeft, currY, cardWidth, bh, rowSkew)
             canvas.drawPath(fullCardPath, shadowPaint)
 
-            // Left Indigo Number Tab ("01", "02"...)
             val tabPath = slantedRect(rowLeft, currY, tabWidth, bh, rowSkew)
             val tabPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 shader = LinearGradient(
@@ -1075,7 +1088,6 @@ object NewsBannerRenderer {
             }
             canvas.drawPath(tabPath, tabPaint)
 
-            // Thin gold divider bar on right edge of tab
             val stripPath = slantedRect(rowLeft + tabWidth - 5f, currY, 6f, bh, rowSkew)
             canvas.drawPath(stripPath, goldStripPaint)
 
@@ -1087,7 +1099,6 @@ object NewsBannerRenderer {
                 numPaint,
             )
 
-            // Main Crisp White-Silver Body Card
             val bodyX = rowLeft + tabWidth
             val bodyW = cardWidth - tabWidth
             val bodyPath = slantedRect(bodyX, currY, bodyW, bh, rowSkew)
@@ -1105,7 +1116,6 @@ object NewsBannerRenderer {
             borderPaint.strokeWidth = 2.2f
             canvas.drawPath(fullCardPath, borderPaint)
 
-            // Dual-color text: Tamil in Deep Navy, Numbers & English Names in Vibrant Crimson
             val lines = wrapLines(sentence, bulletPaint, bMaxW)
             var ly = currY + 22f + bulletSize * 0.9f
             val bxText = bodyX + textPadL + rowSkew * 0.32f
@@ -1122,7 +1132,7 @@ object NewsBannerRenderer {
                 ly += bLineH
             }
 
-            currY += bh + 14f
+            currY += bh + 12f
         }
 
         val dir = File(context.filesDir, "news_banners").apply { mkdirs() }
@@ -1132,6 +1142,170 @@ object NewsBannerRenderer {
         }
         bitmap.recycle()
         return Uri.fromFile(file).toString()
+    }
+
+    /**
+     * Draws the full-frame Royal Blue Cricket Stadium + Floodlight Beams + Curved Green
+     * Outfield Pitch default background matching the user's maxresdefault reference image.
+     */
+    private fun drawDefaultStadiumBackground(canvas: Canvas, w: Float, h: Float) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        // 1. Deep Royal Blue Stadium Sky Gradient
+        p.shader = LinearGradient(
+            0f, 0f, 0f, h,
+            intArrayOf(
+                AndroidColor.parseColor("#02083D"),
+                AndroidColor.parseColor("#0B2A9E"),
+                AndroidColor.parseColor("#091E73"),
+                AndroidColor.parseColor("#030A36"),
+            ),
+            floatArrayOf(0f, 0.38f, 0.75f, 1f),
+            Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(0f, 0f, w, h, p)
+        p.shader = null
+
+        // 2. Upper Stadium Roof / Bowl Architectural Curves
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 4f
+        p.color = AndroidColor.argb(45, 110, 195, 255)
+        val arch1 = Path().apply {
+            moveTo(-100f, 520f)
+            quadTo(w * 0.50f, 120f, w + 100f, 520f)
+        }
+        canvas.drawPath(arch1, p)
+
+        p.strokeWidth = 10f
+        p.color = AndroidColor.argb(28, 0, 210, 255)
+        val arch2 = Path().apply {
+            moveTo(-80f, 650f)
+            quadTo(w * 0.50f, 290f, w + 80f, 650f)
+        }
+        canvas.drawPath(arch2, p)
+
+        // Left & Right Stadium Floodlight Truss Diagonal Silhouettes
+        p.style = Paint.Style.FILL
+        p.color = AndroidColor.argb(110, 2, 10, 56)
+        val leftRoof = Path().apply {
+            moveTo(0f, 180f)
+            lineTo(540f, 470f)
+            lineTo(0f, 700f)
+            close()
+        }
+        canvas.drawPath(leftRoof, p)
+
+        val rightRoof = Path().apply {
+            moveTo(w, 160f)
+            lineTo(w - 580f, 470f)
+            lineTo(w, 720f)
+            close()
+        }
+        canvas.drawPath(rightRoof, p)
+
+        // 3. Glowing Stadium Floodlight Halos (Behind Cards & Behind Right Player)
+        p.shader = RadialGradient(
+            w * 0.28f, h * 0.34f, w * 0.36f,
+            intArrayOf(AndroidColor.argb(95, 45, 155, 255), AndroidColor.TRANSPARENT),
+            null, Shader.TileMode.CLAMP,
+        )
+        canvas.drawCircle(w * 0.28f, h * 0.34f, w * 0.36f, p)
+
+        p.shader = RadialGradient(
+            w * 0.76f, h * 0.42f, w * 0.34f,
+            intArrayOf(AndroidColor.argb(135, 65, 175, 255), AndroidColor.TRANSPARENT),
+            null, Shader.TileMode.CLAMP,
+        )
+        canvas.drawCircle(w * 0.76f, h * 0.42f, w * 0.34f, p)
+
+        // Diagonal Floodlight Beams shining down from upper left & upper right
+        p.shader = LinearGradient(
+            180f, 0f, 660f, 840f,
+            intArrayOf(AndroidColor.argb(72, 120, 225, 255), AndroidColor.TRANSPARENT),
+            null, Shader.TileMode.CLAMP,
+        )
+        val beamL = Path().apply {
+            moveTo(60f, 0f)
+            lineTo(360f, 0f)
+            lineTo(840f, 880f)
+            lineTo(320f, 880f)
+            close()
+        }
+        canvas.drawPath(beamL, p)
+
+        p.shader = LinearGradient(
+            w - 180f, 0f, w - 660f, 840f,
+            intArrayOf(AndroidColor.argb(78, 120, 225, 255), AndroidColor.TRANSPARENT),
+            null, Shader.TileMode.CLAMP,
+        )
+        val beamR = Path().apply {
+            moveTo(w - 380f, 0f)
+            lineTo(w - 60f, 0f)
+            lineTo(w - 300f, 880f)
+            lineTo(w - 860f, 880f)
+            close()
+        }
+        canvas.drawPath(beamR, p)
+        p.shader = null
+
+        // Subtle Stadium Crowd & Bokeh Dots in the distant mid-band
+        p.color = AndroidColor.argb(42, 160, 220, 255)
+        for (i in 0..42) {
+            val bx = (i * 47f) % w
+            val by = 540f + ((i * 29) % 270)
+            canvas.drawCircle(bx, by, 2.5f + (i % 4), p)
+        }
+
+        // 4. Curved Lush Green Cricket Outfield Turf at the Bottom
+        val turfPath = Path().apply {
+            moveTo(0f, 920f)
+            quadTo(w * 0.50f, 770f, w, 920f)
+            lineTo(w, h)
+            lineTo(0f, h)
+            close()
+        }
+        canvas.save()
+        canvas.clipPath(turfPath)
+
+        p.shader = RadialGradient(
+            w * 0.50f, 850f, w * 0.62f,
+            intArrayOf(
+                AndroidColor.parseColor("#A4EB34"),
+                AndroidColor.parseColor("#54B818"),
+                AndroidColor.parseColor("#1D6E0A"),
+            ),
+            floatArrayOf(0f, 0.48f, 1f),
+            Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(0f, 760f, w, h, p)
+        p.shader = null
+
+        // Alternating Mowed Turf Stripes radiating from horizon
+        val centerTopX = w * 0.50f
+        val centerTopY = 740f
+        for (s in -8..8 step 2) {
+            p.color = AndroidColor.argb(30, 255, 255, 255)
+            val stripe = Path().apply {
+                moveTo(centerTopX + s * 65f, centerTopY)
+                lineTo(centerTopX + (s + 1) * 65f, centerTopY)
+                lineTo(centerTopX + (s + 1) * 210f, h + 40f)
+                lineTo(centerTopX + s * 210f, h + 40f)
+                close()
+            }
+            canvas.drawPath(stripe, p)
+        }
+        canvas.restore()
+
+        // Bright Floodlight Rim Glow along the Grass Horizon Curve
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 6f
+        p.color = AndroidColor.argb(145, 195, 255, 95)
+        val rimPath = Path().apply {
+            moveTo(0f, 920f)
+            quadTo(w * 0.50f, 770f, w, 920f)
+        }
+        canvas.drawPath(rimPath, p)
+        p.style = Paint.Style.FILL
     }
 
     private fun slantedRect(x: Float, y: Float, w: Float, h: Float, skew: Float): Path =
