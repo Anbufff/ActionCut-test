@@ -357,10 +357,15 @@ fun EditorScreen(
 
     if (showFlashNewsText) {
         FlashNewsTextDialog(
+            knownPlayerNames = remember { viewModel.getKnownPlayerNamesForAi() },
             onDismiss = { showFlashNewsText = false },
             onApply = { text ->
                 showFlashNewsText = false
                 viewModel.addNewsBannerOverlay(text)
+            },
+            onAiAutoSync = { segments ->
+                showFlashNewsText = false
+                viewModel.addAiFlashNewsSequence(segments)
             },
         )
     }
