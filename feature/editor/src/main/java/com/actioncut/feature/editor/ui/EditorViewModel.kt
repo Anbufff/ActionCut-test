@@ -460,7 +460,7 @@ class EditorViewModel @Inject constructor(
     /**
      * AI Auto-Sync:
      * Places ~8-9 timed Stadium Broadcast Flash News bursts aligned with Voiceover pauses,
-     * and places transparent bottom-faded Player Cutout Photos standing on the right pitch.
+     * and places transparent bottom-faded Player Cutout Photos standing tall on the right pitch.
      */
     fun addAiFlashNewsSequence(segments: List<FlashNewsSegment>) {
         if (segments.isEmpty()) return
@@ -524,8 +524,8 @@ class EditorViewModel @Inject constructor(
                                     mediaUri = photoUri,
                                     timelineStartMs = startMs,
                                     timelineEndMs = endMs,
-                                    // Standing tall on the right stadium turf like Hardik Pandya reference
-                                    transform = Transform(offsetX = 0.52f, offsetY = 0.14f, scale = 0.76f),
+                                    // Higher & larger on the right pitch like Hardik Pandya reference
+                                    transform = Transform(offsetX = 0.50f, offsetY = 0.04f, scale = 0.84f),
                                     crop = CropRect(0f, 0f, 1f, 1f),
                                     filter = Filter("ai_cutout", "AI Cutout", FilterCategory.NONE),
                                     effects = emptyList(),
