@@ -896,7 +896,7 @@ object AiFlashNewsEngine {
 
 /**
  * Full 1920x1080 Star Sports / IPL Stadium Default Background + Slanted Flash News Cards:
- * - Deep Royal Blue Stadium Sky + Glowing Floodlight Beams + Curved Green Turf Pitch at bottom
+ * - Deep Royal Blue Stadium Sky + Glowing Floodlight Beams + Vivid Sunlit Green Turf Pitch
  * - Gold-Amber slanted wedge + Royal Indigo Hero Header Card
  * - Floating Silver-White slanted bullet bars with Tamil Navy text & Crimson Highlights
  */
@@ -936,7 +936,7 @@ object NewsBannerRenderer {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
-        // 0. Draw Default Stadium Arena + Floodlights + Curved Green Cricket Pitch Background
+        // 0. Draw Default Stadium Arena + Floodlights + Vivid Green Cricket Pitch Background
         drawDefaultStadiumBackground(canvas, width.toFloat(), height.toFloat())
 
         val cleanTitle = title.trim().ifEmpty { "FLASH NEWS" }
@@ -950,7 +950,7 @@ object NewsBannerRenderer {
         val textPadL = 28f
         val textPadR = 30f
         val topMargin = 135f
-        val maxBottom = 875f // keeps cards neatly above the green pitch horizon curve
+        val maxBottom = 875f
 
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -1145,13 +1145,14 @@ object NewsBannerRenderer {
     }
 
     /**
-     * Draws the full-frame Royal Blue Cricket Stadium + Floodlight Beams + Curved Green
+     * Draws the full-frame Royal Blue Cricket Stadium + Floodlight Beams + Vivid Sunlit Green
      * Outfield Pitch default background matching the user's maxresdefault reference image.
      */
     private fun drawDefaultStadiumBackground(canvas: Canvas, w: Float, h: Float) {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
 
         // 1. Deep Royal Blue Stadium Sky Gradient
+        p.alpha = 255
         p.shader = LinearGradient(
             0f, 0f, 0f, h,
             intArrayOf(
@@ -1169,7 +1170,7 @@ object NewsBannerRenderer {
         // 2. Upper Stadium Roof / Bowl Architectural Curves
         p.style = Paint.Style.STROKE
         p.strokeWidth = 4f
-        p.color = AndroidColor.argb(45, 110, 195, 255)
+        p.color = AndroidColor.argb(55, 110, 195, 255)
         val arch1 = Path().apply {
             moveTo(-100f, 520f)
             quadTo(w * 0.50f, 120f, w + 100f, 520f)
@@ -1177,7 +1178,7 @@ object NewsBannerRenderer {
         canvas.drawPath(arch1, p)
 
         p.strokeWidth = 10f
-        p.color = AndroidColor.argb(28, 0, 210, 255)
+        p.color = AndroidColor.argb(34, 0, 210, 255)
         val arch2 = Path().apply {
             moveTo(-80f, 650f)
             quadTo(w * 0.50f, 290f, w + 80f, 650f)
@@ -1186,7 +1187,7 @@ object NewsBannerRenderer {
 
         // Left & Right Stadium Floodlight Truss Diagonal Silhouettes
         p.style = Paint.Style.FILL
-        p.color = AndroidColor.argb(110, 2, 10, 56)
+        p.color = AndroidColor.argb(120, 2, 10, 56)
         val leftRoof = Path().apply {
             moveTo(0f, 180f)
             lineTo(540f, 470f)
@@ -1203,25 +1204,26 @@ object NewsBannerRenderer {
         }
         canvas.drawPath(rightRoof, p)
 
-        // 3. Glowing Stadium Floodlight Halos (Behind Cards & Behind Right Player)
+        // 3. Glowing Stadium Floodlight Halos (Reset alpha to 255 so full glow renders!)
+        p.alpha = 255
         p.shader = RadialGradient(
             w * 0.28f, h * 0.34f, w * 0.36f,
-            intArrayOf(AndroidColor.argb(95, 45, 155, 255), AndroidColor.TRANSPARENT),
+            intArrayOf(AndroidColor.argb(115, 45, 165, 255), AndroidColor.TRANSPARENT),
             null, Shader.TileMode.CLAMP,
         )
         canvas.drawCircle(w * 0.28f, h * 0.34f, w * 0.36f, p)
 
         p.shader = RadialGradient(
-            w * 0.76f, h * 0.42f, w * 0.34f,
-            intArrayOf(AndroidColor.argb(135, 65, 175, 255), AndroidColor.TRANSPARENT),
+            w * 0.76f, h * 0.42f, w * 0.35f,
+            intArrayOf(AndroidColor.argb(165, 70, 185, 255), AndroidColor.TRANSPARENT),
             null, Shader.TileMode.CLAMP,
         )
-        canvas.drawCircle(w * 0.76f, h * 0.42f, w * 0.34f, p)
+        canvas.drawCircle(w * 0.76f, h * 0.42f, w * 0.35f, p)
 
         // Diagonal Floodlight Beams shining down from upper left & upper right
         p.shader = LinearGradient(
             180f, 0f, 660f, 840f,
-            intArrayOf(AndroidColor.argb(72, 120, 225, 255), AndroidColor.TRANSPARENT),
+            intArrayOf(AndroidColor.argb(95, 130, 230, 255), AndroidColor.TRANSPARENT),
             null, Shader.TileMode.CLAMP,
         )
         val beamL = Path().apply {
@@ -1235,7 +1237,7 @@ object NewsBannerRenderer {
 
         p.shader = LinearGradient(
             w - 180f, 0f, w - 660f, 840f,
-            intArrayOf(AndroidColor.argb(78, 120, 225, 255), AndroidColor.TRANSPARENT),
+            intArrayOf(AndroidColor.argb(105, 130, 230, 255), AndroidColor.TRANSPARENT),
             null, Shader.TileMode.CLAMP,
         )
         val beamR = Path().apply {
@@ -1249,14 +1251,14 @@ object NewsBannerRenderer {
         p.shader = null
 
         // Subtle Stadium Crowd & Bokeh Dots in the distant mid-band
-        p.color = AndroidColor.argb(42, 160, 220, 255)
+        p.color = AndroidColor.argb(48, 160, 220, 255)
         for (i in 0..42) {
             val bx = (i * 47f) % w
             val by = 540f + ((i * 29) % 270)
             canvas.drawCircle(bx, by, 2.5f + (i % 4), p)
         }
 
-        // 4. Curved Lush Green Cricket Outfield Turf at the Bottom
+        // 4. Curved Vivid Sunlit Green Cricket Outfield Turf at the Bottom
         val turfPath = Path().apply {
             moveTo(0f, 920f)
             quadTo(w * 0.50f, 770f, w, 920f)
@@ -1267,14 +1269,16 @@ object NewsBannerRenderer {
         canvas.save()
         canvas.clipPath(turfPath)
 
+        // Reset alpha to 255 so the green grass shader renders at full vibrant brightness!
+        p.alpha = 255
         p.shader = RadialGradient(
-            w * 0.50f, 850f, w * 0.62f,
+            w * 0.50f, 830f, w * 0.68f,
             intArrayOf(
-                AndroidColor.parseColor("#A4EB34"),
-                AndroidColor.parseColor("#54B818"),
-                AndroidColor.parseColor("#1D6E0A"),
+                AndroidColor.parseColor("#B8F238"),
+                AndroidColor.parseColor("#5DC71C"),
+                AndroidColor.parseColor("#1E750A"),
             ),
-            floatArrayOf(0f, 0.48f, 1f),
+            floatArrayOf(0f, 0.50f, 1f),
             Shader.TileMode.CLAMP,
         )
         canvas.drawRect(0f, 760f, w, h, p)
@@ -1284,7 +1288,7 @@ object NewsBannerRenderer {
         val centerTopX = w * 0.50f
         val centerTopY = 740f
         for (s in -8..8 step 2) {
-            p.color = AndroidColor.argb(30, 255, 255, 255)
+            p.color = AndroidColor.argb(40, 255, 255, 255)
             val stripe = Path().apply {
                 moveTo(centerTopX + s * 65f, centerTopY)
                 lineTo(centerTopX + (s + 1) * 65f, centerTopY)
@@ -1296,10 +1300,11 @@ object NewsBannerRenderer {
         }
         canvas.restore()
 
-        // Bright Floodlight Rim Glow along the Grass Horizon Curve
+        // Bright Sunlit Rim Glow along the Grass Horizon Curve
+        p.alpha = 255
         p.style = Paint.Style.STROKE
-        p.strokeWidth = 6f
-        p.color = AndroidColor.argb(145, 195, 255, 95)
+        p.strokeWidth = 7f
+        p.color = AndroidColor.argb(200, 215, 255, 95)
         val rimPath = Path().apply {
             moveTo(0f, 920f)
             quadTo(w * 0.50f, 770f, w, 920f)
