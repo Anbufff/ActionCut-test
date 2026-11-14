@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,6 +37,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -198,7 +200,7 @@ fun NewsAlertTemplatesDialog(
                             )
                             Spacer(Modifier.height(3.dp))
                             Text(
-                                text = "Night Black + Crimson & Gold · Flat Broadcast Style · Player/Team Sync",
+                                text = "Night Black + Crimson & Gold · 4 Boxes + Audio Highlight · Player Sync",
                                 style = TextStyle(color = Color(0xFFFF5470), fontSize = 12.sp, fontWeight = FontWeight.Medium),
                             )
                         }
@@ -220,6 +222,8 @@ fun FlashNewsTextDialog(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf(initialText) }
+    var apiKey by remember { mutableStateOf(AiFlashNewsEngine.getSavedApiKey(context)) }
+    var showApiKeyBox by remember { mutableStateOf(apiKey.isBlank()) }
     var isBusy by remember { mutableStateOf(false) }
 
     Dialog(
@@ -259,6 +263,23 @@ fun FlashNewsTextDialog(
                             style = TextStyle(color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold),
                             modifier = Modifier.weight(1f),
                         )
+                        TextButton(
+                            onClick = { showApiKeyBox = !showApiKeyBox },
+                            enabled = !isBusy,
+                        ) {
+                            Icon(
+                                Icons.Filled.Key,
+                                contentDescription = "API Key",
+                                tint = if (apiKey.isNotBlank()) Color(0xFF00E5FF) else Color(0xFFFFC107),
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.size(4.dp))
+                            Text(
+                                text = if (apiKey.isNotBlank()) "Key ✓" else "API Key",
+                                color = if (apiKey.isNotBlank()) Color(0xFF00E5FF) else Color(0xFFFFC107),
+                                fontSize = 12.sp,
+                            )
+                        }
                         IconButton(
                             onClick = { if (!isBusy) onDismiss() },
                             modifier = Modifier.size(28.dp),
@@ -267,8 +288,36 @@ fun FlashNewsTextDialog(
                         }
                     }
 
+                    if (showApiKeyBox) {
+                        OutlinedTextField(
+                            value = apiKey,
+                            onValueChange = {
+                                apiKey = it
+                                AiFlashNewsEngine.saveApiKey(context, it)
+                            },
+                            singleLine = true,
+                            placeholder = {
+                                Text(
+                                    "Google AI Studio Gemini API Key (Text Key Points மட்டும்)",
+                                    color = Color(0xFF777777),
+                                    fontSize = 12.sp,
+                                )
+                            },
+                            textStyle = TextStyle(color = Color.White, fontSize = 13.sp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFF202022)),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFFFFC107),
+                                unfocusedBorderColor = Color(0xFF333333),
+                                cursorColor = Color(0xFFFFC107),
+                            ),
+                        )
+                    }
+
                     Text(
-                        text = "முழு Voiceover கட்டுரையை Paste செய்து 'Auto-Sync' அழுத்தினால், Offline-ல் உங்கள் Voice-க்கு ஏற்ப Player அல்லது Team பெயர் வரும் சரியான நேரங்களில் Flash News தானாக செட் ஆகும் (Scorecard மீது வராது).",
+                        text = "முழு கட்டுரையை Paste செய்து 'AI Auto-Sync' அழுத்தினால், Gemini AI முக்கிய Player Key Points (Digital Numbers) உருவாக்கி, Offline Voice-Run Sync மூலம் சரியான நேரத்தில் செட் செய்யும்.",
                         style = TextStyle(color = Color(0xFFB0B0B0), fontSize = 11.5.sp, lineHeight = 16.sp),
                     )
 
@@ -333,11 +382,20 @@ fun FlashNewsTextDialog(
                             onClick = {
                                 if (text.isBlank() || isBusy) return@Button
                                 isBusy = true
+                                AiFlashNewsEngine.saveApiKey(context, apiKey)
                                 scope.launch {
                                     val res = AiFlashNewsEngine.generateSegments(context, text, knownPlayerNames)
                                     isBusy = false
-                                    res.onSuccess { segments ->
-                                        onAiAutoSync(segments)
+                                    res.onSuccess { result ->
+                                        if (!result.usedAi) {
+                                            val reason = result.aiError ?: "No API Key"
+                                            Toast.makeText(
+                                                context,
+                                                "Offline mode ($reason) — ${result.segments.size} slides",
+                                                Toast.LENGTH_LONG,
+                                            ).show()
+                                        }
+                                        onAiAutoSync(result.segments)
                                     }.onFailure { err ->
                                         Toast.makeText(
                                             context,
@@ -366,7 +424,7 @@ fun FlashNewsTextDialog(
                             } else {
                                 Icon(Icons.Filled.AutoAwesome, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.size(4.dp))
-                                Text("Auto-Sync", color = Color.Black, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                                Text("AI Auto-Sync", color = Color.Black, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
