@@ -3,6 +3,7 @@ package com.actioncut.feature.editor.ui
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.webkit.MimeTypeMap
+import android.widget.Toast
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -40,8 +41,11 @@ import com.actioncut.core.model.TransitionCategory
 import com.actioncut.core.model.TransitionType
 import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.VisualEffectType
+import com.actioncut.feature.editor.ui.newsalert.AiFlashNewsEngine
+import com.actioncut.feature.editor.ui.newsalert.FlashNewsSegment
 import com.actioncut.feature.editor.ui.newsalert.NewsBannerRenderer
 import com.actioncut.feature.editor.ui.pip.AiCutoutManager
+import com.actioncut.feature.editor.ui.scorecard.CdnScorecardClient
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibrary
 import com.actioncut.feature.editor.ui.scorecard.ScoreCardComposer
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
@@ -54,6 +58,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 import javax.inject.Inject
@@ -383,7 +388,9 @@ class EditorViewModel @Inject constructor(
     fun addNewsBannerOverlay(text: String) {
         if (text.isBlank()) return
         viewModelScope.launch {
-            val bannerUri = NewsBannerRenderer.createBannerBitmap(context, text)
+            val bannerUri = withContext(Dispatchers.IO) {
+                NewsBannerRenderer.createBannerBitmap(context, text)
+            }
             val currentPlayhead = _uiState.value.playheadMs
             val totalTimelineMs = _uiState.value.timeline.durationMs
 
@@ -409,6 +416,126 @@ class EditorViewModel @Inject constructor(
             }
             _uiState.update { it.copy(selectedClipId = clip.id) }
         }
+    }
+
+    /** Returns all registered + cached player names so Gemini Flash matches exact names. */
+    fun getKnownPlayerNamesForAi(): List<String> =
+        runCatching { PlayerLibrary(context).all().map { it.name } }.getOrDefault(emptyList())
+
+    /**
+     * AI Auto-Sync:
+     * Places ~8-9 timed Flash News bursts (Yellow Badge + White Bullets) aligned with Voiceover
+     * pauses, and automatically pulls matching Player Cutout Photos from Card Add / CRIC CDN Cache.
+     */
+    fun addAiFlashNewsSequence(segments: List<FlashNewsSegment>) {
+        if (segments.isEmpty()) return
+        viewModelScope.launch {
+            val currentTimeline = _uiState.value.timeline
+            val audioClips = currentTimeline.audioTracks
+                .flatMap { it.clips }
+                .filter { it.mediaUri != null && it.volume > 0f }
+                .sortedBy { it.timelineStartMs }
+
+            val audioEndMs = audioClips.maxOfOrNull { it.timelineEndMs } ?: 0L
+            val videoEndMs = currentTimeline.videoTracks
+                .flatMap { it.clips }
+                .maxOfOrNull { it.timelineEndMs } ?: 0L
+            val targetDurationMs = maxOf(audioEndMs, videoEndMs, currentTimeline.durationMs, segments.size * 20_000L)
+
+            val windows = AiFlashNewsEngine.detectVoicePauseStartsMs(
+                context = context,
+                audioClips = audioClips,
+                segments = segments,
+                totalDurationMs = targetDurationMs,
+            )
+
+            val library = PlayerLibrary(context)
+            val libraryPlayers = withContext(Dispatchers.IO) { library.all() }
+
+            val generatedClips = ArrayList<Clip>()
+            var cutoutCount = 0
+
+            withContext(Dispatchers.IO) {
+                segments.forEachIndexed { idx, seg ->
+                    val (startMs, endMs) = windows.getOrNull(idx) ?: return@forEachIndexed
+                    val bannerUri = NewsBannerRenderer.createSegmentBannerBitmap(context, seg.title, seg.bullets)
+                    val bannerClip = Clip(
+                        id = "banner_ai_${System.currentTimeMillis()}_$idx",
+                        type = ClipType.STICKER,
+                        mediaUri = bannerUri,
+                        timelineStartMs = startMs,
+                        timelineEndMs = endMs,
+                        transform = Transform(offsetX = 0f, offsetY = 0f, scale = 1.0f),
+                    )
+                    generatedClips.add(bannerClip)
+
+                    val playerName = seg.playerName?.trim().orEmpty()
+                    if (playerName.isNotEmpty()) {
+                        val photoFile = resolvePlayerPhotoFile(playerName, libraryPlayers)
+                        if (photoFile != null && photoFile.exists() && photoFile.length() > 0L) {
+                            val photoUri = Uri.fromFile(photoFile).toString()
+                            AiCutoutManager.getOrCreateCutoutUri(context, photoUri)
+                            cutoutCount++
+                            generatedClips.add(
+                                Clip(
+                                    id = "pip_ai_${System.currentTimeMillis()}_$idx",
+                                    type = ClipType.IMAGE,
+                                    mediaUri = photoUri,
+                                    timelineStartMs = startMs,
+                                    timelineEndMs = endMs,
+                                    transform = Transform(offsetX = 0.46f, offsetY = 0.08f, scale = 0.44f),
+                                    crop = CropRect(0f, 0f, 1f, 1f),
+                                    filter = Filter("ai_cutout", "AI Cutout", FilterCategory.NONE),
+                                    effects = emptyList(),
+                                    keyframes = emptyList(),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (generatedClips.isEmpty()) return@launch
+
+            val existingTrack = _uiState.value.timeline.tracks.firstOrNull { it.type == TrackType.OVERLAY }
+            mutate(structural = false) { timeline ->
+                var updated = timeline
+                val trackId = if (existingTrack != null) {
+                    existingTrack.id
+                } else {
+                    val (withTrack, newTrackId) = TimelineEditor.addTrack(updated, TrackType.OVERLAY)
+                    updated = withTrack
+                    newTrackId
+                }
+                generatedClips.forEach { clip ->
+                    updated = TimelineEditor.addClip(updated, trackId, clip)
+                }
+                updated
+            }
+
+            val firstClip = generatedClips.first()
+            _uiState.update { it.copy(selectedClipId = firstClip.id) }
+            Toast.makeText(
+                context,
+                "${segments.size} Flash News + $cutoutCount Player Cutout synced!",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    private fun resolvePlayerPhotoFile(playerName: String, libraryPlayers: List<com.actioncut.feature.editor.ui.scorecard.Player>): File? {
+        val normTarget = playerName.lowercase().replace(Regex("[^a-z]"), "")
+        if (normTarget.length >= 3) {
+            val libMatch = libraryPlayers.firstOrNull { p ->
+                val pn = p.name.lowercase().replace(Regex("[^a-z]"), "")
+                pn.length >= 3 && (pn == normTarget || normTarget.contains(pn) || pn.contains(normTarget))
+            }
+            if (libMatch != null) {
+                val f = File(File(context.filesDir, "players"), libMatch.photoFile)
+                if (f.exists() && f.length() > 0L) return f
+            }
+        }
+        return CdnScorecardClient.findCachedPhotoFileByName(context, playerName)
     }
 
     fun addPipAtPlayhead(uri: String) {
