@@ -19,11 +19,12 @@ import java.nio.ByteBuffer
 import kotlin.coroutines.resume
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * On-device human cutout (ML Kit Selfie Segmentation + Studio Backdrop Flood-Fill).
- * Ensures small Cricbuzz gray-box portraits (~150px) also get a clean transparent cutout.
+ * On-device human cutout (ML Kit Selfie Segmentation + Shaded Studio Backdrop Remover + Bottom Fade).
+ * Cleanly removes shaded gray Cricbuzz studio boxes without eating white collars, skin, or jerseys.
  */
 object AiCutoutManager {
     private val mutex = Mutex()
@@ -35,6 +36,7 @@ object AiCutoutManager {
         context: Context,
         imageUriStr: String,
         forceRefresh: Boolean = false,
+        softBottomFade: Boolean = false,
     ): String? = withContext(Dispatchers.IO) {
         val outFile = cutoutFile(context, imageUriStr)
         if (!forceRefresh && outFile.exists() && outFile.length() > 0L) {
@@ -47,21 +49,23 @@ object AiCutoutManager {
             }
 
             val decoded = decodeUriToBitmap(context, imageUriStr) ?: return@withLock null
-            // Upscale tiny Cricbuzz headshots (<512px) so ML Kit segmentation has crisp edges
             val workingBmp = ensureMinimumSize(decoded, 512)
             if (workingBmp !== decoded) decoded.recycle()
 
             val cutoutBmp = try {
                 val mlResult = runSelfieSegmentation(workingBmp)
-                if (mlResult != null) {
-                    // Also strip any leftover uniform gray/white studio box around outer edges
-                    stripUniformEdgeBackdrop(mlResult)
+                val baseCutout = if (mlResult != null) {
+                    stripShadedStudioBackdrop(mlResult, workingBmp)
                     mlResult
                 } else {
                     val copy = workingBmp.copy(Bitmap.Config.ARGB_8888, true)
-                    stripUniformEdgeBackdrop(copy)
+                    stripShadedStudioBackdrop(copy, workingBmp)
                     copy
                 }
+                if (softBottomFade) {
+                    applyBottomFade(baseCutout, fadeFraction = 0.14f)
+                }
+                baseCutout
             } finally {
                 workingBmp.recycle()
             }
@@ -122,10 +126,10 @@ object AiCutoutManager {
                             maskBuffer.rewind()
                             for (i in pixels.indices) {
                                 val confidence = maskBuffer.float
-                                if (confidence < 0.50f) {
+                                if (confidence < 0.52f) {
                                     pixels[i] = Color.TRANSPARENT
-                                } else if (confidence < 0.85f) {
-                                    val alpha = ((confidence - 0.50f) / 0.35f * 255).toInt().coerceIn(0, 255)
+                                } else if (confidence < 0.86f) {
+                                    val alpha = ((confidence - 0.52f) / 0.34f * 255).toInt().coerceIn(0, 255)
                                     val orig = pixels[i]
                                     pixels[i] = Color.argb(
                                         alpha,
@@ -155,31 +159,45 @@ object AiCutoutManager {
         }
 
     /**
-     * Flood-fills inward from outer borders to remove uniform studio gray/white backdrops
-     * (such as Cricbuzz headshots) when ML Kit leaves a box around the portrait.
+     * Removes shaded studio gray/white backgrounds (such as Cricbuzz portraits where the left
+     * side is #DFDFDF and the right side is #B6B6B6) using neighbor-adaptive flood-fill from
+     * top and side outer edges, while protecting human skin, hair, and bright white shirts.
      */
-    private fun stripUniformEdgeBackdrop(bmp: Bitmap) {
+    private fun stripShadedStudioBackdrop(bmp: Bitmap, originalSource: Bitmap) {
         val w = bmp.width
         val h = bmp.height
-        if (w < 12 || h < 12) return
+        if (w < 16 || h < 16) return
 
         val pixels = IntArray(w * h)
         bmp.getPixels(pixels, 0, w, 0, 0, w, h)
 
-        val corners = intArrayOf(
-            pixels[2 * w + 2],
-            pixels[2 * w + (w - 3)],
-        )
-        val seed = corners.firstOrNull { Color.alpha(it) > 200 } ?: return
-        val sr = Color.red(seed)
-        val sg = Color.green(seed)
-        val sb = Color.blue(seed)
+        val src = if (originalSource.width == w && originalSource.height == h) {
+            originalSource
+        } else {
+            Bitmap.createScaledBitmap(originalSource, w, h, true)
+        }
+        val origPixels = IntArray(w * h)
+        src.getPixels(origPixels, 0, w, 0, 0, w, h)
+        if (src !== originalSource) src.recycle()
 
-        // Only run if top-left / top-right corners look like a uniform backdrop
-        val c2 = pixels[2 * w + (w - 3)]
-        if (Color.alpha(c2) > 200) {
-            val diff = abs(Color.red(c2) - sr) + abs(Color.green(c2) - sg) + abs(Color.blue(c2) - sb)
-            if (diff > 55) return
+        fun isNeutralBackdrop(px: Int, allowWhite: Boolean): Boolean {
+            val r = Color.red(px)
+            val g = Color.green(px)
+            val b = Color.blue(px)
+            val spread = maxOf(r, g, b) - minOf(r, g, b)
+            val lum = (r * 299 + g * 587 + b * 114) / 1000
+            val maxLum = if (allowWhite) 252 else 230
+            return spread <= 24 && lum in 95..maxLum
+        }
+
+        val tl = origPixels[2 * w + 2]
+        val tr = origPixels[2 * w + (w - 3)]
+        val tlWhite = ((Color.red(tl) + Color.green(tl) + Color.blue(tl)) / 3) >= 234
+        val trWhite = ((Color.red(tr) + Color.green(tr) + Color.blue(tr)) / 3) >= 234
+        val allowWhite = tlWhite && trWhite
+
+        if (!isNeutralBackdrop(tl, allowWhite = true) && !isNeutralBackdrop(tr, allowWhite = true)) {
+            return
         }
 
         val visited = BooleanArray(w * h)
@@ -187,44 +205,107 @@ object AiCutoutManager {
         var head = 0
         var tail = 0
 
-        fun matchesBackdrop(px: Int): Boolean {
-            val a = Color.alpha(px)
-            if (a < 30) return true
-            val r = Color.red(px)
-            val g = Color.green(px)
-            val b = Color.blue(px)
-            val dist = abs(r - sr) + abs(g - sg) + abs(b - sb)
-            return dist <= 52
-        }
+        fun colorDist(p1: Int, p2: Int): Int =
+            abs(Color.red(p1) - Color.red(p2)) +
+                abs(Color.green(p1) - Color.green(p2)) +
+                abs(Color.blue(p1) - Color.blue(p2))
 
-        fun enqueue(idx: Int) {
-            if (!visited[idx] && matchesBackdrop(pixels[idx])) {
+        fun seedAt(idx: Int) {
+            if (visited[idx]) return
+            val op = origPixels[idx]
+            if (Color.alpha(pixels[idx]) < 25 || isNeutralBackdrop(op, allowWhite = true)) {
                 visited[idx] = true
                 queue[tail++] = idx
             }
         }
 
+        // Seed from top edge and upper 75% of left/right edges (avoids shirt at bottom corners)
         for (x in 0 until w) {
-            enqueue(x)
-            enqueue((h - 1) * w + x)
+            seedAt(x)
         }
-        for (y in 0 until h) {
-            enqueue(y * w)
-            enqueue(y * w + (w - 1))
+        val sideLimit = (h * 0.78f).toInt().coerceAtLeast(1)
+        for (y in 0 until sideLimit) {
+            seedAt(y * w)
+            seedAt(y * w + (w - 1))
         }
 
         while (head < tail) {
             val idx = queue[head++]
+            val curOrig = origPixels[idx]
             pixels[idx] = Color.TRANSPARENT
+
             val x = idx % w
             val y = idx / w
-            if (x > 0) enqueue(idx - 1)
-            if (x < w - 1) enqueue(idx + 1)
-            if (y > 0) enqueue(idx - w)
-            if (y < h - 1) enqueue(idx + w)
+
+            fun tryNeighbor(nIdx: Int) {
+                if (visited[nIdx]) return
+                val np = pixels[nIdx]
+                if (Color.alpha(np) < 25) {
+                    visited[nIdx] = true
+                    queue[tail++] = nIdx
+                    return
+                }
+                val no = origPixels[nIdx]
+                if (isNeutralBackdrop(no, allowWhite) && colorDist(curOrig, no) <= 34) {
+                    visited[nIdx] = true
+                    queue[tail++] = nIdx
+                }
+            }
+
+            if (x > 0) tryNeighbor(idx - 1)
+            if (x < w - 1) tryNeighbor(idx + 1)
+            if (y > 0) tryNeighbor(idx - w)
+            if (y < h - 1) tryNeighbor(idx + w)
+        }
+
+        // Smooth 1px anti-aliased fringe next to erased background pixels
+        val copy = pixels.copyOf()
+        for (y in 1 until h - 1) {
+            for (x in 1 until w - 1) {
+                val idx = y * w + x
+                val px = copy[idx]
+                if (Color.alpha(px) > 80) {
+                    val hasTransparentNeighbor =
+                        Color.alpha(copy[idx - 1]) == 0 ||
+                            Color.alpha(copy[idx + 1]) == 0 ||
+                            Color.alpha(copy[idx - w]) == 0 ||
+                            Color.alpha(copy[idx + w]) == 0
+                    if (hasTransparentNeighbor && isNeutralBackdrop(origPixels[idx], allowWhite)) {
+                        pixels[idx] = Color.argb(
+                            (Color.alpha(px) * 0.35f).toInt(),
+                            Color.red(px),
+                            Color.green(px),
+                            Color.blue(px),
+                        )
+                    }
+                }
+            }
         }
 
         bmp.setPixels(pixels, 0, w, 0, 0, w, h)
+    }
+
+    /** Softly fades the bottom edge of the portrait so it blends smoothly into the stadium grass. */
+    private fun applyBottomFade(bmp: Bitmap, fadeFraction: Float) {
+        val w = bmp.width
+        val h = bmp.height
+        val fadeRows = (h * fadeFraction).toInt().coerceAtLeast(1)
+        val startY = h - fadeRows
+        val row = IntArray(w)
+        for (y in startY until h) {
+            val factor = (1f - (y - startY).toFloat() / fadeRows.toFloat()).coerceIn(0f, 1f)
+            val smooth = factor * factor
+            bmp.getPixels(row, 0, w, 0, y, w, 1)
+            for (x in 0 until w) {
+                val p = row[x]
+                val a = Color.alpha(p)
+                if (a > 0) {
+                    val na = (a * smooth).toInt().coerceIn(0, 255)
+                    row[x] = (na shl 24) or (p and 0x00FFFFFF)
+                }
+            }
+            bmp.setPixels(row, 0, w, 0, y, w, 1)
+        }
     }
 
     private fun decodeUriToBitmap(context: Context, uriStr: String): Bitmap? = runCatching {
