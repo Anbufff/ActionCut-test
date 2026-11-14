@@ -210,7 +210,12 @@ object CdnVectorScoreCardComposer {
         val allPlayers = library.all()
         val matchedPlayer = selectedRow?.let { ScoreNameOcr.matchPlayer(it.name, allPlayers) }
         val photo = matchedPlayer?.let { library.photo(it) }
-            ?: CdnScorecardClient.cachedPlayerPhoto(context, selectedRow?.imageId, selectedRow?.playerId)
+            ?: CdnScorecardClient.cachedPlayerPhoto(
+                context = context,
+                imageId = selectedRow?.imageId,
+                playerId = selectedRow?.playerId,
+                playerName = selectedRow?.name,
+            )
 
         if (theme == 2) {
             drawPopStarPerformerPanel(
@@ -255,8 +260,8 @@ object CdnVectorScoreCardComposer {
 
     /**
      * Design 3 (Pop) Right Panel — Star Performer broadcast graphic:
-     * Full uncropped player photo cleanly visible at the top, hot-pink STAR PERFORMER band,
-     * and dark emerald score strip below.
+     * Full uncropped player photo cleanly visible at the top (or glossy 3D "NC" cricket ball
+     * emblem when no photo is available), hot-pink STAR PERFORMER band, and dark emerald score strip below.
      */
     private fun drawPopStarPerformerPanel(
         c: Canvas,
@@ -285,46 +290,61 @@ object CdnVectorScoreCardComposer {
         c.save()
         c.clipPath(Path().apply { addRoundRect(panelRect, corner, corner, Path.Direction.CW) })
 
-        val playerBmp = photo ?: if (type == ScoreCardType.BOWLING) {
-            CricketAssets.getBowlerLogo()
-        } else {
-            CricketAssets.getBatterLogo()
-        }
+        val displayName = (player?.name ?: selectedRow?.name ?: if (type == ScoreCardType.BOWLING) "BOWLER" else "BATTER")
+            .trim()
+            .uppercase()
 
-        // 1. Seamless studio backdrop + FULL uncropped player photo at top
-        val leftEdge = if (playerBmp.width > 0 && playerBmp.height > 0) sampleEdgeColor(playerBmp, isLeft = true) else null
-        val rightEdge = if (playerBmp.width > 0 && playerBmp.height > 0) sampleEdgeColor(playerBmp, isLeft = false) else null
+        // 1. Seamless studio backdrop + FULL uncropped player photo (or "NC" emblem if photo == null)
+        if (photo != null && photo.width > 0 && photo.height > 0) {
+            val leftEdge = sampleEdgeColor(photo, isLeft = true)
+            val rightEdge = sampleEdgeColor(photo, isLeft = false)
 
-        if (leftEdge != null && rightEdge != null) {
-            p.shader = LinearGradient(
-                pl, 0f, pr, 0f,
-                intArrayOf(darkenColor(leftEdge, 0.90f), leftEdge, rightEdge, darkenColor(rightEdge, 0.90f)),
-                floatArrayOf(0f, 0.22f, 0.78f, 1f),
-                Shader.TileMode.CLAMP,
-            )
-            c.drawRect(pl, pt, pr, splitY, p)
-            p.shader = null
-        } else {
-            p.shader = RadialGradient(
-                pl + pw * 0.5f, pt + (splitY - pt) * 0.4f, pw * 0.8f,
-                intArrayOf(0xFF1B4D3E.toInt(), 0xFF0A241C.toInt()),
-                null, Shader.TileMode.CLAMP,
-            )
-            c.drawRect(pl, pt, pr, splitY, p)
-            p.shader = null
-        }
+            if (leftEdge != null && rightEdge != null) {
+                p.shader = LinearGradient(
+                    pl, 0f, pr, 0f,
+                    intArrayOf(darkenColor(leftEdge, 0.90f), leftEdge, rightEdge, darkenColor(rightEdge, 0.90f)),
+                    floatArrayOf(0f, 0.22f, 0.78f, 1f),
+                    Shader.TileMode.CLAMP,
+                )
+                c.drawRect(pl, pt, pr, splitY, p)
+                p.shader = null
+            } else {
+                p.shader = RadialGradient(
+                    pl + pw * 0.5f, pt + (splitY - pt) * 0.4f, pw * 0.8f,
+                    intArrayOf(0xFF1B4D3E.toInt(), 0xFF0A241C.toInt()),
+                    null, Shader.TileMode.CLAMP,
+                )
+                c.drawRect(pl, pt, pr, splitY, p)
+                p.shader = null
+            }
 
-        if (playerBmp.width > 0 && playerBmp.height > 0) {
             val photoH = splitY - pt
-            val scale = min(pw / playerBmp.width, photoH / playerBmp.height)
-            val dw = playerBmp.width * scale
-            val dh = playerBmp.height * scale
+            val scale = min(pw / photo.width, photoH / photo.height)
+            val dw = photo.width * scale
+            val dh = photo.height * scale
             val dl = pl + (pw - dw) / 2f
             val dt = splitY - dh
             c.save()
             c.clipRect(pl, pt, pr, splitY)
-            c.drawBitmap(playerBmp, null, RectF(dl, dt, dl + dw, dt + dh), bmpPaint)
+            c.drawBitmap(photo, null, RectF(dl, dt, dl + dw, dt + dh), bmpPaint)
             c.restore()
+        } else {
+            p.shader = RadialGradient(
+                pl + pw * 0.5f, pt + (splitY - pt) * 0.45f, pw * 0.75f,
+                intArrayOf(0xFF1B4D3E.toInt(), 0xFF0A241C.toInt(), 0xFF04140F.toInt()),
+                floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP,
+            )
+            c.drawRect(pl, pt, pr, splitY, p)
+            p.shader = null
+
+            ScoreCardComposer.drawNewsCrickNoPhotoEmblem(
+                c = c,
+                p = p,
+                area = RectF(pl, pt + 22f, pr, splitY - 10f),
+                theme = 2,
+                isBowling = (type == ScoreCardType.BOWLING),
+                playerName = displayName,
+            )
         }
 
         // Subtle studio edge vignette on outer sides
@@ -399,9 +419,6 @@ object CdnVectorScoreCardComposer {
         val iconCy = bandBottom + 88f
         drawCricketBadgeIcon(c, p, iconCx, iconCy, isBowling = (type == ScoreCardType.BOWLING))
 
-        val displayName = (player?.name ?: selectedRow?.name ?: if (type == ScoreCardType.BOWLING) "BOWLER" else "BATTER")
-            .trim()
-            .uppercase()
         val subLine = if (!opponentName.isNullOrBlank()) {
             "VS ${opponentName.trim().uppercase()}"
         } else {
