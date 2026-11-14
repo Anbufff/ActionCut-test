@@ -76,8 +76,13 @@ class Media3VideoExporter @Inject constructor(
         val isFbTpl = (project.canvas.isFbTemplateEnabled || project.timeline.canvas.isFbTemplateEnabled) && aspect == AspectRatio.RATIO_4_5
         val tplImageUri = project.canvas.fbTemplateImageUri ?: project.timeline.canvas.fbTemplateImageUri
 
-        val clips = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            rawClips.map { clip ->
+        val rawOverlayClips = project.timeline.tracks
+            .filter { it.type == TrackType.OVERLAY }
+            .flatMap { it.clips }
+            .sortedBy { it.mediaUri?.contains("news_banner") == true }
+
+        val (clips, preparedPipOverlays) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val processedClips = rawClips.map { clip ->
                 if (clip.isReversed && clip.type == ClipType.VIDEO && clip.mediaUri != null) {
                     val reversedUri = reverser.reverse(clip.mediaUri!!, clip.sourceInMs, clip.sourceOutMs)
                     if (reversedUri != null) {
@@ -100,6 +105,22 @@ class Media3VideoExporter @Inject constructor(
                     clip
                 }
             }
+
+            val processedOverlays = rawOverlayClips.map { ov ->
+                if (ov.type == ClipType.IMAGE && ov.mediaUri != null && ov.mediaUri?.contains("news_banner") != true) {
+                    val processedUri = renderExactPipOverlayToCanvas(context, ov, targetWidth, targetHeight)
+                    ov.copy(
+                        mediaUri = processedUri,
+                        type = ClipType.STICKER,
+                        transform = Transform(offsetX = 0f, offsetY = 0f, scale = 1f, rotationDegrees = 0f),
+                        crop = null,
+                    )
+                } else {
+                    ov
+                }
+            }
+
+            processedClips to processedOverlays
         }
 
         val handler = Handler(Looper.getMainLooper())
@@ -108,24 +129,6 @@ class Media3VideoExporter @Inject constructor(
 
         handler.post {
             runCatching {
-                val rawOverlayClips = project.timeline.tracks
-                    .filter { it.type == TrackType.OVERLAY }
-                    .flatMap { it.clips }
-
-                val preparedPipOverlays = rawOverlayClips.map { ov ->
-                    if (ov.type == ClipType.IMAGE && ov.mediaUri != null && ov.mediaUri?.contains("news_banner") != true) {
-                        val processedUri = renderExactPipOverlayToCanvas(context, ov, targetWidth, targetHeight)
-                        ov.copy(
-                            mediaUri = processedUri,
-                            type = ClipType.STICKER,
-                            transform = Transform(offsetX = 0f, offsetY = 0f, scale = 1f, rotationDegrees = 0f),
-                            crop = null,
-                        )
-                    } else {
-                        ov
-                    }
-                }
-
                 val textOverlays = project.timeline.allClips.filter { it.type == ClipType.TEXT }
                 val overlayClips = preparedPipOverlays + textOverlays
 
