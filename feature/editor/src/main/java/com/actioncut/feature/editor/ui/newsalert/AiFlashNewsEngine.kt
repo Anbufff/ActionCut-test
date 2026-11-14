@@ -11,6 +11,11 @@ import android.widget.Toast
 import com.actioncut.core.model.Clip
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs
@@ -19,6 +24,23 @@ import kotlin.math.roundToLong
 import kotlin.math.sqrt
 
 object AiFlashNewsEngine {
+    private const val PREFS = "actioncut_ai_news"
+    private const val KEY_API = "gemini_api_key"
+    private const val MD_FENCE = "\u0060\u0060\u0060"
+
+    private val ACTIVE_GEMINI_MODELS = listOf(
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.8-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+    )
+
+    data class GenerationResult(
+        val segments: List<FlashNewsSegment>,
+        val usedAi: Boolean,
+        val aiError: String? = null,
+    )
 
     private fun toastMain(context: Context, msg: String) {
         Handler(Looper.getMainLooper()).post {
@@ -26,17 +48,305 @@ object AiFlashNewsEngine {
         }
     }
 
+    private fun sanitizeApiKey(raw: String): String =
+        raw.trim().trim('"', '\'', '`').replace(Regex("\\s+"), "")
+
+    private fun prepareAuthedUrlAndHeader(baseUrl: String, cleanKey: String): Pair<String, Boolean> {
+        if (cleanKey.startsWith("AQ.")) {
+            return baseUrl to true
+        }
+        val sep = if (baseUrl.contains("?")) "&" else "?"
+        val encoded = URLEncoder.encode(cleanKey, "UTF-8")
+        return "${baseUrl}${sep}key=$encoded" to false
+    }
+
+    fun getSavedApiKey(context: Context): String =
+        sanitizeApiKey(
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_API, "")
+                .orEmpty(),
+        )
+
+    fun saveApiKey(context: Context, key: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_API, sanitizeApiKey(key))
+            .apply()
+    }
+
+    /** Computes cumulative normalized end fractions (0..1) for each bullet based on its spoken syllable weight. */
+    fun computeBulletEndFractions(bullets: List<String>): List<Float> {
+        if (bullets.isEmpty()) return emptyList()
+        if (bullets.size == 1) return listOf(1f)
+        val weights = bullets.map { estimateSpokenWeight(it).coerceAtLeast(3f) }
+        val total = weights.sum().coerceAtLeast(1f)
+        var acc = 0f
+        return weights.mapIndexed { idx, w ->
+            acc += w
+            if (idx == weights.lastIndex) 1f else (acc / total).coerceIn(0.05f, 0.98f)
+        }
+    }
+
     suspend fun generateSegments(
         @Suppress("UNUSED_PARAMETER") context: Context,
         fullArticle: String,
         knownPlayers: List<String>,
-    ): Result<List<FlashNewsSegment>> = withContext(Dispatchers.IO) {
-        val segments = buildOfflineSegments(fullArticle, knownPlayers)
-        if (segments.isNotEmpty()) {
-            Result.success(segments)
-        } else {
-            Result.failure(IllegalStateException("கட்டுரையில் Player அல்லது Team பெயர் கண்டறியப்படவில்லை"))
+    ): Result<GenerationResult> = withContext(Dispatchers.IO) {
+        val key = getSavedApiKey(context)
+        var aiErrorMsg: String? = null
+        if (key.isNotEmpty()) {
+            val aiResult = callGeminiWithFallback(key, fullArticle, knownPlayers)
+            if (aiResult.isSuccess) {
+                val list = aiResult.getOrNull().orEmpty()
+                if (list.isNotEmpty()) {
+                    return@withContext Result.success(GenerationResult(list, usedAi = true))
+                }
+            }
+            aiErrorMsg = aiResult.exceptionOrNull()?.message?.take(120) ?: "AI error"
         }
+        val fallback = buildOfflineSegments(fullArticle, knownPlayers)
+        if (fallback.isNotEmpty()) {
+            Result.success(GenerationResult(fallback, usedAi = false, aiError = aiErrorMsg))
+        } else {
+            Result.failure(IllegalStateException(aiErrorMsg ?: "கட்டுரையில் Player பெயர் கண்டறியப்படவில்லை"))
+        }
+    }
+
+    private fun callGeminiWithFallback(
+        apiKey: String,
+        article: String,
+        knownPlayers: List<String>,
+    ): Result<List<FlashNewsSegment>> {
+        var firstMeaningfulError: Throwable? = null
+        var lastError: Throwable? = null
+        for (model in ACTIVE_GEMINI_MODELS) {
+            val res = runCatching { callGeminiModel(apiKey, model, article, knownPlayers) }
+            if (res.isSuccess && res.getOrNull()?.isNotEmpty() == true) {
+                return res
+            }
+            val err = res.exceptionOrNull()
+            if (err != null) {
+                lastError = err
+                val msg = err.message.orEmpty()
+                if (msg.contains("HTTP 401") || msg.contains("HTTP 403")) {
+                    return Result.failure(err)
+                }
+                if (firstMeaningfulError == null && !msg.contains("HTTP 404")) {
+                    firstMeaningfulError = err
+                }
+                if (msg.contains("HTTP 429") || msg.contains("HTTP 503")) {
+                    runCatching { Thread.sleep(1_200L) }
+                }
+            }
+        }
+        return Result.failure(firstMeaningfulError ?: lastError ?: IllegalStateException("Gemini API unavailable"))
+    }
+
+    private fun callGeminiModel(
+        apiKey: String,
+        model: String,
+        article: String,
+        knownPlayers: List<String>,
+    ): List<FlashNewsSegment> {
+        val cleanKey = sanitizeApiKey(apiKey)
+        val baseEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+        val (endpoint, useHeader) = prepareAuthedUrlAndHeader(baseEndpoint, cleanKey)
+        val playerHint = if (knownPlayers.isNotEmpty()) {
+            "Known players in user's photo library (PREFER exact English spelling from this list whenever mentioned in Tamil or English): ${knownPlayers.take(150).joinToString(", ")}."
+        } else {
+            ""
+        }
+
+        val prompt = """
+            You are a senior Tamil Cricket TV News Flash Graphics Editor.
+            Read the entire Tamil cricket article / voiceover script chronologically from start to end.
+            Extract EVERY distinct moment where a SPECIFIC HUMAN CRICKET PLAYER or COACH is discussed (SKIP generic team-only discussions where no specific human player is mentioned, because each Flash News card must show a player photo).
+
+            Do NOT combine two DIFFERENT players (e.g., Shreyas Iyer and Virat Kohli) into the same Flash News card! Whenever the script switches to a new player, create a separate card at that point.
+
+            STRICT LANGUAGE, KEY-POINTS & DIGITAL NUMBERS RULES:
+            1. Rewrite conversational/spoken monologue into crisp, high-impact IMPORTANT PLAYER KEY POINTS in clean, grammatically COMPLETE Tamil sentences (தமிழ் எழுத்துகளில் மட்டுமே!). NEVER leave a sentence incomplete or cut off!
+            2. Remove casual spoken slang/filler ("மக்களே", "யோசிச்சு பாருங்க", "கத்துறாங்க", "கமெண்ட் பாக்ஸ்ல சொல்லுங்க") and convert them into sharp TV news key points.
+            3. ALWAYS USE DIGITAL NUMBERS (0-9) for ALL numbers, runs, balls, overs, wickets, dates, and records! (e.g., "351 runs", "16 balls", "6.5 overs", "50 runs", "100*", "4 wickets", "1st time"). NEVER spell numbers in Tamil words!
+            4. Keep ONLY player/coach/team names and numeric stats/short cricket units ("runs", "balls", "overs", "wickets", "SR") in English inside the Tamil sentences.
+            5. Provide **3 to 4 crisp, complete key-point bullets** per player card (matching our 4-box news graphic layout: 01, 02, 03, 04). Each bullet should be 8 to 18 words, complete in meaning, and chronologically ordered as spoken in the article so each box can be highlighted while spoken.
+            6. $playerHint
+            7. For EACH extracted player card, return:
+               - "title": short punchy Tamil badge title (2 to 4 words, e.g., "Shreyas Iyer சாதனை", "Virat Kohli அதிரடி", "Naman Dhir அப்டேட்")
+               - "bullets": array of 3 or 4 complete Tamil key-point sentences (with digital numbers!)
+               - "playerName": full English name of the HUMAN cricketer/coach (MUST NOT be empty!)
+               - "anchorText": EXACT 3 to 5 consecutive words copied verbatim (untouched!) from the original ARTICLE right where this player begins to be discussed (used for offline voice sync).
+               - "startFraction": approximate float 0.0..0.95 as backup.
+
+            Return ONLY a valid JSON array of objects, ordered chronologically.
+
+            ARTICLE:
+            $article
+        """.trimIndent()
+
+        val payload = JSONObject().apply {
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().put(
+                        "parts",
+                        JSONArray().put(JSONObject().put("text", prompt)),
+                    ),
+                ),
+            )
+            put(
+                "generationConfig",
+                JSONObject().put("responseMimeType", "application/json"),
+            )
+        }
+
+        val payloadBytes = payload.toString().toByteArray(Charsets.UTF_8)
+        val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 20_000
+            readTimeout = 60_000
+            doOutput = true
+            if (useHeader) setRequestProperty("x-goog-api-key", cleanKey)
+            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+            setFixedLengthStreamingMode(payloadBytes.size)
+        }
+        conn.outputStream.use { it.write(payloadBytes) }
+
+        val code = conn.responseCode
+        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+            ?.bufferedReader()?.use { it.readText() }.orEmpty()
+        conn.disconnect()
+
+        if (code !in 200..299) {
+            val apiMsg = extractApiError(body)
+            throw IllegalStateException("HTTP $code (${apiMsg ?: model})")
+        }
+
+        val rawText = extractGeminiResponseText(body, model)
+        val arr = if (rawText.startsWith("{")) {
+            val obj = JSONObject(rawText)
+            obj.optJSONArray("segments") ?: obj.optJSONArray("items") ?: JSONArray()
+        } else {
+            JSONArray(rawText)
+        }
+
+        val totalArticleWeight = estimateSpokenWeight(article).coerceAtLeast(1f)
+        var searchCursor = 0
+        val out = ArrayList<FlashNewsSegment>(arr.length())
+
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val title = o.optString("title", "FLASH NEWS").trim()
+            val bArr = o.optJSONArray("bullets") ?: JSONArray()
+            val bullets = (0 until bArr.length())
+                .map { bArr.optString(it, "").trim() }
+                .filter { it.isNotEmpty() }
+                .take(4)
+            if (bullets.isEmpty()) continue
+
+            val player = o.optString("playerName", "").trim().takeIf { it.isNotEmpty() } ?: continue
+            val anchor = o.optString("anchorText", "").trim().takeIf { it.isNotEmpty() }
+            val aiFrac = o.optDouble("startFraction", (i.toDouble() / max(arr.length(), 1)))
+                .toFloat().coerceIn(0.0f, 0.96f)
+
+            val matchedIdx = findAnchorCharIndex(article, anchor, player, searchCursor)
+            val exactFrac = if (matchedIdx >= 0) {
+                searchCursor = matchedIdx + 4
+                val prefixWeight = estimateSpokenWeight(article.substring(0, matchedIdx))
+                (prefixWeight / totalArticleWeight).coerceIn(0.0f, 0.96f)
+            } else {
+                aiFrac
+            }
+
+            out.add(
+                FlashNewsSegment(
+                    title = title,
+                    bullets = bullets,
+                    playerName = player,
+                    teamName = null,
+                    anchorText = anchor,
+                    startFraction = exactFrac,
+                ),
+            )
+        }
+        return out.sortedBy { it.startFraction }
+    }
+
+    private fun extractApiError(body: String): String? = runCatching {
+        JSONObject(body).optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
+    private fun extractGeminiResponseText(body: String, model: String): String {
+        val root = JSONObject(body)
+        val candidates = root.optJSONArray("candidates")
+        if (candidates == null || candidates.length() == 0) {
+            val blockReason = root.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty()
+            throw IllegalStateException(
+                if (blockReason.isNotBlank()) "Blocked ($blockReason)" else "Empty response ($model)",
+            )
+        }
+        val cand = candidates.getJSONObject(0)
+        val parts = cand.optJSONObject("content")?.optJSONArray("parts")
+            ?: throw IllegalStateException("No content parts ($model)")
+
+        val sb = StringBuilder()
+        for (i in 0 until parts.length()) {
+            val part = parts.optJSONObject(i) ?: continue
+            if (part.optBoolean("thought", false)) continue
+            val t = part.optString("text", "")
+            if (t.isNotEmpty()) sb.append(t)
+        }
+
+        var raw = sb.toString().trim()
+            .removePrefix("${MD_FENCE}json")
+            .removePrefix(MD_FENCE)
+            .removeSuffix(MD_FENCE)
+            .trim()
+
+        val arrIdx = raw.indexOf('[')
+        val objIdx = raw.indexOf('{')
+        val start = when {
+            arrIdx >= 0 && objIdx >= 0 -> minOf(arrIdx, objIdx)
+            arrIdx >= 0 -> arrIdx
+            objIdx >= 0 -> objIdx
+            else -> -1
+        }
+        if (start > 0) raw = raw.substring(start)
+        return raw.trim()
+    }
+
+    private fun findAnchorCharIndex(
+        article: String,
+        anchor: String?,
+        player: String?,
+        fromIdx: Int,
+    ): Int {
+        val safeFrom = fromIdx.coerceIn(0, max(0, article.length - 1))
+        if (!anchor.isNullOrBlank()) {
+            val direct = article.indexOf(anchor, startIndex = safeFrom, ignoreCase = true)
+            if (direct >= 0) return direct
+
+            val words = anchor.split(Regex("\\s+")).filter { it.length >= 2 }
+            if (words.size >= 2) {
+                val twoWord = "${words[0]} ${words[1]}"
+                val wMatch = article.indexOf(twoWord, startIndex = safeFrom, ignoreCase = true)
+                if (wMatch >= 0) return wMatch
+            }
+            for (w in words.filter { it.length >= 4 }) {
+                val idx = article.indexOf(w, startIndex = safeFrom, ignoreCase = true)
+                if (idx >= 0) return idx
+            }
+        }
+        if (!player.isNullOrBlank()) {
+            val pIdx = article.indexOf(player, startIndex = safeFrom, ignoreCase = true)
+            if (pIdx >= 0) return pIdx
+            val lastTok = player.split(Regex("\\s+")).lastOrNull()?.takeIf { it.length >= 4 }
+            if (lastTok != null) {
+                val lIdx = article.indexOf(lastTok, startIndex = safeFrom, ignoreCase = true)
+                if (lIdx >= 0) return lIdx
+            }
+        }
+        return -1
     }
 
     private data class WeightedSentence(
@@ -69,62 +379,50 @@ object AiFlashNewsEngine {
         if (weighted.isEmpty()) return emptyList()
 
         val out = ArrayList<FlashNewsSegment>()
-        var lastSubjectKey: String? = null
+        var lastPlayerKey: String? = null
         var currentAnchorFrac = 0f
 
         for (item in weighted) {
             val frac = (item.startWeight / totalWeight).coerceIn(0f, 0.96f)
             val player = detectMentionedPlayer(item.raw, knownPlayers)
                 ?: detectMentionedPlayer(item.cleaned, knownPlayers)
-            val team = detectMentionedTeam(item.raw)
-                ?: detectMentionedTeam(item.cleaned)
 
-            val explicitKey = when {
-                player != null -> "P:$player"
-                team != null -> "T:$team"
-                else -> null
-            }
-
-            if (explicitKey == null) {
-                if (out.isNotEmpty() && out.last().bullets.size < 2 && (frac - currentAnchorFrac) <= 0.14f) {
+            if (player == null) {
+                // Continuation sentence for the active player (up to 4 boxes)
+                if (out.isNotEmpty() && out.last().bullets.size < 4 && (frac - currentAnchorFrac) <= 0.18f) {
                     val prev = out.last()
-                    val bulletText = item.cleaned.take(195)
-                    if (bulletText.isNotEmpty()) {
-                        out[out.lastIndex] = prev.copy(
-                            bullets = prev.bullets + bulletText,
-                            title = buildSmartTitle(prev.playerName, prev.teamName, prev.bullets + bulletText),
-                        )
-                    }
+                    val updatedBullets = prev.bullets + item.cleaned
+                    out[out.lastIndex] = prev.copy(
+                        bullets = updatedBullets,
+                        title = buildSmartTitle(prev.playerName, updatedBullets),
+                    )
                 }
                 continue
             }
 
-            val bulletText = item.cleaned.take(195)
-            if (bulletText.isEmpty()) continue
-
-            if (explicitKey == lastSubjectKey &&
+            if (player == lastPlayerKey &&
                 out.isNotEmpty() &&
-                out.last().bullets.size < 2 &&
-                (frac - currentAnchorFrac) <= 0.10f
+                out.last().bullets.size < 4 &&
+                (frac - currentAnchorFrac) <= 0.15f
             ) {
                 val prev = out.last()
-                val updatedBullets = prev.bullets + bulletText
+                val updatedBullets = prev.bullets + item.cleaned
                 out[out.lastIndex] = prev.copy(
                     bullets = updatedBullets,
-                    title = buildSmartTitle(prev.playerName, prev.teamName, updatedBullets),
+                    title = buildSmartTitle(prev.playerName, updatedBullets),
                 )
                 continue
             }
 
-            lastSubjectKey = explicitKey
+            lastPlayerKey = player
             currentAnchorFrac = frac
-            val bulletsList = listOf(bulletText)
+            val bulletsList = listOf(item.cleaned)
             out.add(
                 FlashNewsSegment(
-                    title = buildSmartTitle(player, team, bulletsList),
+                    title = buildSmartTitle(player, bulletsList),
                     bullets = bulletsList,
                     playerName = player,
-                    teamName = team,
+                    teamName = null,
                     anchorText = item.raw.take(36),
                     startFraction = frac,
                 ),
@@ -142,22 +440,7 @@ object AiFlashNewsEngine {
             val parts = trimmed.split(Regex("(?<!\\d)\\.(?!\\d)\\s+|(?<=[!?।])\\s+"))
             for (part in parts) {
                 val p = part.trim().trimEnd('.')
-                if (p.length >= 180 && p.contains(',')) {
-                    val clauses = p.split(Regex(",\\s+"))
-                    var buf = StringBuilder()
-                    for (c in clauses) {
-                        if (buf.length + c.length > 140 && buf.isNotEmpty()) {
-                            result.add(buf.toString().trim())
-                            buf = StringBuilder(c)
-                        } else {
-                            if (buf.isNotEmpty()) buf.append(", ")
-                            buf.append(c)
-                        }
-                    }
-                    if (buf.isNotEmpty()) result.add(buf.toString().trim())
-                } else if (p.isNotEmpty()) {
-                    result.add(p)
-                }
+                if (p.isNotEmpty()) result.add(p)
             }
         }
         return result
@@ -206,8 +489,8 @@ object AiFlashNewsEngine {
         return weight.coerceAtLeast(3.0f)
     }
 
-    private fun buildSmartTitle(player: String?, team: String?, bullets: List<String>): String {
-        val subject = player ?: team ?: return "FLASH NEWS"
+    private fun buildSmartTitle(player: String?, bullets: List<String>): String {
+        val subject = player ?: return "FLASH NEWS"
         val combined = bullets.joinToString(" ").lowercase()
         val tag = when {
             combined.contains("சாதனை") || combined.contains("record") || combined.contains("முதல் முறை") -> "சாதனை"
@@ -221,49 +504,6 @@ object AiFlashNewsEngine {
             else -> "அப்டேட்"
         }
         return "$subject $tag"
-    }
-
-    private fun detectMentionedTeam(text: String): String? {
-        val lower = text.lowercase()
-        val teamMap = listOf(
-            "இந்தியா" to "India",
-            "இந்திய அணி" to "India",
-            "team india" to "India",
-            "india" to "India",
-            "நியூசிலாந்து" to "New Zealand",
-            "new zealand" to "New Zealand",
-            "ஆஸ்திரேலியா" to "Australia",
-            "australia" to "Australia",
-            "இங்கிலாந்து" to "England",
-            "england" to "England",
-            "தென் ஆப்பிரிக்கா" to "South Africa",
-            "south africa" to "South Africa",
-            "பாகிஸ்தான்" to "Pakistan",
-            "pakistan" to "Pakistan",
-            "இலங்கை" to "Sri Lanka",
-            "sri lanka" to "Sri Lanka",
-            "வங்கதேசம்" to "Bangladesh",
-            "bangladesh" to "Bangladesh",
-            "ஆப்கானிஸ்தான்" to "Afghanistan",
-            "afghanistan" to "Afghanistan",
-            "வெஸ்ட் இண்டீஸ்" to "West Indies",
-            "west indies" to "West Indies",
-            "சென்னை" to "CSK",
-            "csk" to "CSK",
-            "மும்பை" to "MI",
-            "rcb" to "RCB",
-            "பெங்களூரு" to "RCB",
-            "கொல்கத்தா" to "KKR",
-            "kkr" to "KKR",
-            "ஹைதராபாத்" to "SRH",
-            "srh" to "SRH",
-            "ராஜஸ்தான்" to "RR",
-            "டெல்லி" to "DC",
-            "பஞ்சாப்" to "PBKS",
-            "குஜராத்" to "GT",
-            "லக்னோ" to "LSG",
-        )
-        return teamMap.firstOrNull { (needle, _) -> lower.contains(needle) }?.second
     }
 
     private fun detectMentionedPlayer(text: String, knownPlayers: List<String>): String? {
@@ -425,6 +665,7 @@ object AiFlashNewsEngine {
             .replace("பத்து ரன்", "10 runs")
     }
 
+    /** 100% On-Device Offline Voice-Run Sync across ALL audio clips on the timeline. */
     suspend fun detectVoicePauseStartsMs(
         context: Context,
         audioClips: List<Clip>,
@@ -446,7 +687,7 @@ object AiFlashNewsEngine {
         val desiredStarts: MutableList<Long>
         val minGapMs: Long
         if (voiceRuns != null) {
-            minGapMs = 1_500L
+            minGapMs = 1_600L
             val totalVoiced = voiceRuns.sumOf { (it.last - it.first).coerceAtLeast(0L) }.coerceAtLeast(1L)
             val usedRunIdx = HashSet<Int>()
             desiredStarts = segments.map { seg ->
@@ -502,7 +743,7 @@ object AiFlashNewsEngine {
         for (i in segments.indices) {
             var s = desiredStarts[i]
             val nextS = desiredStarts.getOrNull(i + 1)
-            val maxDur = 9_500L
+            val maxDur = 14_000L
             var e = if (nextS != null) {
                 minOf(s + maxDur, nextS - 300L)
             } else {
@@ -530,7 +771,7 @@ object AiFlashNewsEngine {
 
         val syncedCount = result.count { it != null }
         val modeName = if (voiceRuns != null) "Voice-Run Sync" else "Audio Sync"
-        toastMain(context, "Offline $modeName: $syncedCount/${segments.size} cards synced")
+        toastMain(context, "$modeName: $syncedCount/${segments.size} cards synced")
         result
     }
 
