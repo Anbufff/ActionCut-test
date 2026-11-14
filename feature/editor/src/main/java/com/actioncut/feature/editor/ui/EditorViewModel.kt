@@ -46,6 +46,7 @@ import com.actioncut.feature.editor.ui.newsalert.FlashNewsSegment
 import com.actioncut.feature.editor.ui.newsalert.NewsBannerRenderer
 import com.actioncut.feature.editor.ui.pip.AiCutoutManager
 import com.actioncut.feature.editor.ui.scorecard.CdnScorecardClient
+import com.actioncut.feature.editor.ui.scorecard.Player
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibrary
 import com.actioncut.feature.editor.ui.scorecard.ScoreCardComposer
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
@@ -59,6 +60,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 import javax.inject.Inject
@@ -418,14 +420,43 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    /** Returns all registered + cached player names so Gemini Flash matches exact names. */
-    fun getKnownPlayerNamesForAi(): List<String> =
-        runCatching { PlayerLibrary(context).all().map { it.name } }.getOrDefault(emptyList())
+    /** Returns ALL registered (CARD ADD) + auto-saved (CRIC CDN) player names for Gemini & offline matching. */
+    fun getKnownPlayerNamesForAi(): List<String> {
+        val libNames = runCatching { PlayerLibrary(context).all().map { it.name } }.getOrDefault(emptyList())
+        val cdnKeys = loadCdnPhotoIndex().keys.toList()
+        return (libNames + cdnKeys).distinct()
+    }
+
+    private fun loadCdnPhotoIndex(): Map<String, File> {
+        val out = LinkedHashMap<String, File>()
+        val cdnDir = File(context.filesDir, "players_cdn")
+        if (!cdnDir.exists()) return out
+        val idxFile = File(cdnDir, "name_index.json")
+        if (idxFile.exists()) {
+            runCatching {
+                val obj = JSONObject(idxFile.readText())
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val f = File(obj.optString(k, ""))
+                    if (f.exists() && f.length() > 0L) out[k] = f
+                }
+            }
+        }
+        cdnDir.listFiles { f -> f.extension.equals("jpg", true) || f.extension.equals("png", true) }
+            ?.forEach { f ->
+                val key = f.nameWithoutExtension.lowercase().replace(Regex("[^a-z]"), "")
+                if (key.length >= 3 && !out.containsKey(key) && f.length() > 0L) {
+                    out[key] = f
+                }
+            }
+        return out
+    }
 
     /**
      * AI Auto-Sync:
      * Places ~8-9 timed Flash News bursts (Yellow Badge + White Bullets) aligned with Voiceover
-     * pauses, and automatically pulls matching Player Cutout Photos from Card Add / CRIC CDN Cache.
+     * pauses, and automatically pulls & cuts out matching Player Photos from CARD ADD / CRIC CDN Cache.
      */
     fun addAiFlashNewsSequence(segments: List<FlashNewsSegment>) {
         if (segments.isEmpty()) return
@@ -449,10 +480,11 @@ class EditorViewModel @Inject constructor(
                 totalDurationMs = targetDurationMs,
             )
 
-            val library = PlayerLibrary(context)
-            val libraryPlayers = withContext(Dispatchers.IO) { library.all() }
+            val libraryPlayers = withContext(Dispatchers.IO) { PlayerLibrary(context).all() }
+            val cdnIndex = withContext(Dispatchers.IO) { loadCdnPhotoIndex() }
 
             val generatedClips = ArrayList<Clip>()
+            val missingPlayers = LinkedHashSet<String>()
             var cutoutCount = 0
 
             withContext(Dispatchers.IO) {
@@ -471,10 +503,10 @@ class EditorViewModel @Inject constructor(
 
                     val playerName = seg.playerName?.trim().orEmpty()
                     if (playerName.isNotEmpty()) {
-                        val photoFile = resolvePlayerPhotoFile(playerName, libraryPlayers)
+                        val photoFile = resolvePlayerPhotoFile(playerName, libraryPlayers, cdnIndex)
                         if (photoFile != null && photoFile.exists() && photoFile.length() > 0L) {
                             val photoUri = Uri.fromFile(photoFile).toString()
-                            AiCutoutManager.getOrCreateCutoutUri(context, photoUri)
+                            AiCutoutManager.getOrCreateCutoutUri(context, photoUri, forceRefresh = true)
                             cutoutCount++
                             generatedClips.add(
                                 Clip(
@@ -490,6 +522,8 @@ class EditorViewModel @Inject constructor(
                                     keyframes = emptyList(),
                                 ),
                             )
+                        } else {
+                            missingPlayers.add(playerName)
                         }
                     }
                 }
@@ -515,26 +549,60 @@ class EditorViewModel @Inject constructor(
 
             val firstClip = generatedClips.first()
             _uiState.update { it.copy(selectedClipId = firstClip.id) }
+            val missingNote = if (missingPlayers.isNotEmpty()) {
+                "\nMissing photo (add in CARD ADD): ${missingPlayers.take(3).joinToString(", ")}"
+            } else {
+                ""
+            }
             Toast.makeText(
                 context,
-                "${segments.size} Flash News + $cutoutCount Player Cutout synced!",
+                "${segments.size} Flash News + $cutoutCount Cutouts synced!$missingNote",
                 Toast.LENGTH_LONG,
             ).show()
         }
     }
 
-    private fun resolvePlayerPhotoFile(playerName: String, libraryPlayers: List<com.actioncut.feature.editor.ui.scorecard.Player>): File? {
+    private fun resolvePlayerPhotoFile(
+        playerName: String,
+        libraryPlayers: List<Player>,
+        cdnIndex: Map<String, File>,
+    ): File? {
         val normTarget = playerName.lowercase().replace(Regex("[^a-z]"), "")
+        val tokens = playerName.lowercase().split(Regex("[^a-z]+")).filter { it.length >= 3 }
+        val firstLast = if (tokens.size >= 2) "${tokens.first()}${tokens.last()}" else normTarget
+
+        // 1. Check CARD ADD (PlayerLibrary) — exact, partial, first+last, or surname match
         if (normTarget.length >= 3) {
-            val libMatch = libraryPlayers.firstOrNull { p ->
+            val libDir = File(context.filesDir, "players")
+            val exactLib = libraryPlayers.firstOrNull { p ->
                 val pn = p.name.lowercase().replace(Regex("[^a-z]"), "")
-                pn.length >= 3 && (pn == normTarget || normTarget.contains(pn) || pn.contains(normTarget))
+                pn.length >= 3 && (pn == normTarget || pn == firstLast || normTarget.contains(pn) || pn.contains(normTarget))
+            } ?: libraryPlayers.firstOrNull { p ->
+                val pTokens = p.name.lowercase().split(Regex("[^a-z]+")).filter { it.length >= 4 }
+                tokens.any { t -> t.length >= 4 && pTokens.contains(t) }
             }
-            if (libMatch != null) {
-                val f = File(File(context.filesDir, "players"), libMatch.photoFile)
+            if (exactLib != null) {
+                val f = File(libDir, exactLib.photoFile)
                 if (f.exists() && f.length() > 0L) return f
             }
         }
+
+        // 2. Check CRIC CDN local cache (players_cdn/) with exact, first+last, and token match
+        cdnIndex[normTarget]?.let { return it }
+        cdnIndex[firstLast]?.let { return it }
+        cdnIndex.entries.firstOrNull { (k, _) ->
+            k.length >= 4 && (normTarget.contains(k) || k.contains(normTarget) || firstLast.contains(k) || k.contains(firstLast))
+        }?.value?.let { return it }
+
+        // Surname / distinctive token fallback (e.g., "Kamboj", "Gambhir", "Kohli", "Nitish")
+        val lastToken = tokens.lastOrNull()?.takeIf { it.length >= 5 }
+        if (lastToken != null) {
+            cdnIndex.entries.firstOrNull { (k, _) -> k.contains(lastToken) }?.value?.let { return it }
+        }
+        for (tok in tokens.filter { it.length >= 5 }) {
+            cdnIndex.entries.firstOrNull { (k, _) -> k.contains(tok) }?.value?.let { return it }
+        }
+
         return CdnScorecardClient.findCachedPhotoFileByName(context, playerName)
     }
 
@@ -629,7 +697,7 @@ class EditorViewModel @Inject constructor(
         val mediaUri = clip.mediaUri
         if (isNowCutout && mediaUri != null) {
             viewModelScope.launch(Dispatchers.IO) {
-                AiCutoutManager.getOrCreateCutoutUri(context, mediaUri)
+                AiCutoutManager.getOrCreateCutoutUri(context, mediaUri, forceRefresh = true)
             }
         }
     }
