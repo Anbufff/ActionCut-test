@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Key
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,10 +35,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -224,10 +220,7 @@ fun FlashNewsTextDialog(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var text by remember { mutableStateOf(initialText) }
-    var apiKey by remember { mutableStateOf(AiFlashNewsEngine.getSavedApiKey(context)) }
-    var showApiKeyBox by remember { mutableStateOf(apiKey.isBlank()) }
     var isBusy by remember { mutableStateOf(false) }
-    var geminiAudioSync by remember { mutableStateOf(AiFlashNewsEngine.isGeminiAudioSync(context)) }
 
     Dialog(
         onDismissRequest = { if (!isBusy) onDismiss() },
@@ -266,23 +259,6 @@ fun FlashNewsTextDialog(
                             style = TextStyle(color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold),
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(
-                            onClick = { showApiKeyBox = !showApiKeyBox },
-                            enabled = !isBusy,
-                        ) {
-                            Icon(
-                                Icons.Filled.Key,
-                                contentDescription = "API Key",
-                                tint = if (apiKey.isNotBlank()) Color(0xFF00E5FF) else Color(0xFFFFC107),
-                                modifier = Modifier.size(16.dp),
-                            )
-                            Spacer(Modifier.size(4.dp))
-                            Text(
-                                text = if (apiKey.isNotBlank()) "Key ✓" else "API Key",
-                                color = if (apiKey.isNotBlank()) Color(0xFF00E5FF) else Color(0xFFFFC107),
-                                fontSize = 12.sp,
-                            )
-                        }
                         IconButton(
                             onClick = { if (!isBusy) onDismiss() },
                             modifier = Modifier.size(28.dp),
@@ -291,66 +267,10 @@ fun FlashNewsTextDialog(
                         }
                     }
 
-                    if (showApiKeyBox) {
-                        OutlinedTextField(
-                            value = apiKey,
-                            onValueChange = {
-                                apiKey = it
-                                AiFlashNewsEngine.saveApiKey(context, it)
-                            },
-                            singleLine = true,
-                            placeholder = {
-                                Text(
-                                    "Google AI Studio Free Gemini API Key",
-                                    color = Color(0xFF777777),
-                                    fontSize = 12.sp,
-                                )
-                            },
-                            textStyle = TextStyle(color = Color.White, fontSize = 13.sp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(Color(0xFF202022)),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Color(0xFFFFC107),
-                                unfocusedBorderColor = Color(0xFF333333),
-                                cursorColor = Color(0xFFFFC107),
-                            ),
-                        )
-                    }
-
                     Text(
-                        text = "முழு Voiceover கட்டுரையை Paste செய்து 'AI Auto-Sync' அழுத்தினால், Player அல்லது Team பெயர் வரும் சரியான நேரங்களில் Flash News தானாக செட் ஆகும் (Scorecard மீது வராது).",
+                        text = "முழு Voiceover கட்டுரையை Paste செய்து 'Auto-Sync' அழுத்தினால், Offline-ல் உங்கள் Voice-க்கு ஏற்ப Player அல்லது Team பெயர் வரும் சரியான நேரங்களில் Flash News தானாக செட் ஆகும் (Scorecard மீது வராது).",
                         style = TextStyle(color = Color(0xFFB0B0B0), fontSize = 11.5.sp, lineHeight = 16.sp),
                     )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Gemini Audio Sync",
-                                style = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
-                            )
-                            Text(
-                                text = if (geminiAudioSync) "ON · Audio-வை Gemini கேட்டு நேரம் தரும் (துல்லியம் அதிகம்)" else "OFF · Phone-ல் இலவச sync",
-                                style = TextStyle(color = Color(0xFFB0B0B0), fontSize = 11.sp),
-                            )
-                        }
-                        Switch(
-                            checked = geminiAudioSync,
-                            onCheckedChange = {
-                                geminiAudioSync = it
-                                AiFlashNewsEngine.setGeminiAudioSync(context, it)
-                            },
-                            enabled = !isBusy,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.Black,
-                                checkedTrackColor = Color(0xFFFFC107),
-                            ),
-                        )
-                    }
 
                     OutlinedTextField(
                         value = text,
@@ -413,20 +333,11 @@ fun FlashNewsTextDialog(
                             onClick = {
                                 if (text.isBlank() || isBusy) return@Button
                                 isBusy = true
-                                AiFlashNewsEngine.saveApiKey(context, apiKey)
                                 scope.launch {
                                     val res = AiFlashNewsEngine.generateSegments(context, text, knownPlayerNames)
                                     isBusy = false
-                                    res.onSuccess { result ->
-                                        if (!result.usedAi) {
-                                            val reason = result.aiError ?: "No Gemini API Key"
-                                            Toast.makeText(
-                                                context,
-                                                "Offline mode ($reason) — ${result.segments.size} slides",
-                                                Toast.LENGTH_LONG,
-                                            ).show()
-                                        }
-                                        onAiAutoSync(result.segments)
+                                    res.onSuccess { segments ->
+                                        onAiAutoSync(segments)
                                     }.onFailure { err ->
                                         Toast.makeText(
                                             context,
@@ -455,7 +366,7 @@ fun FlashNewsTextDialog(
                             } else {
                                 Icon(Icons.Filled.AutoAwesome, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.size(4.dp))
-                                Text("AI Auto-Sync", color = Color.Black, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                                Text("Auto-Sync", color = Color.Black, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
