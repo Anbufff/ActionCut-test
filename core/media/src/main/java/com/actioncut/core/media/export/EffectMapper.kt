@@ -172,12 +172,53 @@ object EffectMapper {
         val uriStr = ov.mediaUri ?: return null
         val uri = Uri.parse(uriStr)
         val file = if (uri.scheme == "file") File(uri.path ?: "") else File(uriStr)
-        val bitmap = if (file.exists()) {
-            BitmapFactory.decodeFile(file.absolutePath)
-        } else {
-            BitmapFactory.decodeFile(uri.path ?: uriStr)
-        } ?: return null
+        val path = if (file.exists()) file.absolutePath else (uri.path ?: uriStr)
 
+        if (uriStr.contains("news_banner") && path.endsWith(".png", ignoreCase = true)) {
+            val basePath = path.substring(0, path.length - 4)
+            val metaFile = File("$basePath.meta")
+            if (metaFile.exists()) {
+                val fractions = runCatching {
+                    metaFile.readText()
+                        .split(",")
+                        .mapNotNull { it.trim().toFloatOrNull() }
+                }.getOrDefault(emptyList())
+
+                if (fractions.size > 1) {
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(path, bounds)
+                    val bmpWidth = bounds.outWidth
+                    if (bmpWidth > 0) {
+                        val factor = (targetWidth * ov.transform.scale) / bmpWidth.toFloat()
+                        val visible = StaticOverlaySettings.Builder()
+                            .setBackgroundFrameAnchor(
+                                ov.transform.offsetX.coerceIn(-1f, 1f),
+                                -ov.transform.offsetY.coerceIn(-1f, 1f),
+                            )
+                            .setScale(factor, factor)
+                            .setRotationDegrees(ov.transform.rotationDegrees)
+                            .build()
+                        val hidden = StaticOverlaySettings.Builder().setAlphaScale(0f).build()
+                        val startUs = (ov.timelineStartMs - clip.timelineStartMs).coerceAtLeast(0L) * 1_000L
+                        val endUs = (ov.timelineEndMs - clip.timelineStartMs).coerceAtLeast(0L) * 1_000L
+                        return NewsBannerBitmapOverlay(
+                            basePath = basePath,
+                            fallbackPath = path,
+                            fractions = fractions,
+                            visible = visible,
+                            hidden = hidden,
+                            clipStartMs = clip.timelineStartMs,
+                            ovStartMs = ov.timelineStartMs,
+                            ovEndMs = ov.timelineEndMs,
+                            startUs = startUs,
+                            endUs = endUs,
+                        )
+                    }
+                }
+            }
+        }
+
+        val bitmap = BitmapFactory.decodeFile(path) ?: return null
         val factor = (targetWidth * ov.transform.scale) / bitmap.width.toFloat()
         val visible = StaticOverlaySettings.Builder()
             .setBackgroundFrameAnchor(
@@ -224,6 +265,68 @@ object EffectMapper {
             ShaderEffect(frag, effect.intensity.coerceIn(0f, 1f))
         }
     }
+}
+
+private class NewsBannerBitmapOverlay(
+    private val basePath: String,
+    private val fallbackPath: String,
+    private val fractions: List<Float>,
+    private val visible: OverlaySettings,
+    private val hidden: OverlaySettings,
+    private val clipStartMs: Long,
+    private val ovStartMs: Long,
+    private val ovEndMs: Long,
+    private val startUs: Long,
+    private val endUs: Long,
+) : BitmapOverlay() {
+
+    private var baseUs = Long.MIN_VALUE
+    private var loadedIdx = -1
+    private var activeBmp: Bitmap? = null
+    private var retiredBmp: Bitmap? = null
+    private val placeholderBmp: Bitmap by lazy { Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888) }
+
+    private fun clipTimeUs(presentationTimeUs: Long): Long {
+        if (baseUs == Long.MIN_VALUE) baseUs = presentationTimeUs
+        return (presentationTimeUs - baseUs).coerceAtLeast(0L)
+    }
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        val tUs = clipTimeUs(presentationTimeUs)
+        if (tUs !in startUs until endUs) {
+            if (tUs >= endUs) {
+                retiredBmp?.let { if (!it.isRecycled) it.recycle() }
+                retiredBmp = null
+                activeBmp?.let { if (!it.isRecycled) it.recycle() }
+                activeBmp = null
+                loadedIdx = -1
+            }
+            return placeholderBmp
+        }
+
+        val timelineMs = clipStartMs + (tUs / 1_000L)
+        val ovDurMs = (ovEndMs - ovStartMs).coerceAtLeast(1L)
+        val progress = ((timelineMs - ovStartMs).toFloat() / ovDurMs.toFloat()).coerceIn(0f, 1f)
+        val activeIdx = fractions.indexOfFirst { progress <= it }.let {
+            if (it < 0) fractions.lastIndex else it
+        }
+
+        if (activeIdx != loadedIdx || activeBmp == null || activeBmp?.isRecycled == true) {
+            val frameFile = File("${basePath}_$activeIdx.png")
+            val decoded = (if (frameFile.exists()) BitmapFactory.decodeFile(frameFile.absolutePath) else null)
+                ?: BitmapFactory.decodeFile(fallbackPath)
+            if (decoded != null) {
+                retiredBmp?.let { if (!it.isRecycled && it !== activeBmp) it.recycle() }
+                retiredBmp = activeBmp
+                activeBmp = decoded
+                loadedIdx = activeIdx
+            }
+        }
+        return activeBmp ?: placeholderBmp
+    }
+
+    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings =
+        if (clipTimeUs(presentationTimeUs) in startUs until endUs) visible else hidden
 }
 
 private const val SCORECARD_CANVAS_W = 1920f
