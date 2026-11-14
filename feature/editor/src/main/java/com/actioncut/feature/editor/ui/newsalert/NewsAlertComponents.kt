@@ -80,13 +80,15 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.math.min
+import kotlin.math.max
 import kotlin.math.roundToLong
 
 data class FlashNewsSegment(
     val title: String,
     val bullets: List<String>,
     val playerName: String? = null,
+    val teamName: String? = null,
+    val anchorText: String? = null,
     val startFraction: Float = 0f,
 )
 
@@ -194,7 +196,7 @@ fun NewsAlertTemplatesDialog(
                             )
                             Spacer(Modifier.height(3.dp))
                             Text(
-                                text = "Blue Stadium + Green Pitch Default · Tamil AI Auto-Sync & Cutout",
+                                text = "Blue Stadium + Green Pitch Default · Player/Team Accurate Sync",
                                 style = TextStyle(color = Color(0xFFFFC107), fontSize = 12.sp, fontWeight = FontWeight.Medium),
                             )
                         }
@@ -311,7 +313,7 @@ fun FlashNewsTextDialog(
                     }
 
                     Text(
-                        text = "முழு Voiceover கட்டுரையை Paste செய்து 'AI Auto-Sync' அழுத்தினால், ஸ்டேடியம் Background-ல் தமிழ் Flash News + Player Cutout தானாக Timeline-ல் செட் ஆகும்.",
+                        text = "முழு Voiceover கட்டுரையை Paste செய்து 'AI Auto-Sync' அழுத்தினால், Player அல்லது Team பெயர் வரும் சரியான நேரங்களில் Flash News தானாக செட் ஆகும் (Scorecard மீது வராது).",
                         style = TextStyle(color = Color(0xFFB0B0B0), fontSize = 11.5.sp, lineHeight = 16.sp),
                     )
 
@@ -505,32 +507,35 @@ object AiFlashNewsEngine {
     ): List<FlashNewsSegment> {
         val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
         val playerHint = if (knownPlayers.isNotEmpty()) {
-            "Known player names in local library (prefer exact match if mentioned or implied as captain/coach): ${knownPlayers.take(120).joinToString(", ")}."
+            "Known human player names in local library (use exact spelling if mentioned): ${knownPlayers.take(120).joinToString(", ")}."
         } else {
             ""
         }
 
         val prompt = """
             You are a Tamil Cricket TV News Flash Graphics editor.
-            Read the following Tamil cricket voiceover script carefully and extract 8 to 9 key Flash News moments in exact chronological order from start to end of the article.
+            Read the entire Tamil cricket voiceover script chronologically from start to end.
+            There is NO fixed limit on the number of Flash News items (do NOT limit to 8). Extract EVERY distinct moment in the script where EITHER:
+              (A) a specific HUMAN cricket player or coach is discussed, OR
+              (B) a cricket TEAM (like India, New Zealand, Australia, England, CSK, RCB, MI, etc.) is discussed as the main topic!
 
-            STRICT LANGUAGE & FORMAT RULES:
-            1. ALL "title" and "bullets" text MUST BE WRITTEN IN TAMIL SCRIPT (தமிழ் எழுத்துகளில் மட்டுமே இருக்க வேண்டும்)! NEVER translate the Tamil script into full English sentences!
-            2. ONLY cricket player/coach names (e.g., "Rohit Sharma", "Ruturaj Gaikwad", "Gautam Gambhir", "Nitish Kumar Reddy") and numeric stats + short English units (e.g., "351 runs", "6.5 overs", "13 balls 5 runs", "0 runs") should be in English inside the Tamil sentences!
-               GOOD example bullet: "முதல் பந்திலேயே டக் அவுட் ஆகி ஏமாற்றம் அளித்தார் Rohit Sharma."
-               GOOD example bullet: "13 balls-ல் வெறும் 5 runs மட்டுமே எடுத்து சொதப்பினார் Ruturaj Gaikwad."
-               BAD example (DO NOT DO THIS): "Rohit Sharma got out on a golden duck without scoring any runs."
+            Do NOT combine two DIFFERENT players (e.g., Shreyas Iyer and Virat Kohli) into the same Flash News card! Whenever the script moves to a new player or team, create a separate card right where that player/team starts being talked about.
+
+            STRICT LANGUAGE & ACCURACY RULES:
+            1. ALL "title" and "bullets" text MUST BE WRITTEN IN TAMIL SCRIPT (தமிழ் எழுத்துகளில் மட்டுமே)! NEVER translate into full English sentences!
+            2. ONLY cricket player/coach/team names (e.g., "Shreyas Iyer", "Virat Kohli", "Rohit Sharma", "Team India") and numeric stats + short English units (e.g., "351 runs", "6.5 overs", "13 balls 5 runs") should be in English inside the Tamil sentences.
             3. Remove filler conversational phrases ("மக்களே", "யோசிச்சு பாருங்க", "கமெண்ட் பாக்ஸ்ல சொல்லுங்க").
-            4. Convert Tamil spoken numbers into crisp English digits + units (e.g., "முன்னூத்தி ஐம்பத்தியொன்னு" -> "351 runs", "ஆறு புள்ளி அஞ்சு ஓவர்" -> "6.5 overs").
+            4. Convert Tamil spoken numbers into crisp English digits + units.
             5. $playerHint
-            6. Even if a paragraph refers to "கேப்டன்" (captain), "கோச்" (coach), or "அவர்" (he) without repeating the name, infer the actual cricketer/coach from context and set "playerName" to their full English name!
-            7. For each moment return:
-               - "title": short punchy Tamil badge title (2 to 4 words, e.g., "Rohit Sharma டக்", "Ruturaj சொதப்பல்", "இறுதி முடிவு")
-               - "bullets": array of 1 or 2 complete Tamil sentences (each 8 to 16 words max) with English player names & numeric stats
-               - "playerName": English full name of the main cricketer/coach discussed in that segment
-               - "startFraction": float from 0.02 to 0.90 representing chronological position in the article.
+            6. For EACH extracted moment, return:
+               - "title": short punchy Tamil badge title (2 to 4 words, e.g., "Shreyas Iyer அதிரடி", "Virat Kohli சாதனை", "Team India திட்டம்")
+               - "bullets": array of 1 or 2 complete Tamil sentences (8 to 16 words max) with English player/team names & stats
+               - "playerName": full English name of the HUMAN cricketer/coach ONLY (or "" if this moment is about a team with no specific human player)
+               - "teamName": English team name if team-focused (e.g., "India", "New Zealand", "CSK", or "")
+               - "anchorText": EXACT 3 to 5 consecutive words copied verbatim (untouched!) from the original ARTICLE right where this player/team begins to be discussed. This is used to sync the exact timestamp with the voiceover!
+               - "startFraction": approximate float 0.0..0.95 as backup.
 
-            Return ONLY a valid JSON array of objects, no extra text.
+            Return ONLY a valid JSON array of objects, ordered chronologically.
 
             ARTICLE:
             $article
@@ -549,7 +554,7 @@ object AiFlashNewsEngine {
             put(
                 "generationConfig",
                 JSONObject()
-                    .put("temperature", 0.2)
+                    .put("temperature", 0.15)
                     .put("responseMimeType", "application/json"),
             )
         }
@@ -557,7 +562,7 @@ object AiFlashNewsEngine {
         val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15_000
-            readTimeout = 25_000
+            readTimeout = 28_000
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=UTF-8")
         }
@@ -595,7 +600,10 @@ object AiFlashNewsEngine {
             JSONArray(rawText)
         }
 
+        val totalLen = max(article.length, 1)
+        var searchCursor = 0
         val out = ArrayList<FlashNewsSegment>(arr.length())
+
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
             val title = o.optString("title", "FLASH NEWS").trim()
@@ -604,12 +612,78 @@ object AiFlashNewsEngine {
                 .map { bArr.optString(it, "").trim() }
                 .filter { it.isNotEmpty() }
             if (bullets.isEmpty()) continue
+
             val player = o.optString("playerName", "").trim().takeIf { it.isNotEmpty() }
-            val frac = o.optDouble("startFraction", (i + 0.5) / kotlin.math.max(arr.length(), 1))
-                .toFloat().coerceIn(0.01f, 0.94f)
-            out.add(FlashNewsSegment(title = title, bullets = bullets, playerName = player, startFraction = frac))
+            val team = o.optString("teamName", "").trim().takeIf { it.isNotEmpty() }
+            if (player == null && team == null) continue
+
+            val anchor = o.optString("anchorText", "").trim().takeIf { it.isNotEmpty() }
+            val aiFrac = o.optDouble("startFraction", (i.toDouble() / max(arr.length(), 1)))
+                .toFloat().coerceIn(0.0f, 0.96f)
+
+            val matchedIdx = findAnchorCharIndex(article, anchor, player, team, searchCursor)
+            val exactFrac = if (matchedIdx >= 0) {
+                searchCursor = matchedIdx + 4
+                (matchedIdx.toFloat() / totalLen.toFloat()).coerceIn(0.0f, 0.96f)
+            } else {
+                aiFrac
+            }
+
+            out.add(
+                FlashNewsSegment(
+                    title = title,
+                    bullets = bullets,
+                    playerName = player,
+                    teamName = team,
+                    anchorText = anchor,
+                    startFraction = exactFrac,
+                ),
+            )
         }
         return out.sortedBy { it.startFraction }
+    }
+
+    /**
+     * Locates the exact character index in [article] starting from [fromIdx] so the Flash News
+     * aligns mathematically with the spoken voiceover position rather than LLM guess fractions.
+     */
+    private fun findAnchorCharIndex(
+        article: String,
+        anchor: String?,
+        player: String?,
+        team: String?,
+        fromIdx: Int,
+    ): Int {
+        val safeFrom = fromIdx.coerceIn(0, max(0, article.length - 1))
+        if (!anchor.isNullOrBlank()) {
+            val direct = article.indexOf(anchor, startIndex = safeFrom, ignoreCase = true)
+            if (direct >= 0) return direct
+
+            val words = anchor.split(Regex("\\s+")).filter { it.length >= 2 }
+            if (words.size >= 2) {
+                val twoWord = "${words[0]} ${words[1]}"
+                val wMatch = article.indexOf(twoWord, startIndex = safeFrom, ignoreCase = true)
+                if (wMatch >= 0) return wMatch
+            }
+            for (w in words.filter { it.length >= 4 }) {
+                val idx = article.indexOf(w, startIndex = safeFrom, ignoreCase = true)
+                if (idx >= 0) return idx
+            }
+        }
+        if (!player.isNullOrBlank()) {
+            val pIdx = article.indexOf(player, startIndex = safeFrom, ignoreCase = true)
+            if (pIdx >= 0) return pIdx
+            val lastTok = player.split(Regex("\\s+")).lastOrNull()?.takeIf { it.length >= 4 }
+            if (lastTok != null) {
+                val lIdx = article.indexOf(lastTok, startIndex = safeFrom, ignoreCase = true)
+                if (lIdx >= 0) return lIdx
+            }
+        }
+        if (!team.isNullOrBlank()) {
+            val tIdx = article.indexOf(team, startIndex = safeFrom, ignoreCase = true)
+            if (tIdx >= 0) return tIdx
+        }
+        return -1
     }
 
     private fun offlineFallbackSegments(
@@ -617,74 +691,108 @@ object AiFlashNewsEngine {
         knownPlayers: List<String>,
     ): List<FlashNewsSegment> {
         val cleaned = normalizeCommonTamilNumbers(fullArticle)
-        val rawParas = cleaned.split(Regex("\\n+"))
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-
-        val mergedUnits = ArrayList<String>()
-        for (p in rawParas) {
-            if (mergedUnits.isNotEmpty() && (mergedUnits.last().length < 36 || p.length < 28)) {
-                mergedUnits[mergedUnits.lastIndex] = "${mergedUnits.last()} $p"
-            } else {
-                mergedUnits.add(p)
+        val rawUnits = cleaned.split(Regex("\\n+"))
+            .flatMap { para ->
+                val trimmed = para.trim()
+                if (trimmed.length > 190) {
+                    trimmed.split(Regex("(?<!\\d)\\.(?!\\d)\\s+")).map { it.trim() }
+                } else {
+                    listOf(trimmed)
+                }
             }
-        }
+            .filter { it.length >= 16 }
 
-        val units = if (mergedUnits.size >= 4) {
-            mergedUnits
-        } else {
-            cleaned.split(Regex("(?<!\\d)\\.(?!\\d)\\s+"))
+        if (rawUnits.isEmpty()) return emptyList()
+
+        val totalLen = max(cleaned.length, 1)
+        val out = ArrayList<FlashNewsSegment>()
+        var cursor = 0
+        var lastSubjectKey: String? = null
+
+        for (unit in rawUnits) {
+            val pos = cleaned.indexOf(unit, startIndex = cursor).let { if (it >= 0) it else cursor }
+            cursor = pos + unit.length
+
+            val player = detectMentionedPlayer(unit, knownPlayers)
+            val team = detectMentionedTeam(unit)
+            if (player == null && team == null) continue
+
+            val subjectKey = player ?: "TEAM:$team"
+            val sentences = unit.split(Regex("(?<!\\d)\\.(?!\\d)\\s+"))
                 .map { it.trim() }
-                .filter { it.length >= 20 }
-        }
+                .filter { it.length >= 10 }
+            val b1 = (sentences.getOrElse(0) { unit }).take(135)
+            val b2 = sentences.getOrNull(1)?.takeIf { it.length >= 14 }?.take(135)
 
-        if (units.isEmpty()) {
-            return listOf(
+            // Merge back-to-back units about the exact same player/team if close together
+            if (subjectKey == lastSubjectKey && out.isNotEmpty() && out.last().bullets.size < 2) {
+                val prev = out.last()
+                out[out.lastIndex] = prev.copy(bullets = prev.bullets + b1)
+                continue
+            }
+
+            lastSubjectKey = subjectKey
+            val title = when {
+                player != null -> "$player அப்டேட்"
+                team != null -> "$team அப்டேட்"
+                else -> "FLASH NEWS"
+            }
+            val frac = (pos.toFloat() / totalLen.toFloat()).coerceIn(0.0f, 0.95f)
+            out.add(
                 FlashNewsSegment(
-                    title = "FLASH NEWS",
-                    bullets = listOf(cleaned.take(160)),
-                    playerName = detectMentionedPlayer(cleaned, knownPlayers),
-                    startFraction = 0.05f,
+                    title = title,
+                    bullets = listOfNotNull(b1.takeIf { it.isNotEmpty() }, b2),
+                    playerName = player,
+                    teamName = team,
+                    anchorText = unit.take(32),
+                    startFraction = frac,
                 ),
             )
         }
-
-        val targetCount = min(9, units.size).coerceAtLeast(1)
-        val out = ArrayList<FlashNewsSegment>(targetCount)
-        var lastPlayer: String? = null
-
-        for (k in 0 until targetCount) {
-            val idx = ((k.toFloat() / targetCount) * units.size).toInt().coerceIn(0, units.size - 1)
-            val block = units[idx]
-            val sentences = block.split(Regex("(?<!\\d)\\.(?!\\d)\\s+"))
-                .map { it.trim() }
-                .filter { it.length >= 10 }
-
-            val b1 = (sentences.getOrElse(0) { block }).take(135)
-            val b2 = sentences.getOrNull(1)?.takeIf { it.length >= 16 }?.take(135)
-            val bullets = listOfNotNull(b1.takeIf { it.isNotEmpty() }, b2)
-
-            val directPlayer = detectMentionedPlayer(block, knownPlayers)
-            val player = directPlayer ?: if (
-                lastPlayer != null &&
-                (block.contains("அவர்") || block.contains("இவர்") || block.contains("இவர") || block.contains("கேப்டன்"))
-            ) {
-                lastPlayer
-            } else {
-                detectMentionedPlayer(fullArticle, knownPlayers)
-            }
-            if (directPlayer != null) lastPlayer = directPlayer
-
-            val title = when {
-                k == targetCount - 1 -> "இறுதி முடிவு"
-                player != null -> "$player அப்டேட்"
-                k == 0 -> "முக்கிய செய்தி"
-                else -> "FLASH NEWS ${k + 1}"
-            }
-            val frac = (0.04f + (k.toFloat() / kotlin.math.max(targetCount, 1)) * 0.86f).coerceIn(0.02f, 0.92f)
-            out.add(FlashNewsSegment(title = title, bullets = bullets, playerName = player, startFraction = frac))
-        }
         return out
+    }
+
+    private fun detectMentionedTeam(text: String): String? {
+        val lower = text.lowercase()
+        val teamMap = listOf(
+            "இந்தியா" to "India",
+            "இந்திய அணி" to "India",
+            "team india" to "India",
+            "india" to "India",
+            "நியூசிலாந்து" to "New Zealand",
+            "new zealand" to "New Zealand",
+            "ஆஸ்திரேலியா" to "Australia",
+            "australia" to "Australia",
+            "இங்கிலாந்து" to "England",
+            "england" to "England",
+            "தென் ஆப்பிரிக்கா" to "South Africa",
+            "south africa" to "South Africa",
+            "பாகிஸ்தான்" to "Pakistan",
+            "pakistan" to "Pakistan",
+            "இலங்கை" to "Sri Lanka",
+            "sri lanka" to "Sri Lanka",
+            "வங்கதேசம்" to "Bangladesh",
+            "bangladesh" to "Bangladesh",
+            "ஆப்கானிஸ்தான்" to "Afghanistan",
+            "afghanistan" to "Afghanistan",
+            "வெஸ்ட் இண்டீஸ்" to "West Indies",
+            "west indies" to "West Indies",
+            "சென்னை" to "CSK",
+            "csk" to "CSK",
+            "மும்பை" to "MI",
+            "rcb" to "RCB",
+            "பெங்களூரு" to "RCB",
+            "கொல்கத்தா" to "KKR",
+            "kkr" to "KKR",
+            "ஹைதராபாத்" to "SRH",
+            "srh" to "SRH",
+            "ராஜஸ்தான்" to "RR",
+            "டெல்லி" to "DC",
+            "பஞ்சாப்" to "PBKS",
+            "குஜராத்" to "GT",
+            "லக்னோ" to "LSG",
+        )
+        return teamMap.firstOrNull { (needle, _) -> lower.contains(needle) }?.second
     }
 
     private fun detectMentionedPlayer(text: String, knownPlayers: List<String>): String? {
@@ -700,6 +808,11 @@ object AiFlashNewsEngine {
         }?.let { return it }
 
         val commonMap = listOf(
+            "shreyas" to "Shreyas Iyer",
+            "iyer" to "Shreyas Iyer",
+            "ஷ்ரேயாஸ்" to "Shreyas Iyer",
+            "ஸ்ரேயாஸ்" to "Shreyas Iyer",
+            "அய்யர்" to "Shreyas Iyer",
             "nitish" to "Nitish Kumar Reddy",
             "நிதீஷ்" to "Nitish Kumar Reddy",
             "ரெட்டி" to "Nitish Kumar Reddy",
@@ -729,7 +842,6 @@ object AiFlashNewsEngine {
             "surya" to "Suryakumar Yadav",
             "சூர்யகுமார்" to "Suryakumar Yadav",
             "சூர்யா" to "Suryakumar Yadav",
-            "கேப்டன்" to "Suryakumar Yadav",
             "rahul" to "KL Rahul",
             "ராகுல்" to "KL Rahul",
             "bumrah" to "Jasprit Bumrah",
@@ -774,10 +886,6 @@ object AiFlashNewsEngine {
             "சுந்தர்" to "Washington Sundar",
             "ishan" to "Ishan Kishan",
             "இஷான்" to "Ishan Kishan",
-            "shreyas" to "Shreyas Iyer",
-            "iyer" to "Shreyas Iyer",
-            "ஷ்ரேயாஸ்" to "Shreyas Iyer",
-            "அய்யர்" to "Shreyas Iyer",
             "dhoni" to "MS Dhoni",
             "தோனி" to "MS Dhoni",
         )
@@ -798,41 +906,126 @@ object AiFlashNewsEngine {
             .replace("ஒன்பது ரன்", "9 runs")
     }
 
+    /**
+     * Maps each segment onto the ACTUAL Voice Audio span using non-cascading timestamps
+     * (never pushes later players late, and skips/trims around any CRIC CDN Scorecard range).
+     */
     suspend fun detectVoicePauseStartsMs(
         context: Context,
         audioClips: List<Clip>,
         segments: List<FlashNewsSegment>,
         totalDurationMs: Long,
-    ): List<Pair<Long, Long>> = withContext(Dispatchers.IO) {
+        blockedRanges: List<LongRange> = emptyList(),
+    ): List<Pair<Long, Long>?> = withContext(Dispatchers.IO) {
         if (segments.isEmpty()) return@withContext emptyList()
-        val safeTotal = totalDurationMs.coerceAtLeast(segments.size * 6_000L)
-        val count = segments.size
 
-        val maxWindowPerSeg = (safeTotal / count.toFloat()).toLong().coerceAtLeast(2_500L)
-        val burstDur = min(10_500L, (maxWindowPerSeg * 0.58f).toLong().coerceAtLeast(2_200L))
+        val audioStart = audioClips.minOfOrNull { it.timelineStartMs } ?: 0L
+        val audioEnd = audioClips.maxOfOrNull { it.timelineEndMs } ?: totalDurationMs
+        val speechBounds = sampleSpeechBoundsMs(context, audioClips, audioStart, audioEnd)
+        val speechStart = speechBounds.first
+        val speechSpan = (speechBounds.second - speechStart).coerceAtLeast(10_000L)
 
-        val quietBuckets = sampleQuietPauseMs(context, audioClips, safeTotal)
+        val quietBuckets = sampleQuietPauseMs(context, audioClips, audioEnd)
 
-        val windows = ArrayList<Pair<Long, Long>>(count)
-        var minNextStart = 1_500L.coerceAtMost(safeTotal / 10L)
-
-        for (i in 0 until count) {
-            val seg = segments[i]
-            val nominalStart = (seg.startFraction * (safeTotal - burstDur))
-                .roundToLong()
-                .coerceIn(minNextStart, (safeTotal - burstDur).coerceAtLeast(minNextStart))
-
+        // 1. Compute exact non-cascading start times from startFraction inside actual speech bounds
+        val desiredStarts = segments.mapIndexed { idx, seg ->
+            val raw = speechStart + (seg.startFraction * speechSpan).roundToLong()
             val snapped = quietBuckets
-                .filter { abs(it - nominalStart) <= 3_500L && it >= minNextStart && it + burstDur <= safeTotal }
-                .minByOrNull { abs(it - nominalStart) }
-                ?: nominalStart
+                .filter { abs(it - raw) <= 1_800L }
+                .minByOrNull { abs(it - raw) }
+                ?: raw
+            snapped.coerceIn(speechStart, (speechStart + speechSpan - 2_000L).coerceAtLeast(speechStart))
+        }.toMutableList()
 
-            val startMs = snapped.coerceAtLeast(minNextStart).coerceAtMost((safeTotal - 1_500L).coerceAtLeast(0L))
-            val endMs = (startMs + burstDur).coerceAtMost(safeTotal)
-            windows.add(startMs to endMs)
-            minNextStart = endMs + 1_200L
+        // Ensure strictly ascending starts with >= 2.2s gap without drifting future items far away
+        for (i in 1 until desiredStarts.size) {
+            if (desiredStarts[i] < desiredStarts[i - 1] + 2_200L) {
+                desiredStarts[i] = desiredStarts[i - 1] + 2_200L
+            }
         }
-        windows
+
+        // 2. Build non-overlapping windows capped at 9.5s (or trimmed before next segment) & avoid scorecards
+        val result = ArrayList<Pair<Long, Long>?>(segments.size)
+        for (i in segments.indices) {
+            var s = desiredStarts[i]
+            val nextS = desiredStarts.getOrNull(i + 1)
+            val maxDur = 9_500L
+            var e = if (nextS != null) {
+                minOf(s + maxDur, nextS - 350L)
+            } else {
+                minOf(s + maxDur, speechStart + speechSpan)
+            }
+
+            // Trim or skip if overlapping any CRIC / CRIC CDN Scorecard clip
+            for (sc in blockedRanges) {
+                if (e <= sc.first || s >= sc.last) continue
+                if (s >= sc.first && e <= sc.last) {
+                    // Completely inside Scorecard -> hide completely
+                    e = s
+                    break
+                } else if (s < sc.first && e > sc.first) {
+                    e = sc.first - 150L
+                } else if (s < sc.last && e > sc.last) {
+                    s = sc.last + 150L
+                }
+            }
+
+            if (e - s >= 1_500L) {
+                result.add(s to e)
+            } else {
+                result.add(null)
+            }
+        }
+        result
+    }
+
+    private fun sampleSpeechBoundsMs(
+        context: Context,
+        audioClips: List<Clip>,
+        audioStart: Long,
+        audioEnd: Long,
+    ): Pair<Long, Long> {
+        val primary = audioClips.firstOrNull { it.mediaUri != null } ?: return audioStart to audioEnd
+        val uriStr = primary.mediaUri ?: return audioStart to audioEnd
+        val extractor = MediaExtractor()
+        return runCatching {
+            extractor.setDataSource(context, Uri.parse(uriStr), null)
+            val trackIdx = (0 until extractor.trackCount).firstOrNull { i ->
+                extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+            } ?: return@runCatching audioStart to audioEnd
+            extractor.selectTrack(trackIdx)
+
+            val bucketCount = 100
+            val byteSums = LongArray(bucketCount)
+            val byteCounts = IntArray(bucketCount)
+            val buf = ByteBuffer.allocate(16 * 1024)
+            val clipDurUs = primary.timelineDurationMs.coerceAtLeast(1_000L) * 1_000L
+            var frames = 0
+            while (frames++ < 25_000) {
+                val sz = extractor.readSampleData(buf, 0)
+                if (sz < 0) break
+                val tUs = extractor.sampleTime - primary.sourceInMs * 1_000L
+                if (tUs in 0L..clipDurUs) {
+                    val b = ((tUs.toDouble() / clipDurUs) * (bucketCount - 1)).toInt().coerceIn(0, bucketCount - 1)
+                    byteSums[b] += sz.toLong()
+                    byteCounts[b]++
+                }
+                extractor.advance()
+            }
+            val avgs = DoubleArray(bucketCount) { i ->
+                if (byteCounts[i] > 0) byteSums[i].toDouble() / byteCounts[i] else 0.0
+            }
+            val peak = avgs.maxOrNull() ?: 0.0
+            if (peak <= 0.0) return@runCatching audioStart to audioEnd
+            val voiceThreshold = peak * 0.18
+            val firstVoice = avgs.indexOfFirst { it >= voiceThreshold }.takeIf { it >= 0 } ?: 0
+            val lastVoice = avgs.indexOfLast { it >= voiceThreshold }.takeIf { it >= 0 } ?: (bucketCount - 1)
+            val startMs = primary.timelineStartMs + ((firstVoice.toDouble() / bucketCount) * primary.timelineDurationMs).roundToLong()
+            val endMs = primary.timelineStartMs + (((lastVoice + 1).toDouble() / bucketCount) * primary.timelineDurationMs).roundToLong()
+            if (endMs - startMs >= 5_000L) startMs to endMs else audioStart to audioEnd
+        }.getOrDefault(audioStart to audioEnd).also {
+            runCatching { extractor.release() }
+        }
     }
 
     private fun sampleQuietPauseMs(
@@ -861,7 +1054,7 @@ object AiFlashNewsEngine {
                 val sz = extractor.readSampleData(buf, 0)
                 if (sz < 0) break
                 val tUs = extractor.sampleTime - primary.sourceInMs * 1_000L
-                if (tUs >= 0L && tUs <= clipDurUs) {
+                if (tUs in 0L..clipDurUs) {
                     val b = ((tUs.toDouble() / clipDurUs) * (bucketCount - 1))
                         .toInt().coerceIn(0, bucketCount - 1)
                     byteSums[b] += sz.toLong()
@@ -936,7 +1129,6 @@ object NewsBannerRenderer {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
-        // 0. Draw Default Stadium Arena + Floodlights + Vivid Green Cricket Pitch Background
         drawDefaultStadiumBackground(canvas, width.toFloat(), height.toFloat())
 
         val cleanTitle = title.trim().ifEmpty { "FLASH NEWS" }
@@ -1004,7 +1196,6 @@ object NewsBannerRenderer {
             strokeWidth = 2.8f
         }
 
-        // 1. HERO HEADER PARALLELOGRAM (Gold Wedge + Deep Royal Indigo Card)
         val hdrSkew = skew * (headerH / 120f).coerceIn(0.85f, 1.3f)
         val wedgePath = slantedRect(cardLeft, currY, goldWedgeW, headerH, hdrSkew)
         val wedgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1054,7 +1245,6 @@ object NewsBannerRenderer {
 
         currY += headerH + 16f
 
-        // 2. FLOATING SLANTED BULLET CARDS
         bulletPaint.textSize = bulletSize
         val bLineH = bulletSize * 1.32f
         val bMaxW = cardWidth - tabWidth - textPadL - textPadR - skew
@@ -1144,14 +1334,9 @@ object NewsBannerRenderer {
         return Uri.fromFile(file).toString()
     }
 
-    /**
-     * Draws the full-frame Royal Blue Cricket Stadium + Floodlight Beams + Vivid Sunlit Green
-     * Outfield Pitch default background matching the user's maxresdefault reference image.
-     */
     private fun drawDefaultStadiumBackground(canvas: Canvas, w: Float, h: Float) {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
 
-        // 1. Deep Royal Blue Stadium Sky Gradient
         p.alpha = 255
         p.shader = LinearGradient(
             0f, 0f, 0f, h,
@@ -1167,7 +1352,6 @@ object NewsBannerRenderer {
         canvas.drawRect(0f, 0f, w, h, p)
         p.shader = null
 
-        // 2. Upper Stadium Roof / Bowl Architectural Curves
         p.style = Paint.Style.STROKE
         p.strokeWidth = 4f
         p.color = AndroidColor.argb(55, 110, 195, 255)
@@ -1185,7 +1369,6 @@ object NewsBannerRenderer {
         }
         canvas.drawPath(arch2, p)
 
-        // Left & Right Stadium Floodlight Truss Diagonal Silhouettes
         p.style = Paint.Style.FILL
         p.color = AndroidColor.argb(120, 2, 10, 56)
         val leftRoof = Path().apply {
@@ -1204,7 +1387,6 @@ object NewsBannerRenderer {
         }
         canvas.drawPath(rightRoof, p)
 
-        // 3. Glowing Stadium Floodlight Halos (Reset alpha to 255 so full glow renders!)
         p.alpha = 255
         p.shader = RadialGradient(
             w * 0.28f, h * 0.34f, w * 0.36f,
@@ -1220,7 +1402,6 @@ object NewsBannerRenderer {
         )
         canvas.drawCircle(w * 0.76f, h * 0.42f, w * 0.35f, p)
 
-        // Diagonal Floodlight Beams shining down from upper left & upper right
         p.shader = LinearGradient(
             180f, 0f, 660f, 840f,
             intArrayOf(AndroidColor.argb(95, 130, 230, 255), AndroidColor.TRANSPARENT),
@@ -1250,7 +1431,6 @@ object NewsBannerRenderer {
         canvas.drawPath(beamR, p)
         p.shader = null
 
-        // Subtle Stadium Crowd & Bokeh Dots in the distant mid-band
         p.color = AndroidColor.argb(48, 160, 220, 255)
         for (i in 0..42) {
             val bx = (i * 47f) % w
@@ -1258,7 +1438,6 @@ object NewsBannerRenderer {
             canvas.drawCircle(bx, by, 2.5f + (i % 4), p)
         }
 
-        // 4. Curved Vivid Sunlit Green Cricket Outfield Turf at the Bottom
         val turfPath = Path().apply {
             moveTo(0f, 920f)
             quadTo(w * 0.50f, 770f, w, 920f)
@@ -1269,7 +1448,6 @@ object NewsBannerRenderer {
         canvas.save()
         canvas.clipPath(turfPath)
 
-        // Reset alpha to 255 so the green grass shader renders at full vibrant brightness!
         p.alpha = 255
         p.shader = RadialGradient(
             w * 0.50f, 830f, w * 0.68f,
@@ -1284,7 +1462,6 @@ object NewsBannerRenderer {
         canvas.drawRect(0f, 760f, w, h, p)
         p.shader = null
 
-        // Alternating Mowed Turf Stripes radiating from horizon
         val centerTopX = w * 0.50f
         val centerTopY = 740f
         for (s in -8..8 step 2) {
@@ -1300,7 +1477,6 @@ object NewsBannerRenderer {
         }
         canvas.restore()
 
-        // Bright Sunlit Rim Glow along the Grass Horizon Curve
         p.alpha = 255
         p.style = Paint.Style.STROKE
         p.strokeWidth = 7f
