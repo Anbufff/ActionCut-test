@@ -394,18 +394,25 @@ object ScoreCardComposer {
         c.save()
         c.clipPath(Path().apply { addRoundRect(panelRect, corner, corner, Path.Direction.CW) })
 
-        val playerBmp = photo ?: if (type == ScoreCardType.BOWLING) {
-            CricketAssets.getBowlerLogo()
-        } else {
-            CricketAssets.getBatterLogo()
-        }
+        val displayName = (player?.name ?: fallbackName ?: if (type == ScoreCardType.BOWLING) "BOWLER" else "BATTER").trim()
 
-        if (playerBmp.width > 0 && playerBmp.height > 0) {
-            val scale = max(pw / playerBmp.width, ph / playerBmp.height)
-            val dw = playerBmp.width * scale
-            val dh = playerBmp.height * scale
+        if (photo != null && photo.width > 0 && photo.height > 0) {
+            val scale = max(pw / photo.width, ph / photo.height)
+            val dw = photo.width * scale
+            val dh = photo.height * scale
             val dl = pl + (pw - dw) / 2f
-            c.drawBitmap(playerBmp, null, RectF(dl, pt, dl + dw, pt + dh), bmpPaint)
+            c.drawBitmap(photo, null, RectF(dl, pt, dl + dw, pt + dh), bmpPaint)
+        } else {
+            // Custom glossy 3D "NC" News Crick ball + player initials instead of Cricbuzz "cb"
+            val emblemArea = RectF(pl, pt + 40f, pr, pb - ph * 0.22f)
+            drawNewsCrickNoPhotoEmblem(
+                c = c,
+                p = p,
+                area = emblemArea,
+                theme = theme,
+                isBowling = (type == ScoreCardType.BOWLING),
+                playerName = displayName,
+            )
         }
 
         p.shader = RadialGradient(
@@ -443,7 +450,6 @@ object ScoreCardComposer {
             1.8f
         )
 
-        val displayName = (player?.name ?: fallbackName ?: if (type == ScoreCardType.BOWLING) "BOWLER" else "BATTER").trim()
         val tagText = if (type == ScoreCardType.BOWLING) "KEY BOWLER" else "KEY BATSMAN"
 
         val roleColor = when (theme) {
@@ -547,6 +553,153 @@ object ScoreCardComposer {
     }
 
     /**
+     * Glossy 3D "NC" (News Crick) Cricket Ball emblem with stitched seam, theme glow, and
+     * personalized player initials pill — displayed whenever a player has no real photo.
+     */
+    internal fun drawNewsCrickNoPhotoEmblem(
+        c: Canvas,
+        p: Paint,
+        area: RectF,
+        theme: Int,
+        isBowling: Boolean,
+        playerName: String?,
+    ) {
+        val cx = area.centerX()
+        val cy = area.centerY()
+        val r = min(area.width(), area.height()) * 0.34f
+        if (r <= 10f) return
+
+        val accent = when (theme) {
+            0 -> 0xFF00E5FF.toInt()
+            1 -> 0xFFF6D77A.toInt()
+            else -> 0xFFD4FF33.toInt()
+        }
+        val secondary = when (theme) {
+            0 -> 0xFFFF2E4D.toInt()
+            1 -> 0xFFFFB300.toInt()
+            else -> 0xFFFF007A.toInt()
+        }
+
+        // 1. Soft stadium halo behind ball
+        p.style = Paint.Style.FILL
+        p.maskFilter = null
+        p.shader = RadialGradient(
+            cx, cy, r * 1.55f,
+            intArrayOf((0x44 shl 24) or (accent and 0x00FFFFFF), 0x00000000),
+            null, Shader.TileMode.CLAMP,
+        )
+        c.drawCircle(cx, cy, r * 1.55f, p)
+        p.shader = null
+
+        // Outer orbital broadcast ring
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 3f
+        p.color = (0x55 shl 24) or (accent and 0x00FFFFFF)
+        c.drawCircle(cx, cy, r * 1.14f, p)
+
+        // 2. 3D Shaded Cricket Ball Sphere
+        val sphereColors = when (theme) {
+            0 -> intArrayOf(0xFF1F6FEB.toInt(), 0xFF0C2A66.toInt(), 0xFF030B22.toInt())
+            1 -> intArrayOf(0xFFD61F3E.toInt(), 0xFF7D0A1E.toInt(), 0xFF280208.toInt())
+            else -> intArrayOf(0xFF0F9B76.toInt(), 0xFF064A38.toInt(), 0xFF021C14.toInt())
+        }
+        p.style = Paint.Style.FILL
+        p.shader = RadialGradient(
+            cx - r * 0.30f, cy - r * 0.32f, r * 1.35f,
+            sphereColors, floatArrayOf(0f, 0.56f, 1f), Shader.TileMode.CLAMP,
+        )
+        c.drawCircle(cx, cy, r, p)
+        p.shader = null
+
+        // 3. Cricket Ball Seam & Stitches clipped inside sphere
+        c.save()
+        val sphereClip = Path().apply { addCircle(cx, cy, r, Path.Direction.CW) }
+        c.clipPath(sphereClip)
+
+        // Subtle curved seam arcs on left & right sides
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 4f
+        p.color = (0x88 shl 24) or (accent and 0x00FFFFFF)
+        val seamOffset = r * 0.62f
+        val leftSeam = RectF(cx - seamOffset - r * 0.85f, cy - r * 0.95f, cx - seamOffset + r * 0.35f, cy + r * 0.95f)
+        val rightSeam = RectF(cx + seamOffset - r * 0.35f, cy - r * 0.95f, cx + seamOffset + r * 0.85f, cy + r * 0.95f)
+        c.drawArc(leftSeam, -65f, 130f, false, p)
+        c.drawArc(rightSeam, 115f, 130f, false, p)
+
+        // Glossy top-left glass reflection
+        p.style = Paint.Style.FILL
+        p.shader = LinearGradient(
+            cx - r * 0.7f, cy - r * 0.9f, cx + r * 0.2f, cy,
+            intArrayOf(0x36FFFFFF, 0x00FFFFFF),
+            null, Shader.TileMode.CLAMP,
+        )
+        c.drawOval(RectF(cx - r * 0.72f, cy - r * 0.86f, cx + r * 0.32f, cy - r * 0.16f), p)
+        p.shader = null
+        c.restore()
+
+        // Crisp glowing sphere border
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 4.5f
+        p.color = accent
+        c.drawCircle(cx, cy, r, p)
+
+        // 4. Center "NC" Monogram + NEWS CRICK + Player Initials Pill
+        p.style = Paint.Style.FILL
+        p.typeface = Typeface.DEFAULT_BOLD
+        p.textAlign = Paint.Align.CENTER
+
+        p.textSize = r * 0.145f
+        p.letterSpacing = 0.16f
+        p.color = accent
+        c.drawText("NEWS CRICK", cx, cy - r * 0.42f, p)
+        p.letterSpacing = 0f
+
+        p.textSize = r * 0.78f
+        val ncGrad = when (theme) {
+            0 -> intArrayOf(0xFFFFFFFF.toInt(), 0xFF00E5FF.toInt(), 0xFFFFD400.toInt())
+            1 -> intArrayOf(0xFFFFFFFF.toInt(), 0xFFFFE57F.toInt(), 0xFFFFA000.toInt())
+            else -> intArrayOf(0xFFFFFFFF.toInt(), 0xFFD4FF33.toInt(), 0xFFFF007A.toInt())
+        }
+        p.shader = LinearGradient(
+            cx - r * 0.45f, cy - r * 0.32f, cx + r * 0.45f, cy + r * 0.32f,
+            ncGrad, floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP,
+        )
+        p.setShadowLayer(12f, 0f, 4f, 0xCC000000.toInt())
+        c.drawText("NC", cx, cy + r * 0.24f, p)
+        p.clearShadowLayer()
+        p.shader = null
+
+        val initials = buildPlayerInitials(playerName)
+        val roleTag = if (isBowling) "BOWLER" else "BATTER"
+        val pillLabel = if (initials.isNotEmpty()) "$initials • $roleTag" else roleTag
+        p.textSize = r * 0.155f
+        val pillW = max(r * 0.84f, p.measureText(pillLabel) + 34f)
+        val pillH = r * 0.24f
+        val pillRect = RectF(cx - pillW / 2f, cy + r * 0.38f, cx + pillW / 2f, cy + r * 0.38f + pillH)
+        p.color = 0xCC060A14.toInt()
+        c.drawRoundRect(pillRect, pillH / 2f, pillH / 2f, p)
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 2f
+        p.color = secondary
+        c.drawRoundRect(pillRect, pillH / 2f, pillH / 2f, p)
+
+        p.style = Paint.Style.FILL
+        p.color = 0xFFFFFFFF.toInt()
+        c.drawText(pillLabel, cx, pillRect.centerY() + p.textSize * 0.35f, p)
+        p.textAlign = Paint.Align.LEFT
+    }
+
+    private fun buildPlayerInitials(name: String?): String {
+        if (name.isNullOrBlank()) return ""
+        val parts = name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        return when {
+            parts.size >= 2 -> "${parts.first().first().uppercaseChar()}${parts.last().first().uppercaseChar()}"
+            parts.size == 1 && parts[0].length >= 2 -> parts[0].take(2).uppercase()
+            else -> parts.firstOrNull()?.take(1)?.uppercase().orEmpty()
+        }
+    }
+
+    /**
      * Draws a broadcast-quality 3D Y-axis rotating Runs badge/stat inside the empty right
      * side of the KEY BATSMAN / KEY BOWLER box for Design 1 (Neon) and Design 2 (Gold).
      */
@@ -575,7 +728,6 @@ object ScoreCardComposer {
         val cx = npRight - 114f
         val cy = npTop + npH * 0.45f
 
-        // Smooth 3.0s 360° 3D rotation cycle
         val u = (timeInClipMs % 3000L) / 3000f
         val twoPi = (2.0 * Math.PI).toFloat()
         val rawAngle = u * 360f - 18f * sin(2f * twoPi * u)
@@ -594,7 +746,6 @@ object ScoreCardComposer {
         val badgeRad = 24f
         val badgeRect = RectF(cx - badgeW / 2f, animCy - badgeH / 2f, cx + badgeW / 2f, animCy + badgeH / 2f)
 
-        // 1. Soft pulsing broadcast aura + 3D ground shadow beneath badge
         val pulse = 0.65f + 0.35f * abs(cosA)
         val auraAlpha = (85 * pulse).toInt().coerceIn(25, 110)
         val auraColor = if (theme == 0) {
@@ -619,7 +770,6 @@ object ScoreCardComposer {
         val camera = Camera()
         val matrix = Matrix()
 
-        // 2. 3D Extruded Depth Thickness Layers
         val sideColor = when {
             theme == 0 && isBackFace -> 0xFF5A0B4E.toInt()
             theme == 0 -> 0xFF0A4573.toInt()
@@ -647,7 +797,6 @@ object ScoreCardComposer {
             canvas.restore()
         }
 
-        // 3. Front (or flipped readable Back) Face
         camera.save()
         camera.setLocation(0f, 0f, -18f)
         camera.rotateX(8f)
@@ -674,7 +823,6 @@ object ScoreCardComposer {
         canvas.drawRoundRect(badgeRect, badgeRad, badgeRad, p)
         p.shader = null
 
-        // Moving 3D Specular Light Sheen clipped inside the badge
         canvas.save()
         canvas.clipPath(Path().apply { addRoundRect(badgeRect, badgeRad, badgeRad, Path.Direction.CW) })
         val sheenCenter = cx + sinA * 95f
@@ -704,7 +852,6 @@ object ScoreCardComposer {
         p.color = 0x50FFFFFF
         canvas.drawRoundRect(innerRim, badgeRad - 4f, badgeRad - 4f, p)
 
-        // Huge Colourful 3D Runs Number
         p.style = Paint.Style.FILL
         p.typeface = Typeface.DEFAULT_BOLD
         p.textAlign = Paint.Align.CENTER
@@ -730,7 +877,6 @@ object ScoreCardComposer {
         p.clearShadowLayer()
         p.shader = null
 
-        // Subtle RUNS / WKTS label below the number
         p.textSize = 19f
         p.letterSpacing = 0.20f
         p.color = rimColor
