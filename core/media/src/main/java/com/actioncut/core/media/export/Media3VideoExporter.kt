@@ -76,10 +76,11 @@ class Media3VideoExporter @Inject constructor(
         val isFbTpl = (project.canvas.isFbTemplateEnabled || project.timeline.canvas.isFbTemplateEnabled) && aspect == AspectRatio.RATIO_4_5
         val tplImageUri = project.canvas.fbTemplateImageUri ?: project.timeline.canvas.fbTemplateImageUri
 
+        // Draw news_banner (with Stadium Background) FIRST so Player Cutout PiP renders ON TOP of it
         val rawOverlayClips = project.timeline.tracks
             .filter { it.type == TrackType.OVERLAY }
             .flatMap { it.clips }
-            .sortedBy { it.mediaUri?.contains("news_banner") == true }
+            .sortedByDescending { it.mediaUri?.contains("news_banner") == true }
 
         val (clips, preparedPipOverlays) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             val processedClips = rawClips.map { clip ->
