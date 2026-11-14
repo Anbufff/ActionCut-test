@@ -7,441 +7,228 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
-import android.util.Base64
 import android.widget.Toast
 import com.actioncut.core.model.Clip
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.File
-import java.io.FileOutputStream
-import java.io.InputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToLong
+import kotlin.math.sqrt
 
 object AiFlashNewsEngine {
-    private const val PREFS = "actioncut_ai_news"
-    private const val KEY_API = "gemini_api_key"
-    private const val KEY_GEMINI_AUDIO = "gemini_audio_sync"
-    private const val INLINE_AUDIO_LIMIT_BYTES = 4 * 1024 * 1024
-    private const val MAX_AUDIO_UPLOAD_BYTES = 100L * 1024L * 1024L
-    private const val MD_FENCE = "\u0060\u0060\u0060"
 
-    private val ACTIVE_GEMINI_MODELS = listOf(
-        "gemini-3.5-flash-lite",
-        "gemini-3.6-flash",
-        "gemini-3.8-flash",
-        "gemini-3.1-flash-lite",
-        "gemini-3-flash-preview",
-    )
-
-    fun isGeminiAudioSync(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_GEMINI_AUDIO, false)
-
-    fun setGeminiAudioSync(context: Context, enabled: Boolean) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(KEY_GEMINI_AUDIO, enabled)
-            .apply()
-    }
-
-    private fun toastMain(context: Context, msg: String, longDuration: Boolean = false) {
+    private fun toastMain(context: Context, msg: String) {
         Handler(Looper.getMainLooper()).post {
-            Toast.makeText(
-                context.applicationContext,
-                msg,
-                if (longDuration) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
-            ).show()
+            Toast.makeText(context.applicationContext, msg, Toast.LENGTH_SHORT).show()
         }
-    }
-
-    data class GenerationResult(
-        val segments: List<FlashNewsSegment>,
-        val usedAi: Boolean,
-        val aiError: String? = null,
-    )
-
-    private data class AudioSyncOutcome(
-        val starts: List<Long?>,
-        val error: String? = null,
-    )
-
-    private fun sanitizeApiKey(raw: String): String =
-        raw.trim().trim('"', '\'', '`').replace(Regex("\\s+"), "")
-
-    /**
-     * Uses strictly ONE credential method per request:
-     * - `AQ.` keys -> `x-goog-api-key` header ONLY
-     * - `AIza...` (standard) keys -> `?key=` query param ONLY
-     */
-    private fun prepareAuthedUrlAndHeader(baseUrl: String, cleanKey: String): Pair<String, Boolean> {
-        if (cleanKey.startsWith("AQ.")) {
-            return baseUrl to true
-        }
-        val sep = if (baseUrl.contains("?")) "&" else "?"
-        val encoded = URLEncoder.encode(cleanKey, "UTF-8")
-        return "${baseUrl}${sep}key=$encoded" to false
-    }
-
-    fun getSavedApiKey(context: Context): String =
-        sanitizeApiKey(
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString(KEY_API, "")
-                .orEmpty(),
-        )
-
-    fun saveApiKey(context: Context, key: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_API, sanitizeApiKey(key))
-            .apply()
     }
 
     suspend fun generateSegments(
-        context: Context,
+        @Suppress("UNUSED_PARAMETER") context: Context,
         fullArticle: String,
         knownPlayers: List<String>,
-    ): Result<GenerationResult> = withContext(Dispatchers.IO) {
-        val key = getSavedApiKey(context)
-        var aiErrorMsg: String? = null
-        if (key.isNotEmpty()) {
-            val aiResult = callGeminiWithFallback(key, fullArticle, knownPlayers)
-            if (aiResult.isSuccess) {
-                val list = aiResult.getOrNull().orEmpty()
-                if (list.isNotEmpty()) {
-                    return@withContext Result.success(GenerationResult(list, usedAi = true))
-                }
-            }
-            aiErrorMsg = aiResult.exceptionOrNull()?.message?.take(120) ?: "AI error"
-        }
-        val fallback = offlineFallbackSegments(fullArticle, knownPlayers)
-        if (fallback.isNotEmpty()) {
-            Result.success(GenerationResult(fallback, usedAi = false, aiError = aiErrorMsg))
+    ): Result<List<FlashNewsSegment>> = withContext(Dispatchers.IO) {
+        val segments = buildOfflineSegments(fullArticle, knownPlayers)
+        if (segments.isNotEmpty()) {
+            Result.success(segments)
         } else {
-            Result.failure(IllegalStateException(aiErrorMsg ?: "Could not extract Flash News from text"))
+            Result.failure(IllegalStateException("கட்டுரையில் Player அல்லது Team பெயர் கண்டறியப்படவில்லை"))
         }
     }
 
-    private fun callGeminiWithFallback(
-        apiKey: String,
-        article: String,
-        knownPlayers: List<String>,
-    ): Result<List<FlashNewsSegment>> {
-        var firstMeaningfulError: Throwable? = null
-        var lastError: Throwable? = null
-        for (model in ACTIVE_GEMINI_MODELS) {
-            val res = runCatching { callGeminiModel(apiKey, model, article, knownPlayers) }
-            if (res.isSuccess && res.getOrNull()?.isNotEmpty() == true) {
-                return res
-            }
-            val err = res.exceptionOrNull()
-            if (err != null) {
-                lastError = err
-                val msg = err.message.orEmpty()
-                if (msg.contains("HTTP 401") || msg.contains("HTTP 403")) {
-                    return Result.failure(err)
-                }
-                if (firstMeaningfulError == null && !msg.contains("HTTP 404")) {
-                    firstMeaningfulError = err
-                }
-                if (msg.contains("HTTP 429") || msg.contains("HTTP 503")) {
-                    runCatching { Thread.sleep(1_200L) }
-                }
-            }
-        }
-        return Result.failure(firstMeaningfulError ?: lastError ?: IllegalStateException("Gemini API unavailable"))
-    }
+    private data class WeightedSentence(
+        val raw: String,
+        val cleaned: String,
+        val startWeight: Float,
+    )
 
-    private fun callGeminiModel(
-        apiKey: String,
-        model: String,
-        article: String,
-        knownPlayers: List<String>,
-    ): List<FlashNewsSegment> {
-        val cleanKey = sanitizeApiKey(apiKey)
-        val baseEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
-        val (endpoint, useHeader) = prepareAuthedUrlAndHeader(baseEndpoint, cleanKey)
-        val playerHint = if (knownPlayers.isNotEmpty()) {
-            "Known human player names in local library (use exact spelling if mentioned): ${knownPlayers.take(120).joinToString(", ")}."
-        } else {
-            ""
-        }
-
-        val prompt = """
-            You are a senior Tamil Cricket TV News Flash Graphics Editor.
-            Read the entire Tamil cricket voiceover script carefully and chronologically from start to end.
-            There is NO fixed limit on the number of Flash News items (do NOT limit to 8). Extract EVERY distinct moment in the script where EITHER:
-              (A) a specific HUMAN cricket player or coach is discussed, OR
-              (B) a cricket TEAM (like India, New Zealand, Australia, England, CSK, RCB, MI, etc.) is discussed as the main topic!
-
-            Do NOT combine two DIFFERENT players (e.g., Shreyas Iyer and Virat Kohli) into the same Flash News card! Whenever the script moves to a new player or team, create a separate card right where that player/team starts being talked about.
-
-            STRICT LANGUAGE, COMPLETENESS & ACCURACY RULES:
-            1. ALL "title" and "bullets" text MUST BE WRITTEN IN CLEAR, GRAMMATICALLY COMPLETE TAMIL SCRIPT (தமிழ் எழுத்துகளில் மட்டுமே)! NEVER translate into full English sentences!
-            2. NEVER cut off a sentence mid-way or leave out the subject/context! Every bullet MUST be a self-contained, meaningful Tamil news line so the viewer immediately understands the full fact (who did what, against whom, what record/reason/stat).
-            3. ONLY cricket player/coach/team names (e.g., "Shreyas Iyer", "Virat Kohli", "Gautam Gambhir", "Team India") and numeric stats + short English units (e.g., "351 runs", "6.5 overs", "13 balls 5 runs", "100*") should be in English inside the Tamil sentences.
-            4. Write 2 detailed, informative Tamil bullets per card whenever enough facts are in that section (12 to 26 words per bullet is ideal — do NOT compress too tightly into vague 4-word fragments!).
-            5. Remove only casual filler greetings ("மக்களே", "யோசிச்சு பாருங்க", "கமெண்ட் பாக்ஸ்ல சொல்லுங்க"), but KEEP every match detail, opponent name, coach/captain context, score, strike rate, wicket, or milestone.
-            6. Convert Tamil spoken numbers into crisp English digits + units (e.g., "முன்னூத்தி ஐம்பத்தியொன்னு ரன்" -> "351 runs").
-            7. Good bullet example:
-               - "Gautam Gambhir பயிற்சியாளராக வந்த பிறகு, முதல் முறையாக Shreyas Iyer குறைந்த ரன்களில் ஆட்டமிழந்தார்."
-               - "நியூசிலாந்து அணிக்கு எதிராக 13 பந்துகளில் வெறும் 5 runs மட்டுமே எடுத்து விக்கெட்டை இழந்தார்."
-            8. $playerHint
-            9. For EACH extracted moment, return:
-               - "title": short punchy Tamil badge title (2 to 5 words, e.g., "Shreyas Iyer அதிரடி அப்டேட்", "Virat Kohli புதிய சாதனை", "Team India திட்டம்")
-               - "bullets": array of 1 or 2 complete, detailed Tamil news sentences (12 to 26 words each) with English player/team names & stats
-               - "playerName": full English name of the HUMAN cricketer/coach ONLY (or "" if this moment is about a team with no specific human player)
-               - "teamName": English team name if team-focused (e.g., "India", "New Zealand", "CSK", or "")
-               - "anchorText": EXACT 3 to 5 consecutive words copied verbatim (untouched!) from the original ARTICLE right where this player/team begins to be discussed. This is used to sync the exact timestamp with the voiceover!
-               - "startFraction": approximate float 0.0..0.95 as backup.
-
-            Return ONLY a valid JSON array of objects, ordered chronologically.
-
-            ARTICLE:
-            $article
-        """.trimIndent()
-
-        val payload = JSONObject().apply {
-            put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put(
-                        "parts",
-                        JSONArray().put(JSONObject().put("text", prompt)),
-                    ),
-                ),
-            )
-            put(
-                "generationConfig",
-                JSONObject().put("responseMimeType", "application/json"),
-            )
-        }
-
-        val payloadBytes = payload.toString().toByteArray(Charsets.UTF_8)
-        val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 20_000
-            readTimeout = 60_000
-            doOutput = true
-            if (useHeader) setRequestProperty("x-goog-api-key", cleanKey)
-            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            setFixedLengthStreamingMode(payloadBytes.size)
-        }
-        conn.outputStream.use { it.write(payloadBytes) }
-
-        val code = conn.responseCode
-        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
-            ?.bufferedReader()?.use { it.readText() }.orEmpty()
-        conn.disconnect()
-
-        if (code !in 200..299) {
-            val apiMsg = extractApiError(body)
-            throw IllegalStateException("HTTP $code (${apiMsg ?: model})")
-        }
-
-        val rawText = extractGeminiResponseText(body, model)
-        val arr = if (rawText.startsWith("{")) {
-            val obj = JSONObject(rawText)
-            obj.optJSONArray("segments") ?: obj.optJSONArray("items") ?: JSONArray()
-        } else {
-            JSONArray(rawText)
-        }
-
-        val totalLen = max(article.length, 1)
-        var searchCursor = 0
-        val out = ArrayList<FlashNewsSegment>(arr.length())
-
-        for (i in 0 until arr.length()) {
-            val o = arr.getJSONObject(i)
-            val title = o.optString("title", "FLASH NEWS").trim()
-            val bArr = o.optJSONArray("bullets") ?: JSONArray()
-            val bullets = (0 until bArr.length())
-                .map { bArr.optString(it, "").trim() }
-                .filter { it.isNotEmpty() }
-            if (bullets.isEmpty()) continue
-
-            val player = o.optString("playerName", "").trim().takeIf { it.isNotEmpty() }
-            val team = o.optString("teamName", "").trim().takeIf { it.isNotEmpty() }
-            if (player == null && team == null) continue
-
-            val anchor = o.optString("anchorText", "").trim().takeIf { it.isNotEmpty() }
-            val aiFrac = o.optDouble("startFraction", (i.toDouble() / max(arr.length(), 1)))
-                .toFloat().coerceIn(0.0f, 0.96f)
-
-            val matchedIdx = findAnchorCharIndex(article, anchor, player, team, searchCursor)
-            val exactFrac = if (matchedIdx >= 0) {
-                searchCursor = matchedIdx + 4
-                (matchedIdx.toFloat() / totalLen.toFloat()).coerceIn(0.0f, 0.96f)
-            } else {
-                aiFrac
-            }
-
-            out.add(
-                FlashNewsSegment(
-                    title = title,
-                    bullets = bullets,
-                    playerName = player,
-                    teamName = team,
-                    anchorText = anchor,
-                    startFraction = exactFrac,
-                ),
-            )
-        }
-        return out.sortedBy { it.startFraction }
-    }
-
-    private fun extractApiError(body: String): String? = runCatching {
-        JSONObject(body).optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }
-    }.getOrNull()
-
-    private fun extractGeminiResponseText(body: String, model: String): String {
-        val root = JSONObject(body)
-        val candidates = root.optJSONArray("candidates")
-        if (candidates == null || candidates.length() == 0) {
-            val blockReason = root.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty()
-            throw IllegalStateException(
-                if (blockReason.isNotBlank()) "Blocked ($blockReason)" else "Empty response ($model)",
-            )
-        }
-        val cand = candidates.getJSONObject(0)
-        val parts = cand.optJSONObject("content")?.optJSONArray("parts")
-            ?: throw IllegalStateException("No content parts ($model)")
-
-        val sb = StringBuilder()
-        for (i in 0 until parts.length()) {
-            val part = parts.optJSONObject(i) ?: continue
-            if (part.optBoolean("thought", false)) continue
-            val t = part.optString("text", "")
-            if (t.isNotEmpty()) sb.append(t)
-        }
-
-        var raw = sb.toString().trim()
-            .removePrefix("${MD_FENCE}json")
-            .removePrefix(MD_FENCE)
-            .removeSuffix(MD_FENCE)
-            .trim()
-
-        val arrIdx = raw.indexOf('[')
-        val objIdx = raw.indexOf('{')
-        val start = when {
-            arrIdx >= 0 && objIdx >= 0 -> minOf(arrIdx, objIdx)
-            arrIdx >= 0 -> arrIdx
-            objIdx >= 0 -> objIdx
-            else -> -1
-        }
-        if (start > 0) raw = raw.substring(start)
-        return raw.trim()
-    }
-
-    private fun findAnchorCharIndex(
-        article: String,
-        anchor: String?,
-        player: String?,
-        team: String?,
-        fromIdx: Int,
-    ): Int {
-        val safeFrom = fromIdx.coerceIn(0, max(0, article.length - 1))
-        if (!anchor.isNullOrBlank()) {
-            val direct = article.indexOf(anchor, startIndex = safeFrom, ignoreCase = true)
-            if (direct >= 0) return direct
-
-            val words = anchor.split(Regex("\\s+")).filter { it.length >= 2 }
-            if (words.size >= 2) {
-                val twoWord = "${words[0]} ${words[1]}"
-                val wMatch = article.indexOf(twoWord, startIndex = safeFrom, ignoreCase = true)
-                if (wMatch >= 0) return wMatch
-            }
-            for (w in words.filter { it.length >= 4 }) {
-                val idx = article.indexOf(w, startIndex = safeFrom, ignoreCase = true)
-                if (idx >= 0) return idx
-            }
-        }
-        if (!player.isNullOrBlank()) {
-            val pIdx = article.indexOf(player, startIndex = safeFrom, ignoreCase = true)
-            if (pIdx >= 0) return pIdx
-            val lastTok = player.split(Regex("\\s+")).lastOrNull()?.takeIf { it.length >= 4 }
-            if (lastTok != null) {
-                val lIdx = article.indexOf(lastTok, startIndex = safeFrom, ignoreCase = true)
-                if (lIdx >= 0) return lIdx
-            }
-        }
-        if (!team.isNullOrBlank()) {
-            val tIdx = article.indexOf(team, startIndex = safeFrom, ignoreCase = true)
-            if (tIdx >= 0) return tIdx
-        }
-        return -1
-    }
-
-    private fun offlineFallbackSegments(
+    private fun buildOfflineSegments(
         fullArticle: String,
         knownPlayers: List<String>,
     ): List<FlashNewsSegment> {
-        val cleaned = normalizeCommonTamilNumbers(fullArticle)
-        val rawUnits = cleaned.split(Regex("\\n+"))
-            .flatMap { para ->
-                val trimmed = para.trim()
-                if (trimmed.length > 190) {
-                    trimmed.split(Regex("(?<!\\d)\\.(?!\\d)\\s+")).map { it.trim() }
-                } else {
-                    listOf(trimmed)
-                }
+        val rawSource = fullArticle.trim()
+        if (rawSource.isEmpty()) return emptyList()
+
+        val rawSentences = splitIntoSentences(rawSource)
+        if (rawSentences.isEmpty()) return emptyList()
+
+        val weighted = ArrayList<WeightedSentence>(rawSentences.size)
+        var cumWeight = 0f
+        for (raw in rawSentences) {
+            val cleaned = cleanDisplaySentence(raw)
+            val w = estimateSpokenWeight(raw)
+            if (cleaned.length >= 10) {
+                weighted.add(WeightedSentence(raw = raw, cleaned = cleaned, startWeight = cumWeight))
             }
-            .filter { it.length >= 16 }
+            cumWeight += w
+        }
+        val totalWeight = cumWeight.coerceAtLeast(1f)
+        if (weighted.isEmpty()) return emptyList()
 
-        if (rawUnits.isEmpty()) return emptyList()
-
-        val totalLen = max(cleaned.length, 1)
         val out = ArrayList<FlashNewsSegment>()
-        var cursor = 0
         var lastSubjectKey: String? = null
+        var currentAnchorFrac = 0f
 
-        for (unit in rawUnits) {
-            val pos = cleaned.indexOf(unit, startIndex = cursor).let { if (it >= 0) it else cursor }
-            cursor = pos + unit.length
+        for (item in weighted) {
+            val frac = (item.startWeight / totalWeight).coerceIn(0f, 0.96f)
+            val player = detectMentionedPlayer(item.raw, knownPlayers)
+                ?: detectMentionedPlayer(item.cleaned, knownPlayers)
+            val team = detectMentionedTeam(item.raw)
+                ?: detectMentionedTeam(item.cleaned)
 
-            val player = detectMentionedPlayer(unit, knownPlayers)
-            val team = detectMentionedTeam(unit)
-            if (player == null && team == null) continue
+            val explicitKey = when {
+                player != null -> "P:$player"
+                team != null -> "T:$team"
+                else -> null
+            }
 
-            val subjectKey = player ?: "TEAM:$team"
-            val sentences = unit.split(Regex("(?<!\\d)\\.(?!\\d)\\s+"))
-                .map { it.trim() }
-                .filter { it.length >= 10 }
-            val b1 = (sentences.getOrElse(0) { unit }).take(190)
-            val b2 = sentences.getOrNull(1)?.takeIf { it.length >= 14 }?.take(190)
-
-            if (subjectKey == lastSubjectKey && out.isNotEmpty() && out.last().bullets.size < 2) {
-                val prev = out.last()
-                out[out.lastIndex] = prev.copy(bullets = prev.bullets + b1)
+            if (explicitKey == null) {
+                // Continuation sentence for the currently active player/team
+                if (out.isNotEmpty() && out.last().bullets.size < 2 && (frac - currentAnchorFrac) <= 0.14f) {
+                    val prev = out.last()
+                    val bulletText = item.cleaned.take(195)
+                    if (bulletText.isNotEmpty()) {
+                        out[out.lastIndex] = prev.copy(
+                            bullets = prev.bullets + bulletText,
+                            title = buildSmartTitle(prev.playerName, prev.teamName, prev.bullets + bulletText),
+                        )
+                    }
+                }
                 continue
             }
 
-            lastSubjectKey = subjectKey
-            val title = when {
-                player != null -> "$player அப்டேட்"
-                team != null -> "$team அப்டேட்"
-                else -> "FLASH NEWS"
+            val bulletText = item.cleaned.take(195)
+            if (bulletText.isEmpty()) continue
+
+            // Merge consecutive sentence of same subject only if current card has 1 bullet and is nearby
+            if (explicitKey == lastSubjectKey &&
+                out.isNotEmpty() &&
+                out.last().bullets.size < 2 &&
+                (frac - currentAnchorFrac) <= 0.10f
+            ) {
+                val prev = out.last()
+                val updatedBullets = prev.bullets + bulletText
+                out[out.lastIndex] = prev.copy(
+                    bullets = updatedBullets,
+                    title = buildSmartTitle(prev.playerName, prev.teamName, updatedBullets),
+                )
+                continue
             }
-            val frac = (pos.toFloat() / totalLen.toFloat()).coerceIn(0.0f, 0.95f)
+
+            lastSubjectKey = explicitKey
+            currentAnchorFrac = frac
+            val bulletsList = listOf(bulletText)
             out.add(
                 FlashNewsSegment(
-                    title = title,
-                    bullets = listOfNotNull(b1.takeIf { it.isNotEmpty() }, b2),
+                    title = buildSmartTitle(player, team, bulletsList),
+                    bullets = bulletsList,
                     playerName = player,
                     teamName = team,
-                    anchorText = unit.take(32),
+                    anchorText = item.raw.take(36),
                     startFraction = frac,
                 ),
             )
         }
         return out
+    }
+
+    private fun splitIntoSentences(article: String): List<String> {
+        val result = ArrayList<String>()
+        val paragraphs = article.split(Regex("\\r?\\n+"))
+        for (para in paragraphs) {
+            val trimmed = para.trim()
+            if (trimmed.isEmpty()) continue
+            val parts = trimmed.split(Regex("(?<!\\d)\\.(?!\\d)\\s+|(?<=[!?।])\\s+"))
+            for (part in parts) {
+                val p = part.trim().trimEnd('.')
+                if (p.length >= 180 && p.contains(',')) {
+                    // Break overly long comma-chained Tamil monologue cleanly into ~2 clauses
+                    val clauses = p.split(Regex(",\\s+"))
+                    var buf = StringBuilder()
+                    for (c in clauses) {
+                        if (buf.length + c.length > 140 && buf.isNotEmpty()) {
+                            result.add(buf.toString().trim())
+                            buf = StringBuilder(c)
+                        } else {
+                            if (buf.isNotEmpty()) buf.append(", ")
+                            buf.append(c)
+                        }
+                    }
+                    if (buf.isNotEmpty()) result.add(buf.toString().trim())
+                } else if (p.isNotEmpty()) {
+                    result.add(p)
+                }
+            }
+        }
+        return result
+    }
+
+    private fun cleanDisplaySentence(raw: String): String {
+        var s = normalizeCommonTamilNumbers(raw)
+        val fillerPatterns = listOf(
+            Regex("மக்களே[,!.]*\\s*"),
+            Regex("நண்பர்களே[,!.]*\\s*"),
+            Regex("யோசிச்சு\\s*பாருங்க[,!.]*\\s*"),
+            Regex("கமெண்ட்\\s*பாக்ஸ்ல\\s*சொல்லுங்க[,!.]*\\s*"),
+            Regex("மறக்காம\\s*சப்ஸ்கிரைப்\\s*பண்ணுங்க[,!.]*\\s*"),
+            Regex("லைக்\\s*பண்ணுங்க[,!.]*\\s*"),
+            Regex("ஷேர்\\s*பண்ணுங்க[,!.]*\\s*"),
+        )
+        for (fp in fillerPatterns) {
+            s = s.replace(fp, "")
+        }
+        return s.replace(Regex("\\s+"), " ").trim().trimStart(',', '-', '•', '*', ' ').trim()
+    }
+
+    /**
+     * Estimates spoken syllable + pause weight of a Tamil/English sentence so timestamps
+     * scale with real speaking speed instead of raw character length.
+     */
+    private fun estimateSpokenWeight(text: String): Float {
+        var weight = 2.8f // natural sentence boundary pause
+        val tokens = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        for (tok in tokens) {
+            val digits = tok.filter { it.isDigit() }
+            if (digits.isNotEmpty()) {
+                weight += digits.length * 2.1f + 1.4f
+            }
+            var tamilSyllables = 0
+            var latinChars = 0
+            for (ch in tok) {
+                val code = ch.code
+                when {
+                    // Tamil vowels + consonants (exclude combining vowel signs / pulli)
+                    code in 0x0B85..0x0BB9 -> tamilSyllables++
+                    ch in 'a'..'z' || ch in 'A'..'Z' -> latinChars++
+                    ch == ',' || ch == ';' -> weight += 0.9f
+                }
+            }
+            weight += tamilSyllables * 1.0f
+            if (latinChars > 0) {
+                weight += (latinChars / 2.5f).coerceAtLeast(1.4f)
+            }
+        }
+        return weight.coerceAtLeast(3.0f)
+    }
+
+    private fun buildSmartTitle(player: String?, team: String?, bullets: List<String>): String {
+        val subject = player ?: team ?: return "FLASH NEWS"
+        val combined = bullets.joinToString(" ").lowercase()
+        val tag = when {
+            combined.contains("சாதனை") || combined.contains("record") || combined.contains("முதல் முறை") -> "சாதனை"
+            combined.contains("சதம்") || combined.contains("century") || Regex("\\b1\\d\\d\\*?\\b").containsMatchIn(combined) -> "சதம்"
+            combined.contains("அரைசதம்") || combined.contains("fifty") -> "அரைசதம்"
+            combined.contains("அதிரடி") || combined.contains("சிக்ஸர்") || combined.contains("பவுண்டரி") -> "அதிரடி"
+            combined.contains("விக்கெட்") || combined.contains("ஆட்டமிழ") || combined.contains("பவுலிங்") -> "அப்டேட்"
+            combined.contains("கோச்") || combined.contains("பயிற்சியாளர்") || combined.contains("திட்டம்") -> "திட்டம்"
+            combined.contains("காயம்") || combined.contains("injury") -> "காயம் அப்டேட்"
+            combined.contains("வெற்றி") || combined.contains("win") -> "வெற்றி"
+            else -> "அப்டேட்"
+        }
+        return "$subject $tag"
     }
 
     private fun detectMentionedTeam(text: String): String? {
@@ -489,99 +276,151 @@ object AiFlashNewsEngine {
 
     private fun detectMentionedPlayer(text: String, knownPlayers: List<String>): String? {
         val lower = text.lowercase()
+
+        // 1. Direct English full-name match from known library / CRIC CDN
         knownPlayers.firstOrNull { p ->
             val pn = p.trim().lowercase()
             pn.length >= 4 && lower.contains(pn)
         }?.let { return it }
 
+        // 2. Direct English token match (>= 4 chars) from known library / CRIC CDN
         knownPlayers.firstOrNull { p ->
             val parts = p.trim().lowercase().split(Regex("\\s+")).filter { it.length >= 4 }
             parts.any { token -> lower.contains(token) }
         }?.let { return it }
 
+        // 3. Built-in Tamil + English cricket star dictionary
         val commonMap = listOf(
-            "shreyas" to "Shreyas Iyer",
-            "iyer" to "Shreyas Iyer",
-            "ஷ்ரேயாஸ்" to "Shreyas Iyer",
-            "ஸ்ரேயாஸ்" to "Shreyas Iyer",
-            "அய்யர்" to "Shreyas Iyer",
-            "nitish" to "Nitish Kumar Reddy",
-            "நிதீஷ்" to "Nitish Kumar Reddy",
-            "ரெட்டி" to "Nitish Kumar Reddy",
-            "anshul" to "Anshul Kamboj",
-            "kamboj" to "Anshul Kamboj",
-            "அன்ஷுல்" to "Anshul Kamboj",
-            "கம்போஜ்" to "Anshul Kamboj",
-            "gambhir" to "Gautam Gambhir",
-            "கம்பீர்" to "Gautam Gambhir",
-            "கோச்" to "Gautam Gambhir",
-            "பயிற்சியாளர்" to "Gautam Gambhir",
-            "rohit" to "Rohit Sharma",
-            "ரோஹித்" to "Rohit Sharma",
-            "virat" to "Virat Kohli",
-            "kohli" to "Virat Kohli",
-            "விராட்" to "Virat Kohli",
-            "கோலி" to "Virat Kohli",
-            "ruturaj" to "Ruturaj Gaikwad",
-            "gaikwad" to "Ruturaj Gaikwad",
-            "ருதுராஜ்" to "Ruturaj Gaikwad",
-            "கெய்க்வாட்" to "Ruturaj Gaikwad",
-            "shubman" to "Shubman Gill",
-            "gill" to "Shubman Gill",
-            "சுப்மன்" to "Shubman Gill",
-            "கில்" to "Shubman Gill",
-            "suryakumar" to "Suryakumar Yadav",
-            "surya" to "Suryakumar Yadav",
-            "சூர்யகுமார்" to "Suryakumar Yadav",
-            "சூர்யா" to "Suryakumar Yadav",
-            "rahul" to "KL Rahul",
-            "ராகுல்" to "KL Rahul",
-            "bumrah" to "Jasprit Bumrah",
-            "பும்ரா" to "Jasprit Bumrah",
-            "hardik" to "Hardik Pandya",
-            "ஹர்திக்" to "Hardik Pandya",
-            "jadeja" to "Ravindra Jadeja",
-            "ஜடேஜா" to "Ravindra Jadeja",
-            "sanju" to "Sanju Samson",
-            "சஞ்சு" to "Sanju Samson",
-            "samson" to "Sanju Samson",
-            "சாம்சன்" to "Sanju Samson",
-            "siraj" to "Mohammed Siraj",
-            "சிராஜ்" to "Mohammed Siraj",
-            "shami" to "Mohammed Shami",
-            "ஷமி" to "Mohammed Shami",
-            "pant" to "Rishabh Pant",
-            "பண்ட்" to "Rishabh Pant",
-            "axar" to "Axar Patel",
-            "அக்சர்" to "Axar Patel",
-            "kuldeep" to "Kuldeep Yadav",
-            "குல்தீப்" to "Kuldeep Yadav",
-            "arshdeep" to "Arshdeep Singh",
-            "அர்ஷ்தீப்" to "Arshdeep Singh",
-            "jaiswal" to "Yashasvi Jaiswal",
-            "ஜெய்ஸ்வால்" to "Yashasvi Jaiswal",
-            "tilak" to "Tilak Varma",
-            "திலக்" to "Tilak Varma",
-            "abhishek" to "Abhishek Sharma",
-            "அபிஷேக்" to "Abhishek Sharma",
-            "rinku" to "Rinku Singh",
-            "ரிங்கு" to "Rinku Singh",
-            "dube" to "Shivam Dube",
-            "துபே" to "Shivam Dube",
-            "harshit" to "Harshit Rana",
-            "ஹர்ஷித்" to "Harshit Rana",
-            "ராணா" to "Harshit Rana",
-            "varun" to "Varun Chakaravarthy",
-            "வருண்" to "Varun Chakaravarthy",
-            "washington" to "Washington Sundar",
-            "வாஷிங்டன்" to "Washington Sundar",
-            "சுந்தர்" to "Washington Sundar",
-            "ishan" to "Ishan Kishan",
-            "இஷான்" to "Ishan Kishan",
-            "dhoni" to "MS Dhoni",
-            "தோனி" to "MS Dhoni",
+            "shreyas" to "Shreyas Iyer", "iyer" to "Shreyas Iyer",
+            "ஷ்ரேயாஸ்" to "Shreyas Iyer", "ஸ்ரேயாஸ்" to "Shreyas Iyer", "அய்யர்" to "Shreyas Iyer", "ஐயர்" to "Shreyas Iyer",
+            "nitish" to "Nitish Kumar Reddy", "நிதீஷ்" to "Nitish Kumar Reddy", "ரெட்டி" to "Nitish Kumar Reddy",
+            "anshul" to "Anshul Kamboj", "kamboj" to "Anshul Kamboj", "அன்ஷுல்" to "Anshul Kamboj", "கம்போஜ்" to "Anshul Kamboj",
+            "gambhir" to "Gautam Gambhir", "கம்பீர்" to "Gautam Gambhir", "கவுதம்" to "Gautam Gambhir",
+            "கோச்" to "Gautam Gambhir", "பயிற்சியாளர்" to "Gautam Gambhir",
+            "rohit" to "Rohit Sharma", "ரோஹித்" to "Rohit Sharma", "ரோகித்" to "Rohit Sharma",
+            "virat" to "Virat Kohli", "kohli" to "Virat Kohli", "விராட்" to "Virat Kohli", "கோலி" to "Virat Kohli", "கோஹ்லி" to "Virat Kohli",
+            "ruturaj" to "Ruturaj Gaikwad", "gaikwad" to "Ruturaj Gaikwad", "ருதுராஜ்" to "Ruturaj Gaikwad", "கெய்க்வாட்" to "Ruturaj Gaikwad",
+            "shubman" to "Shubman Gill", "gill" to "Shubman Gill", "சுப்மன்" to "Shubman Gill", "கில்" to "Shubman Gill",
+            "suryakumar" to "Suryakumar Yadav", "surya" to "Suryakumar Yadav", "சூர்யகுமார்" to "Suryakumar Yadav", "சூர்யா" to "Suryakumar Yadav",
+            "rahul" to "KL Rahul", "ராகுல்" to "KL Rahul",
+            "bumrah" to "Jasprit Bumrah", "பும்ரா" to "Jasprit Bumrah",
+            "hardik" to "Hardik Pandya", "ஹர்திக்" to "Hardik Pandya", "பாண்டியா" to "Hardik Pandya",
+            "jadeja" to "Ravindra Jadeja", "ஜடேஜா" to "Ravindra Jadeja",
+            "sanju" to "Sanju Samson", "சஞ்சு" to "Sanju Samson", "samson" to "Sanju Samson", "சாம்சன்" to "Sanju Samson",
+            "siraj" to "Mohammed Siraj", "சிராஜ்" to "Mohammed Siraj",
+            "shami" to "Mohammed Shami", "ஷமி" to "Mohammed Shami",
+            "pant" to "Rishabh Pant", "பண்ட்" to "Rishabh Pant", "ரிஷப்" to "Rishabh Pant",
+            "axar" to "Axar Patel", "அக்சர்" to "Axar Patel", "அக்ஷர்" to "Axar Patel",
+            "kuldeep" to "Kuldeep Yadav", "குல்தீப்" to "Kuldeep Yadav",
+            "arshdeep" to "Arshdeep Singh", "அர்ஷ்தீப்" to "Arshdeep Singh",
+            "jaiswal" to "Yashasvi Jaiswal", "ஜெய்ஸ்வால்" to "Yashasvi Jaiswal",
+            "tilak" to "Tilak Varma", "திலக்" to "Tilak Varma",
+            "abhishek" to "Abhishek Sharma", "அபிஷேக்" to "Abhishek Sharma",
+            "rinku" to "Rinku Singh", "ரிங்கு" to "Rinku Singh",
+            "dube" to "Shivam Dube", "துபே" to "Shivam Dube",
+            "harshit" to "Harshit Rana", "ஹர்ஷித்" to "Harshit Rana", "ராணா" to "Harshit Rana",
+            "varun" to "Varun Chakaravarthy", "வருண்" to "Varun Chakaravarthy", "சக்கரவர்த்தி" to "Varun Chakaravarthy",
+            "washington" to "Washington Sundar", "வாஷிங்டன்" to "Washington Sundar", "சுந்தர்" to "Washington Sundar",
+            "ishan" to "Ishan Kishan", "இஷான்" to "Ishan Kishan", "கிஷன்" to "Ishan Kishan",
+            "dhoni" to "MS Dhoni", "தோனி" to "MS Dhoni",
+            "naman" to "Naman Dhir", "நமன்" to "Naman Dhir", "தீர்" to "Naman Dhir",
+            "auqib" to "Auqib Nabi", "ஆகிப்" to "Auqib Nabi", "நபி" to "Auqib Nabi",
+            "gurnoor" to "Gurnoor Brar", "குர்நூர்" to "Gurnoor Brar", "பிரார்" to "Gurnoor Brar",
+            "santner" to "Mitchell Santner", "சான்ட்னர்" to "Mitchell Santner",
+            "henry" to "Matt Henry", "ஹென்றி" to "Matt Henry",
+            "seifert" to "Tim Seifert", "செய்ஃபெர்ட்" to "Tim Seifert",
         )
-        return commonMap.firstOrNull { (needle, _) -> lower.contains(needle) }?.second
+        commonMap.firstOrNull { (needle, _) -> lower.contains(needle) }?.let { return it.second }
+
+        // 4. Dynamic Tamil-to-English phonetic skeleton match for ANY player in CARD ADD / CRIC CDN
+        val textSkeleton = toPhoneticSkeleton(text)
+        if (textSkeleton.length >= 4) {
+            var bestPlayer: String? = null
+            var bestScore = 0
+            for (player in knownPlayers) {
+                val pClean = player.trim()
+                if (pClean.length < 4) continue
+                val fullSkel = toPhoneticSkeleton(pClean)
+                if (fullSkel.length >= 5 && textSkeleton.contains(fullSkel)) {
+                    if (fullSkel.length > bestScore) {
+                        bestScore = fullSkel.length
+                        bestPlayer = pClean
+                    }
+                    continue
+                }
+                val partSkels = pClean.split(Regex("\\s+"))
+                    .map { toPhoneticSkeleton(it) }
+                    .filter { it.length >= 4 }
+                for (ps in partSkels) {
+                    if (textSkeleton.contains(ps) && ps.length > bestScore) {
+                        bestScore = ps.length
+                        bestPlayer = pClean
+                    }
+                }
+            }
+            if (bestPlayer != null) return bestPlayer
+        }
+
+        return null
+    }
+
+    /**
+     * Converts both Tamil script and English text into a normalized consonant skeleton
+     * (e.g. "நமன் தீர்" and "Naman Dhir" both become "nmntr") for 100% offline name matching.
+     */
+    private fun toPhoneticSkeleton(input: String): String {
+        val sb = StringBuilder(input.length)
+        var lastCh = '\u0000'
+        fun emit(c: Char) {
+            if (c != lastCh) {
+                sb.append(c)
+                lastCh = c
+            }
+        }
+        val lower = input.lowercase()
+        var i = 0
+        while (i < lower.length) {
+            val ch = lower[i]
+            val next = if (i + 1 < lower.length) lower[i + 1] else '\u0000'
+            when {
+                // English digraphs
+                ch == 's' && next == 'h' -> { emit('s'); i += 2; continue }
+                ch == 'c' && next == 'h' -> { emit('s'); i += 2; continue }
+                ch == 't' && next == 'h' -> { emit('t'); i += 2; continue }
+                ch == 'p' && next == 'h' -> { emit('p'); i += 2; continue }
+                ch == 'k' && next == 'h' -> { emit('k'); i += 2; continue }
+                ch == 'g' && next == 'h' -> { emit('k'); i += 2; continue }
+                // English consonants (collapse voiced/unvoiced pairs to match Tamil script)
+                ch == 'b' || ch == 'p' || ch == 'f' -> emit('p')
+                ch == 'd' || ch == 't' -> emit('t')
+                ch == 'g' || ch == 'k' || ch == 'q' -> emit('k')
+                ch == 'c' || ch == 's' || ch == 'z' -> emit('s')
+                ch == 'j' -> emit('j')
+                ch == 'v' || ch == 'w' -> emit('v')
+                ch == 'm' -> emit('m')
+                ch == 'n' -> emit('n')
+                ch == 'r' -> emit('r')
+                ch == 'l' -> emit('l')
+                ch == 'y' -> emit('y')
+                ch == 'h' -> emit('h')
+                // Tamil consonants
+                ch == 'க' -> emit('k')
+                ch == 'ங' -> emit('n')
+                ch == 'ச' || ch == 'ஷ' || ch == 'ஸ' -> emit('s')
+                ch == 'ஜ' -> emit('j')
+                ch == 'ஞ' || ch == 'ந' || ch == 'ன' || ch == 'ண' -> emit('n')
+                ch == 'ட' || ch == 'த' -> emit('t')
+                ch == 'ப' -> emit('p')
+                ch == 'ம' -> emit('m')
+                ch == 'ய' -> emit('y')
+                ch == 'ர' || ch == 'ற' -> emit('r')
+                ch == 'ல' || ch == 'ள' || ch == 'ழ' -> emit('l')
+                ch == 'வ' -> emit('v')
+                ch == 'ஹ' -> emit('h')
+            }
+            i++
+        }
+        return sb.toString()
     }
 
     private fun normalizeCommonTamilNumbers(input: String): String {
@@ -591,484 +430,23 @@ object AiFlashNewsEngine {
             .replace("ஒன்பது ஓவர்ல", "9 overs-ல்")
             .replace("ஒன்பது ஓவர்", "9 overs")
             .replace("முன்னூத்தி ஐம்பத்தியொன்னு", "351")
+            .replace("இருநூறு", "200")
+            .replace("நூறு", "100")
             .replace("எண்பத்திரண்டு", "82")
             .replace("பதினாறு பந்து", "16 balls")
             .replace("அம்பது ரன்", "50 runs")
             .replace("ஐம்பது ரன்", "50 runs")
+            .replace("அறுபது ரன்", "60 runs")
+            .replace("எழுபது ரன்", "70 runs")
+            .replace("எண்பது ரன்", "80 runs")
+            .replace("தொண்ணூறு ரன்", "90 runs")
             .replace("ஒன்பது ரன்", "9 runs")
+            .replace("பத்து ரன்", "10 runs")
     }
 
     /**
-     * Sends the actual voiceover audio to Gemini (inline for <=4MB, Resumable Files API for >4MB)
-     * and asks at which second each segment's player/team is FIRST spoken.
-     */
-    private fun locateSegmentsInAudio(
-        context: Context,
-        audioClips: List<Clip>,
-        segments: List<FlashNewsSegment>,
-    ): AudioSyncOutcome {
-        val nothing = List<Long?>(segments.size) { null }
-        val key = getSavedApiKey(context)
-        if (key.isEmpty()) return AudioSyncOutcome(nothing, "No API Key")
-        if (segments.isEmpty()) return AudioSyncOutcome(nothing)
-
-        val validClips = audioClips.filter { it.mediaUri != null }
-        val totalAudioMs = validClips.sumOf { it.timelineDurationMs }.coerceAtLeast(1L)
-        val clip = validClips.maxByOrNull { it.timelineDurationMs }
-            ?: return AudioSyncOutcome(nothing, "No audio clip")
-
-        // If the voiceover is split across many separate audio clips, a single file doesn't cover the full timeline
-        if (validClips.size > 1 && clip.timelineDurationMs < (totalAudioMs * 0.65).toLong()) {
-            return AudioSyncOutcome(nothing, "Multi-clip audio")
-        }
-
-        val uriStr = clip.mediaUri ?: return AudioSyncOutcome(nothing, "No audio URI")
-
-        var tempCacheFile: File? = null
-        var uploadedFileName: String? = null
-        return try {
-            val uri = Uri.parse(uriStr)
-
-            var knownLen = resolveContentLength(context, uri)
-            if (knownLen <= 0L) {
-                val tf = File(context.cacheDir, "gemini_audio_tmp_${System.currentTimeMillis()}")
-                val copied = context.contentResolver.openInputStream(uri)?.use { input ->
-                    FileOutputStream(tf).use { output -> input.copyTo(output) }
-                }
-                if (copied == null) {
-                    tf.delete()
-                    return AudioSyncOutcome(nothing, "Cannot read audio")
-                }
-                tempCacheFile = tf
-                knownLen = tf.length()
-            }
-            if (knownLen <= 0L) return AudioSyncOutcome(nothing, "Empty audio")
-            if (knownLen > MAX_AUDIO_UPLOAD_BYTES) {
-                return AudioSyncOutcome(nothing, "Audio > 100MB")
-            }
-
-            val streamProvider: () -> InputStream? = {
-                val tf = tempCacheFile
-                if (tf != null) tf.inputStream() else context.contentResolver.openInputStream(uri)
-            }
-
-            val mime = detectAudioMime(context, uri, uriStr, streamProvider)
-
-            val audioPart: JSONObject = if (knownLen <= INLINE_AUDIO_LIMIT_BYTES) {
-                val bytes = streamProvider()?.use { it.readBytes() }
-                    ?: return AudioSyncOutcome(nothing, "Cannot read audio")
-                val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                JSONObject().put(
-                    "inline_data",
-                    JSONObject().put("mime_type", mime).put("data", b64),
-                )
-            } else {
-                val uploaded = uploadToGeminiFilesApi(key, mime, knownLen, streamProvider)
-                uploadedFileName = uploaded.second
-                JSONObject().put(
-                    "file_data",
-                    JSONObject().put("mime_type", mime).put("file_uri", uploaded.first),
-                )
-            }
-
-            val itemLines = segments.mapIndexed { i, seg ->
-                val who = seg.playerName ?: seg.teamName ?: ""
-                "${i + 1}. name=\"$who\" ; spoken phrase starts like: \"${seg.anchorText.orEmpty()}\""
-            }.joinToString("\n")
-
-            val prompt = """
-                You are a precise audio timestamp locator for a Tamil cricket voiceover.
-                Listen to the attached audio. Below is an ordered list of items. Each item is a
-                cricket player (or team) that the narrator talks about, in the SAME ORDER as they
-                appear in the audio. The narrator may pronounce English names in Tamil
-                (e.g. "ஷ்ரேயாஸ் ஐயர்" = Shreyas Iyer).
-
-                For EACH item, give the time in seconds (decimal, 0.1 precision, measured from the
-                very start of the audio file) at which the narrator FIRST begins speaking about that
-                player/team, i.e. the moment the name (or the sentence introducing him) is spoken.
-                Times must be strictly increasing. If you cannot find an item, use null.
-
-                ITEMS:
-                $itemLines
-
-                Return ONLY a JSON array like [{"index":1,"seconds":12.4},{"index":2,"seconds":31.0}].
-            """.trimIndent()
-
-            var parsed: List<Double?>? = null
-            var firstErr: String? = null
-            var lastErr: String? = null
-            for (model in ACTIVE_GEMINI_MODELS) {
-                val r = runCatching {
-                    callGeminiAudioModel(key, model, prompt, audioPart, segments.size)
-                }
-                val got = r.getOrNull()
-                if (got != null && got.any { it != null }) {
-                    parsed = got
-                    break
-                }
-                val msg = r.exceptionOrNull()?.message
-                if (!msg.isNullOrBlank()) {
-                    lastErr = msg
-                    if (msg.contains("HTTP 401") || msg.contains("HTTP 403")) {
-                        firstErr = msg
-                        break
-                    }
-                    if (firstErr == null && !msg.contains("HTTP 404")) {
-                        firstErr = msg
-                    }
-                    if (msg.contains("HTTP 429") || msg.contains("HTTP 503")) {
-                        runCatching { Thread.sleep(1_500L) }
-                    }
-                }
-            }
-
-            val secs = parsed ?: return AudioSyncOutcome(
-                nothing,
-                (firstErr ?: lastErr ?: "No match").take(90),
-            )
-
-            var lastMs = -1L
-            val mapped = secs.map { sec ->
-                if (sec == null) {
-                    null
-                } else {
-                    val srcMs = (sec * 1000.0).roundToLong()
-                    val tl = clip.timelineStartMs +
-                        ((srcMs - clip.sourceInMs).toDouble() / clip.speed.coerceAtLeast(0.01f)).roundToLong()
-                    val inside = tl >= clip.timelineStartMs - 500L && tl <= clip.timelineEndMs + 500L
-                    if (inside && tl > lastMs) {
-                        lastMs = tl
-                        tl
-                    } else {
-                        null
-                    }
-                }
-            }
-            AudioSyncOutcome(mapped, null)
-        } catch (t: Throwable) {
-            AudioSyncOutcome(nothing, (t.message ?: t.javaClass.simpleName).take(90))
-        } finally {
-            runCatching { tempCacheFile?.delete() }
-            uploadedFileName?.let { fname ->
-                runCatching { deleteGeminiUploadedFile(key, fname) }
-            }
-        }
-    }
-
-    private fun resolveContentLength(context: Context, uri: Uri): Long {
-        if (uri.scheme == "file") {
-            val f = File(uri.path ?: "")
-            if (f.exists() && f.length() > 0L) return f.length()
-        }
-        runCatching {
-            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
-                if (afd.length > 0L) return afd.length
-            }
-        }
-        return -1L
-    }
-
-    private fun detectAudioMime(
-        context: Context,
-        uri: Uri,
-        uriStr: String,
-        streamProvider: () -> InputStream?,
-    ): String {
-        val header = ByteArray(16)
-        val readCount = runCatching {
-            streamProvider()?.use { it.read(header) } ?: 0
-        }.getOrDefault(0)
-        if (readCount >= 12) {
-            val h0 = header[0].toInt() and 0xFF
-            val h1 = header[1].toInt() and 0xFF
-            val h2 = header[2].toInt() and 0xFF
-            val h3 = header[3].toInt() and 0xFF
-            if (h0 == 'R'.code && h1 == 'I'.code && h2 == 'F'.code && h3 == 'F'.code &&
-                header[8].toInt().toChar() == 'W' && header[9].toInt().toChar() == 'A'
-            ) {
-                return "audio/wav"
-            }
-            if (h0 == 'O'.code && h1 == 'g'.code && h2 == 'g'.code && h3 == 'S'.code) {
-                return "audio/ogg"
-            }
-            if (h0 == 'f'.code && h1 == 'L'.code && h2 == 'a'.code && h3 == 'C'.code) {
-                return "audio/flac"
-            }
-            if (header[4].toInt().toChar() == 'f' && header[5].toInt().toChar() == 't' &&
-                header[6].toInt().toChar() == 'y' && header[7].toInt().toChar() == 'p'
-            ) {
-                val hasVideo = hasVideoTrack(context, uri)
-                return if (hasVideo) "video/mp4" else "audio/mp4"
-            }
-            if (h0 == 'I'.code && h1 == 'D'.code && h2 == '3'.code) {
-                return "audio/mpeg"
-            }
-            if (h0 == 0xFF && (h1 and 0xE0) == 0xE0) {
-                return if ((h1 and 0x06) == 0x00) "audio/aac" else "audio/mpeg"
-            }
-        }
-
-        val extractorMime = runCatching {
-            val ex = MediaExtractor()
-            try {
-                ex.setDataSource(context, uri, null)
-                var hasVid = false
-                var audMime: String? = null
-                for (i in 0 until ex.trackCount) {
-                    val m = ex.getTrackFormat(i).getString(MediaFormat.KEY_MIME).orEmpty().lowercase()
-                    if (m.startsWith("video/")) hasVid = true
-                    if (m.startsWith("audio/") && audMime == null) audMime = m
-                }
-                when {
-                    hasVid -> "video/mp4"
-                    audMime == "audio/mp4a-latm" -> "audio/mp4"
-                    audMime == "audio/mpeg" -> "audio/mpeg"
-                    audMime == "audio/opus" || audMime == "audio/vorbis" -> "audio/ogg"
-                    audMime == "audio/flac" -> "audio/flac"
-                    audMime == "audio/raw" -> "audio/wav"
-                    else -> audMime
-                }
-            } finally {
-                ex.release()
-            }
-        }.getOrNull()
-        if (!extractorMime.isNullOrBlank()) return extractorMime
-
-        val fromResolver = runCatching { context.contentResolver.getType(uri) }.getOrNull().orEmpty().lowercase()
-        when {
-            fromResolver.contains("mpeg") || fromResolver.contains("mp3") -> return "audio/mpeg"
-            fromResolver.contains("wav") -> return "audio/wav"
-            fromResolver.contains("aac") -> return "audio/aac"
-            fromResolver.contains("ogg") || fromResolver.contains("opus") -> return "audio/ogg"
-            fromResolver.contains("flac") -> return "audio/flac"
-            fromResolver.contains("m4a") || fromResolver == "audio/mp4" -> return "audio/mp4"
-            fromResolver.startsWith("video/") -> return fromResolver
-            fromResolver.startsWith("audio/") -> return fromResolver
-        }
-        val ext = uriStr.substringBefore('?').substringAfterLast('.', "").lowercase()
-        return when (ext) {
-            "mp3" -> "audio/mpeg"
-            "wav" -> "audio/wav"
-            "aac" -> "audio/aac"
-            "ogg", "opus" -> "audio/ogg"
-            "flac" -> "audio/flac"
-            "mp4", "m4v" -> "video/mp4"
-            "m4a" -> "audio/mp4"
-            else -> "audio/mpeg"
-        }
-    }
-
-    private fun hasVideoTrack(context: Context, uri: Uri): Boolean = runCatching {
-        val ex = MediaExtractor()
-        try {
-            ex.setDataSource(context, uri, null)
-            (0 until ex.trackCount).any { i ->
-                ex.getTrackFormat(i).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
-            }
-        } finally {
-            ex.release()
-        }
-    }.getOrDefault(false)
-
-    private fun uploadToGeminiFilesApi(
-        apiKey: String,
-        mime: String,
-        contentLength: Long,
-        streamProvider: () -> InputStream?,
-    ): Pair<String, String> {
-        val cleanKey = sanitizeApiKey(apiKey)
-        val (startUrl, useHeader) = prepareAuthedUrlAndHeader(
-            "https://generativelanguage.googleapis.com/upload/v1beta/files",
-            cleanKey,
-        )
-        val startConn = (URL(startUrl).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 20_000
-            readTimeout = 30_000
-            doOutput = true
-            if (useHeader) setRequestProperty("x-goog-api-key", cleanKey)
-            setRequestProperty("X-Goog-Upload-Protocol", "resumable")
-            setRequestProperty("X-Goog-Upload-Command", "start")
-            setRequestProperty("X-Goog-Upload-Header-Content-Length", contentLength.toString())
-            setRequestProperty("X-Goog-Upload-Header-Content-Type", mime)
-            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-        }
-        val metaBytes = JSONObject()
-            .put("file", JSONObject().put("display_name", "voiceover_${System.currentTimeMillis()}"))
-            .toString()
-            .toByteArray(Charsets.UTF_8)
-        startConn.setFixedLengthStreamingMode(metaBytes.size)
-        startConn.outputStream.use { it.write(metaBytes) }
-
-        val startCode = startConn.responseCode
-        val uploadUrl = startConn.getHeaderField("X-Goog-Upload-URL")
-            ?: startConn.getHeaderField("x-goog-upload-url")
-        val startBody = (if (startCode in 200..299) startConn.inputStream else startConn.errorStream)
-            ?.bufferedReader()?.use { it.readText() }.orEmpty()
-        startConn.disconnect()
-
-        if (startCode !in 200..299 || uploadUrl.isNullOrBlank()) {
-            throw IllegalStateException("Upload init HTTP $startCode ${extractApiError(startBody).orEmpty()}".trim())
-        }
-
-        val upConn = (URL(uploadUrl).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 30_000
-            readTimeout = 180_000
-            doOutput = true
-            setRequestProperty("X-Goog-Upload-Offset", "0")
-            setRequestProperty("X-Goog-Upload-Command", "upload, finalize")
-            setRequestProperty("Content-Type", mime)
-            setFixedLengthStreamingMode(contentLength)
-        }
-        streamProvider()?.use { input ->
-            upConn.outputStream.use { output ->
-                val buf = ByteArray(64 * 1024)
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    output.write(buf, 0, n)
-                }
-                output.flush()
-            }
-        } ?: throw IllegalStateException("Audio stream unavailable")
-
-        val upCode = upConn.responseCode
-        val upBody = (if (upCode in 200..299) upConn.inputStream else upConn.errorStream)
-            ?.bufferedReader()?.use { it.readText() }.orEmpty()
-        upConn.disconnect()
-
-        if (upCode !in 200..299) {
-            throw IllegalStateException("Upload HTTP $upCode ${extractApiError(upBody).orEmpty()}".trim())
-        }
-
-        val fileObj = JSONObject(upBody).getJSONObject("file")
-        val fileUri = fileObj.getString("uri")
-        val fileName = fileObj.optString("name", "")
-        var state = fileObj.optString("state", "ACTIVE")
-
-        var polls = 0
-        while (state == "PROCESSING" && fileName.isNotBlank() && polls++ < 25) {
-            Thread.sleep(1500)
-            val (pollUrl, pollUseHeader) = prepareAuthedUrlAndHeader(
-                "https://generativelanguage.googleapis.com/v1beta/$fileName",
-                cleanKey,
-            )
-            val pollConn = (URL(pollUrl).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 10_000
-                readTimeout = 15_000
-                if (pollUseHeader) setRequestProperty("x-goog-api-key", cleanKey)
-            }
-            val pCode = pollConn.responseCode
-            val pBody = (if (pCode in 200..299) pollConn.inputStream else pollConn.errorStream)
-                ?.bufferedReader()?.use { it.readText() }.orEmpty()
-            pollConn.disconnect()
-            if (pCode in 200..299) {
-                val f = JSONObject(pBody)
-                state = f.optString("state", "ACTIVE")
-                if (state == "FAILED") throw IllegalStateException("Audio processing failed")
-            }
-        }
-        return fileUri to fileName
-    }
-
-    private fun deleteGeminiUploadedFile(apiKey: String, fileName: String) {
-        if (fileName.isBlank()) return
-        val cleanKey = sanitizeApiKey(apiKey)
-        val (delUrl, useHeader) = prepareAuthedUrlAndHeader(
-            "https://generativelanguage.googleapis.com/v1beta/$fileName",
-            cleanKey,
-        )
-        val conn = (URL(delUrl).openConnection() as HttpURLConnection).apply {
-            requestMethod = "DELETE"
-            connectTimeout = 5_000
-            readTimeout = 5_000
-            if (useHeader) setRequestProperty("x-goog-api-key", cleanKey)
-        }
-        runCatching { conn.responseCode }
-        conn.disconnect()
-    }
-
-    private fun callGeminiAudioModel(
-        apiKey: String,
-        model: String,
-        prompt: String,
-        audioPart: JSONObject,
-        count: Int,
-    ): List<Double?> {
-        val cleanKey = sanitizeApiKey(apiKey)
-        val (endpoint, useHeader) = prepareAuthedUrlAndHeader(
-            "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent",
-            cleanKey,
-        )
-        val parts = JSONArray()
-            .put(JSONObject().put("text", prompt))
-            .put(audioPart)
-        val payload = JSONObject().apply {
-            put("contents", JSONArray().put(JSONObject().put("parts", parts)))
-            put(
-                "generationConfig",
-                JSONObject().put("responseMimeType", "application/json"),
-            )
-        }
-
-        val payloadBytes = payload.toString().toByteArray(Charsets.UTF_8)
-        val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 25_000
-            readTimeout = 120_000
-            doOutput = true
-            if (useHeader) setRequestProperty("x-goog-api-key", cleanKey)
-            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            setFixedLengthStreamingMode(payloadBytes.size)
-        }
-        conn.outputStream.use { it.write(payloadBytes) }
-        val code = conn.responseCode
-        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
-            ?.bufferedReader()?.use { it.readText() }.orEmpty()
-        conn.disconnect()
-        if (code !in 200..299) {
-            val msg = extractApiError(body)
-            throw IllegalStateException("HTTP $code (${msg ?: model})")
-        }
-
-        val rawText = extractGeminiResponseText(body, model)
-        val arr = if (rawText.startsWith("{")) {
-            val obj = JSONObject(rawText)
-            obj.optJSONArray("items") ?: obj.optJSONArray("segments") ?: obj.optJSONArray("results") ?: JSONArray()
-        } else {
-            JSONArray(rawText)
-        }
-
-        val out = ArrayList<Double?>(count)
-        repeat(count) { out.add(null) }
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val idx = o.optInt("index", i + 1) - 1
-            if (idx !in 0 until count) continue
-            out[idx] = parseSecondsValue(o.opt("seconds"))
-        }
-        return out
-    }
-
-    private fun parseSecondsValue(v: Any?): Double? {
-        if (v == null || v == JSONObject.NULL) return null
-        if (v is Number) return v.toDouble().takeIf { it >= 0.0 }
-        val str = v.toString().trim()
-        if (str.isEmpty() || str.equals("null", ignoreCase = true)) return null
-        if (str.contains(":")) {
-            val nums = str.split(":").map { it.trim().toDoubleOrNull() ?: return null }
-            var total = 0.0
-            for (n in nums) total = total * 60.0 + n
-            return total.takeIf { it >= 0.0 }
-        }
-        return str.toDoubleOrNull()?.takeIf { it >= 0.0 }
-    }
-
-    /**
-     * Maps each segment onto the ACTUAL Voice Audio span using non-cascading timestamps
-     * across ALL audio clips on the timeline (never squeezes into one clip, never overlaps Scorecards).
+     * Maps each segment onto the ACTUAL Voice Audio span across ALL audio clips using
+     * 25ms adaptive-noise PCM voice-activity detection and sentence-onset snapping.
      */
     suspend fun detectVoicePauseStartsMs(
         context: Context,
@@ -1086,14 +464,14 @@ object AiFlashNewsEngine {
         val speechSpan = (speechBounds.second - speechStart).coerceAtLeast(10_000L)
 
         val quietBuckets = sampleQuietPauseMs(context, audioClips, audioEnd)
-
         val voiceRuns: List<LongRange>? = analyzeVoiceRuns(context, audioClips)
 
         val desiredStarts: MutableList<Long>
         val minGapMs: Long
         if (voiceRuns != null) {
-            minGapMs = 1_600L
+            minGapMs = 1_500L
             val totalVoiced = voiceRuns.sumOf { (it.last - it.first).coerceAtLeast(0L) }.coerceAtLeast(1L)
+            val usedRunIdx = HashSet<Int>()
             desiredStarts = segments.map { seg ->
                 val target = (seg.startFraction.coerceIn(0f, 0.97f) * totalVoiced).toLong()
                 var cum = 0L
@@ -1106,14 +484,28 @@ object AiFlashNewsEngine {
                     }
                     cum += len
                 }
-                val snapRun = voiceRuns
-                    .filter { abs(it.first - raw) <= 1_000L }
-                    .minByOrNull { abs(it.first - raw) }
-                val start = if (snapRun != null) snapRun.first - 150L else raw
+                // Snap cleanly to the nearest unclaimed sentence/phrase onset within ±1.4s
+                var bestIdx = -1
+                var bestDist = Long.MAX_VALUE
+                voiceRuns.forEachIndexed { idx, run ->
+                    if (idx !in usedRunIdx) {
+                        val d = abs(run.first - raw)
+                        if (d <= 1_400L && d < bestDist) {
+                            bestDist = d
+                            bestIdx = idx
+                        }
+                    }
+                }
+                val start = if (bestIdx >= 0) {
+                    usedRunIdx.add(bestIdx)
+                    voiceRuns[bestIdx].first - 120L
+                } else {
+                    raw
+                }
                 start.coerceIn(audioStart, (audioEnd - 2_000L).coerceAtLeast(audioStart))
             }.toMutableList()
         } else {
-            minGapMs = 2_200L
+            minGapMs = 2_000L
             desiredStarts = segments.map { seg ->
                 val raw = speechStart + (seg.startFraction * speechSpan).roundToLong()
                 val snapped = quietBuckets
@@ -1124,62 +516,9 @@ object AiFlashNewsEngine {
             }.toMutableList()
         }
 
-        val useGeminiAudio = isGeminiAudioSync(context)
-        val audioOutcome = if (useGeminiAudio) {
-            locateSegmentsInAudio(context, audioClips, segments)
-        } else {
-            AudioSyncOutcome(List<Long?>(segments.size) { null })
-        }
-        val exactStarts = audioOutcome.starts
-        val isExact = BooleanArray(segments.size)
-        exactStarts.forEachIndexed { i, ex ->
-            if (ex != null && i < desiredStarts.size) {
-                desiredStarts[i] = (ex - 250L).coerceAtLeast(audioStart)
-                isExact[i] = true
-            }
-        }
-        val exactCount = isExact.count { it }
-        val errNote = audioOutcome.error?.let { " ($it)" }.orEmpty()
-        val failedAudio = useGeminiAudio && exactCount == 0
-        val methodLabel = when {
-            useGeminiAudio && exactCount > 0 -> "Gemini Audio sync ($exactCount/${segments.size})"
-            useGeminiAudio && voiceRuns != null -> "Gemini Audio failed$errNote → Phone sync"
-            useGeminiAudio -> "Gemini Audio failed$errNote → Basic sync"
-            voiceRuns != null -> "Phone sync"
-            else -> "Basic sync"
-        }
-        toastMain(context, methodLabel, longDuration = failedAudio)
-
-        if (exactCount in 1 until segments.size) {
-            var idx = 0
-            while (idx < segments.size) {
-                if (!isExact[idx]) {
-                    val prevExact = (idx - 1 downTo 0).firstOrNull { isExact[it] }
-                    val nextExact = (idx + 1 until segments.size).firstOrNull { isExact[it] }
-                    if (prevExact != null && nextExact != null) {
-                        val spanMs = (desiredStarts[nextExact] - desiredStarts[prevExact]).coerceAtLeast(1L)
-                        val countBetween = nextExact - prevExact
-                        for (k in (prevExact + 1) until nextExact) {
-                            val step = (k - prevExact).toDouble() / countBetween.toDouble()
-                            desiredStarts[k] = desiredStarts[prevExact] + (spanMs * step).roundToLong()
-                        }
-                        idx = nextExact
-                        continue
-                    }
-                }
-                idx++
-            }
-        }
-
         for (i in 1 until desiredStarts.size) {
-            if (!isExact[i] && desiredStarts[i] < desiredStarts[i - 1] + minGapMs) {
-                val nextExact = (i + 1 until segments.size).firstOrNull { isExact[it] }
-                val candidate = desiredStarts[i - 1] + minGapMs
-                desiredStarts[i] = if (nextExact != null && candidate >= desiredStarts[nextExact]) {
-                    ((desiredStarts[i - 1] + desiredStarts[nextExact]) / 2L)
-                } else {
-                    candidate
-                }
+            if (desiredStarts[i] < desiredStarts[i - 1] + minGapMs) {
+                desiredStarts[i] = desiredStarts[i - 1] + minGapMs
             }
         }
 
@@ -1189,7 +528,7 @@ object AiFlashNewsEngine {
             val nextS = desiredStarts.getOrNull(i + 1)
             val maxDur = 9_500L
             var e = if (nextS != null) {
-                minOf(s + maxDur, nextS - 350L)
+                minOf(s + maxDur, nextS - 300L)
             } else {
                 minOf(s + maxDur, speechStart + speechSpan)
             }
@@ -1212,10 +551,14 @@ object AiFlashNewsEngine {
                 result.add(null)
             }
         }
+
+        val syncedCount = result.count { it != null }
+        val modeName = if (voiceRuns != null) "Voice-Run Sync" else "Audio Sync"
+        toastMain(context, "Offline $modeName: $syncedCount/${segments.size} cards synced")
         result
     }
 
-    /** Analyzes ALL audio clips in timeline order so multi-clip voiceovers map accurately across the entire video. */
+    /** Analyzes ALL audio clips in timeline order at 25ms resolution with adaptive noise floor. */
     private fun analyzeVoiceRuns(context: Context, audioClips: List<Clip>): List<LongRange>? {
         val validClips = audioClips.filter { it.mediaUri != null }.sortedBy { it.timelineStartMs }
         if (validClips.isEmpty()) return null
@@ -1244,9 +587,9 @@ object AiFlashNewsEngine {
         }
         if (sourceDurMs < 3_000L) return null
 
-        val frameMs = 40
+        val frameMs = 25
         val maxFrames = (sourceDurMs / frameMs).toInt() + 2
-        if (maxFrames > 60_000) return null
+        if (maxFrames > 120_000) return null
         val sumSq = DoubleArray(maxFrames)
         val counts = IntArray(maxFrames)
 
@@ -1287,7 +630,7 @@ object AiFlashNewsEngine {
             var guard = 0
             val frameUs = frameMs * 1_000L
 
-            while (!outputDone && guard++ < 400_000) {
+            while (!outputDone && guard++ < 500_000) {
                 if (!inputDone) {
                     val inIdx = dec.dequeueInputBuffer(10_000L)
                     if (inIdx >= 0) {
@@ -1336,7 +679,7 @@ object AiFlashNewsEngine {
                     if (nf.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) channels = nf.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                 }
             }
-        } catch (e: Throwable) {
+        } catch (_: Throwable) {
             return null
         } finally {
             runCatching { codec?.stop() }
@@ -1345,17 +688,18 @@ object AiFlashNewsEngine {
         }
 
         val rms = FloatArray(maxFrames) { i ->
-            if (counts[i] > 0) Math.sqrt(sumSq[i] / counts[i]).toFloat() else 0f
+            if (counts[i] > 0) sqrt(sumSq[i] / counts[i]).toFloat() else 0f
         }
         val nonZero = rms.filter { it > 0f }.sorted()
-        if (nonZero.size < 50) return null
-        val p20 = nonZero[(nonZero.size * 0.20).toInt().coerceIn(0, nonZero.size - 1)]
-        val p95 = nonZero[(nonZero.size * 0.95).toInt().coerceIn(0, nonZero.size - 1)]
-        if (p95 <= 0f) return null
-        val threshold = max(p20 * 2.5f, p95 * 0.05f)
+        if (nonZero.size < 60) return null
+        val p15 = nonZero[(nonZero.size * 0.15).toInt().coerceIn(0, nonZero.size - 1)]
+        val p85 = nonZero[(nonZero.size * 0.85).toInt().coerceIn(0, nonZero.size - 1)]
+        if (p85 <= 0f) return null
+        // Adaptive threshold rises cleanly above light background hum/BGM while preserving breath pauses
+        val threshold = max(p15 * 2.2f, p15 + (p85 - p15) * 0.14f)
 
-        val minPauseFrames = 7
-        val minRunFrames = 5
+        val minPauseFrames = 9 // 225ms pause splits spoken phrases
+        val minRunFrames = 6   // 150ms minimum spoken burst
         val runsFrames = ArrayList<IntRange>()
         var runStart = -1
         var lastVoiced = -1
@@ -1495,6 +839,4 @@ object AiFlashNewsEngine {
         }
         return allPauses
     }
-
-    private fun abs(v: Long): Long = if (v < 0L) -v else v
 }
