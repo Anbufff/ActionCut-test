@@ -49,6 +49,9 @@ import com.actioncut.core.media.template.NewsCrickWatermarkRenderer
 import com.actioncut.core.model.*
 import com.actioncut.feature.editor.ui.pip.AiCutoutManager
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.roundToInt
@@ -58,6 +61,11 @@ private enum class DragTarget {
     CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR,
     EDGE_T, EDGE_B, EDGE_L, EDGE_R
 }
+
+private data class BannerFrameSet(
+    val fractions: List<Float>,
+    val bitmaps: List<ImageBitmap>,
+)
 
 @Composable
 fun PreviewPlayer(
@@ -625,7 +633,7 @@ private fun PipLayer(
     var cutoutUri by remember(active.id, active.filter?.id) {
         mutableStateOf(
             if (isAiCutoutOn && active.mediaUri != null) {
-                val f = java.io.File(context.cacheDir, "cutout_${active.mediaUri.hashCode()}.png")
+                val f = File(context.cacheDir, "cutout_${active.mediaUri.hashCode()}.png")
                 if (f.exists() && f.length() > 0L) Uri.fromFile(f).toString() else null
             } else null
         )
@@ -646,7 +654,7 @@ private fun PipLayer(
     val displayUri = if (isAiCutoutOn && cutoutUri != null) cutoutUri else active.mediaUri
     val cutoutStamp = remember(displayUri, isAiCutoutOn) {
         if (isAiCutoutOn && displayUri != null) {
-            runCatching { java.io.File(Uri.parse(displayUri).path ?: "").lastModified() }.getOrDefault(0L)
+            runCatching { File(Uri.parse(displayUri).path ?: "").lastModified() }.getOrDefault(0L)
         } else 0L
     }
 
@@ -1102,13 +1110,18 @@ private fun OverlayLayer(
                 val imageUri = clip.mediaUri
                 if (imageUri != null && clip.text == null) {
                     if (isNewsBanner) {
+                        val clipDuration = (clip.timelineEndMs - clip.timelineStartMs).coerceAtLeast(1L)
+                        val progress = ((playheadMs - clip.timelineStartMs).toFloat() / clipDuration.toFloat())
+                            .coerceIn(0f, 1f)
+
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .then(gestureModifier),
                         ) {
-                            StickerImage(
+                            NewsBannerImage(
                                 uri = imageUri,
+                                progress = progress,
                                 widthPx = w,
                                 modifier = Modifier.align(Alignment.Center),
                             )
@@ -1146,18 +1159,91 @@ private fun OverlayLayer(
 }
 
 @Composable
-private fun StickerImage(uri: String, widthPx: Float, modifier: Modifier = Modifier) {
-    val bitmap = androidx.compose.runtime.produceState<ImageBitmap?>(
+private fun NewsBannerImage(
+    uri: String,
+    progress: Float,
+    widthPx: Float,
+    modifier: Modifier = Modifier,
+) {
+    val frameSet = produceState<BannerFrameSet?>(
         initialValue = null,
         key1 = uri,
     ) {
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val path = Uri.parse(uri).path ?: return@runCatching null
+                val basePath = if (path.endsWith(".png", ignoreCase = true)) {
+                    path.substring(0, path.length - 4)
+                } else {
+                    path
+                }
+                val metaFile = File("$basePath.meta")
+                val fractions = if (metaFile.exists()) {
+                    metaFile.readText()
+                        .split(",")
+                        .mapNotNull { it.trim().toFloatOrNull() }
+                } else {
+                    emptyList()
+                }
+
+                fun decodePreviewBitmap(file: File): ImageBitmap? {
+                    if (!file.exists() || file.length() <= 0L) return null
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(file.absolutePath, bounds)
+                    val sample = if (bounds.outWidth > 1280) 2 else 1
+                    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                    return BitmapFactory.decodeFile(file.absolutePath, opts)?.asImageBitmap()
+                }
+
+                if (fractions.size > 1) {
+                    val bitmaps = fractions.indices.mapNotNull { idx ->
+                        decodePreviewBitmap(File("${basePath}_$idx.png"))
+                            ?: decodePreviewBitmap(File(path))
+                    }
+                    if (bitmaps.isNotEmpty()) {
+                        BannerFrameSet(fractions = fractions, bitmaps = bitmaps)
+                    } else null
+                } else {
+                    val single = decodePreviewBitmap(File(path)) ?: return@runCatching null
+                    BannerFrameSet(fractions = listOf(1f), bitmaps = listOf(single))
+                }
+            }.getOrNull()
+        }
+    }.value ?: return
+
+    val activeIdx = if (frameSet.fractions.size > 1 && frameSet.bitmaps.size == frameSet.fractions.size) {
+        frameSet.fractions.indexOfFirst { progress <= it }.let {
+            if (it < 0) frameSet.bitmaps.lastIndex else it
+        }
+    } else {
+        0
+    }
+    val bitmap = frameSet.bitmaps.getOrNull(activeIdx) ?: frameSet.bitmaps.firstOrNull() ?: return
+    val density = LocalDensity.current
+
+    Image(
+        bitmap = bitmap,
+        contentDescription = null,
+        contentScale = ContentScale.FillBounds,
+        modifier = modifier
+            .width(with(density) { widthPx.toDp() })
+            .aspectRatio(bitmap.width.toFloat() / bitmap.height.toFloat()),
+    )
+}
+
+@Composable
+private fun StickerImage(uri: String, widthPx: Float, modifier: Modifier = Modifier) {
+    val bitmap = produceState<ImageBitmap?>(
+        initialValue = null,
+        key1 = uri,
+    ) {
+        value = withContext(Dispatchers.IO) {
             runCatching {
                 BitmapFactory.decodeFile(Uri.parse(uri).path)?.asImageBitmap()
             }.getOrNull()
         }
     }.value ?: return
-    val density = androidx.compose.ui.platform.LocalDensity.current
+    val density = LocalDensity.current
     Image(
         bitmap = bitmap,
         contentDescription = null,
