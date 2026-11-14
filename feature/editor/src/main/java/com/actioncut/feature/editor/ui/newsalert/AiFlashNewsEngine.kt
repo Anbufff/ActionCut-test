@@ -86,7 +86,6 @@ object AiFlashNewsEngine {
             }
 
             if (explicitKey == null) {
-                // Continuation sentence for the currently active player/team
                 if (out.isNotEmpty() && out.last().bullets.size < 2 && (frac - currentAnchorFrac) <= 0.14f) {
                     val prev = out.last()
                     val bulletText = item.cleaned.take(195)
@@ -103,7 +102,6 @@ object AiFlashNewsEngine {
             val bulletText = item.cleaned.take(195)
             if (bulletText.isEmpty()) continue
 
-            // Merge consecutive sentence of same subject only if current card has 1 bullet and is nearby
             if (explicitKey == lastSubjectKey &&
                 out.isNotEmpty() &&
                 out.last().bullets.size < 2 &&
@@ -145,7 +143,6 @@ object AiFlashNewsEngine {
             for (part in parts) {
                 val p = part.trim().trimEnd('.')
                 if (p.length >= 180 && p.contains(',')) {
-                    // Break overly long comma-chained Tamil monologue cleanly into ~2 clauses
                     val clauses = p.split(Regex(",\\s+"))
                     var buf = StringBuilder()
                     for (c in clauses) {
@@ -183,12 +180,8 @@ object AiFlashNewsEngine {
         return s.replace(Regex("\\s+"), " ").trim().trimStart(',', '-', '•', '*', ' ').trim()
     }
 
-    /**
-     * Estimates spoken syllable + pause weight of a Tamil/English sentence so timestamps
-     * scale with real speaking speed instead of raw character length.
-     */
     private fun estimateSpokenWeight(text: String): Float {
-        var weight = 2.8f // natural sentence boundary pause
+        var weight = 2.8f
         val tokens = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
         for (tok in tokens) {
             val digits = tok.filter { it.isDigit() }
@@ -200,7 +193,6 @@ object AiFlashNewsEngine {
             for (ch in tok) {
                 val code = ch.code
                 when {
-                    // Tamil vowels + consonants (exclude combining vowel signs / pulli)
                     code in 0x0B85..0x0BB9 -> tamilSyllables++
                     ch in 'a'..'z' || ch in 'A'..'Z' -> latinChars++
                     ch == ',' || ch == ';' -> weight += 0.9f
@@ -277,19 +269,16 @@ object AiFlashNewsEngine {
     private fun detectMentionedPlayer(text: String, knownPlayers: List<String>): String? {
         val lower = text.lowercase()
 
-        // 1. Direct English full-name match from known library / CRIC CDN
         knownPlayers.firstOrNull { p ->
             val pn = p.trim().lowercase()
             pn.length >= 4 && lower.contains(pn)
         }?.let { return it }
 
-        // 2. Direct English token match (>= 4 chars) from known library / CRIC CDN
         knownPlayers.firstOrNull { p ->
             val parts = p.trim().lowercase().split(Regex("\\s+")).filter { it.length >= 4 }
             parts.any { token -> lower.contains(token) }
         }?.let { return it }
 
-        // 3. Built-in Tamil + English cricket star dictionary
         val commonMap = listOf(
             "shreyas" to "Shreyas Iyer", "iyer" to "Shreyas Iyer",
             "ஷ்ரேயாஸ்" to "Shreyas Iyer", "ஸ்ரேயாஸ்" to "Shreyas Iyer", "அய்யர்" to "Shreyas Iyer", "ஐயர்" to "Shreyas Iyer",
@@ -332,7 +321,6 @@ object AiFlashNewsEngine {
         )
         commonMap.firstOrNull { (needle, _) -> lower.contains(needle) }?.let { return it.second }
 
-        // 4. Dynamic Tamil-to-English phonetic skeleton match for ANY player in CARD ADD / CRIC CDN
         val textSkeleton = toPhoneticSkeleton(text)
         if (textSkeleton.length >= 4) {
             var bestPlayer: String? = null
@@ -364,10 +352,6 @@ object AiFlashNewsEngine {
         return null
     }
 
-    /**
-     * Converts both Tamil script and English text into a normalized consonant skeleton
-     * (e.g. "நமன் தீர்" and "Naman Dhir" both become "nmntr") for 100% offline name matching.
-     */
     private fun toPhoneticSkeleton(input: String): String {
         val sb = StringBuilder(input.length)
         var lastCh = '\u0000'
@@ -383,14 +367,12 @@ object AiFlashNewsEngine {
             val ch = lower[i]
             val next = if (i + 1 < lower.length) lower[i + 1] else '\u0000'
             when {
-                // English digraphs
                 ch == 's' && next == 'h' -> { emit('s'); i += 2; continue }
                 ch == 'c' && next == 'h' -> { emit('s'); i += 2; continue }
                 ch == 't' && next == 'h' -> { emit('t'); i += 2; continue }
                 ch == 'p' && next == 'h' -> { emit('p'); i += 2; continue }
                 ch == 'k' && next == 'h' -> { emit('k'); i += 2; continue }
                 ch == 'g' && next == 'h' -> { emit('k'); i += 2; continue }
-                // English consonants (collapse voiced/unvoiced pairs to match Tamil script)
                 ch == 'b' || ch == 'p' || ch == 'f' -> emit('p')
                 ch == 'd' || ch == 't' -> emit('t')
                 ch == 'g' || ch == 'k' || ch == 'q' -> emit('k')
@@ -403,7 +385,6 @@ object AiFlashNewsEngine {
                 ch == 'l' -> emit('l')
                 ch == 'y' -> emit('y')
                 ch == 'h' -> emit('h')
-                // Tamil consonants
                 ch == 'க' -> emit('k')
                 ch == 'ங' -> emit('n')
                 ch == 'ச' || ch == 'ஷ' || ch == 'ஸ' -> emit('s')
@@ -444,10 +425,6 @@ object AiFlashNewsEngine {
             .replace("பத்து ரன்", "10 runs")
     }
 
-    /**
-     * Maps each segment onto the ACTUAL Voice Audio span across ALL audio clips using
-     * 25ms adaptive-noise PCM voice-activity detection and sentence-onset snapping.
-     */
     suspend fun detectVoicePauseStartsMs(
         context: Context,
         audioClips: List<Clip>,
@@ -484,7 +461,6 @@ object AiFlashNewsEngine {
                     }
                     cum += len
                 }
-                // Snap cleanly to the nearest unclaimed sentence/phrase onset within ±1.4s
                 var bestIdx = -1
                 var bestDist = Long.MAX_VALUE
                 voiceRuns.forEachIndexed { idx, run ->
@@ -558,7 +534,6 @@ object AiFlashNewsEngine {
         result
     }
 
-    /** Analyzes ALL audio clips in timeline order at 25ms resolution with adaptive noise floor. */
     private fun analyzeVoiceRuns(context: Context, audioClips: List<Clip>): List<LongRange>? {
         val validClips = audioClips.filter { it.mediaUri != null }.sortedBy { it.timelineStartMs }
         if (validClips.isEmpty()) return null
@@ -695,11 +670,10 @@ object AiFlashNewsEngine {
         val p15 = nonZero[(nonZero.size * 0.15).toInt().coerceIn(0, nonZero.size - 1)]
         val p85 = nonZero[(nonZero.size * 0.85).toInt().coerceIn(0, nonZero.size - 1)]
         if (p85 <= 0f) return null
-        // Adaptive threshold rises cleanly above light background hum/BGM while preserving breath pauses
         val threshold = max(p15 * 2.2f, p15 + (p85 - p15) * 0.14f)
 
-        val minPauseFrames = 9 // 225ms pause splits spoken phrases
-        val minRunFrames = 6   // 150ms minimum spoken burst
+        val minPauseFrames = 9
+        val minRunFrames = 6
         val runsFrames = ArrayList<IntRange>()
         var runStart = -1
         var lastVoiced = -1
