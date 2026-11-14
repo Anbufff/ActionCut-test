@@ -20,8 +20,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Full 1920x1080 Star Sports / IPL Stadium Default Background + Slanted Flash News Cards +
- * Optional Integrated Player Cutout on the Right Side (so both move together as ONE clip).
+ * Full 1920x1080 Stadium Background + up to 4 Flash News Key-Point Boxes (with active
+ * box highlighting frames _0.._3 + .meta timing) + Higher Player Cutout on the Right Side.
  */
 object NewsBannerRenderer {
 
@@ -37,14 +37,14 @@ object NewsBannerRenderer {
             val title = rawLines.first().trimStart('#', '*', '-', '•', 'o', ' ').trim()
             val bullets = rawLines.drop(1).map {
                 it.trimStart('*', '-', '•', 'o', ' ').trim()
-            }.filter { it.isNotEmpty() }
+            }.filter { it.isNotEmpty() }.take(4)
             createSegmentBannerBitmap(context, title, bullets)
         } else {
             val sentences = rawText.split(Regex("(?<!\\d)\\.(?!\\d)\\s+"))
                 .map { it.trim().trimEnd('.') }
                 .filter { it.isNotEmpty() }
             val title = if (sentences.size >= 2) sentences.first().take(48) else "FLASH NEWS"
-            val bullets = if (sentences.size >= 2) sentences.drop(1) else sentences
+            val bullets = (if (sentences.size >= 2) sentences.drop(1) else sentences).take(4)
             createSegmentBannerBitmap(context, title, bullets)
         }
     }
@@ -54,30 +54,93 @@ object NewsBannerRenderer {
         title: String,
         bullets: List<String>,
         playerCutoutUri: String? = null,
+        bulletEndFractions: List<Float>? = null,
     ): String {
-        if (NewsTemplateStore.get(context) == NewsTemplateStore.BROADCAST_CARD) {
-            return createBroadcastCardBitmap(context, title, bullets, playerCutoutUri)
-        }
+        val isBroadcast = NewsTemplateStore.get(context) == NewsTemplateStore.BROADCAST_CARD
         val width = 1920
         val height = 1080
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-
-        drawDefaultStadiumBackground(canvas, width.toFloat(), height.toFloat())
-        drawPlayerCutoutOnRight(canvas, playerCutoutUri, width.toFloat(), height.toFloat())
-
         val cleanTitle = title.trim().ifEmpty { "FLASH NEWS" }
-        val cleanBullets = bullets.map { it.trim() }.filter { it.isNotEmpty() }
+        val cleanBullets = bullets.map { it.trim() }.filter { it.isNotEmpty() }.take(4)
 
+        // Render background + higher player cutout ONCE and reuse for highlight states
+        val baseBg = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val bgCanvas = Canvas(baseBg)
+        if (isBroadcast) {
+            drawNightBroadcastBackground(bgCanvas, width.toFloat(), height.toFloat())
+        } else {
+            drawDefaultStadiumBackground(bgCanvas, width.toFloat(), height.toFloat())
+        }
+        drawPlayerCutoutOnRight(bgCanvas, playerCutoutUri, width.toFloat(), height.toFloat())
+
+        val dir = File(context.filesDir, "news_banners").apply { mkdirs() }
+        val batchName = "news_banner_${System.currentTimeMillis()}_${fileCounter.incrementAndGet()}"
+        val mainFile = File(dir, "$batchName.png")
+
+        val frameCount = if (cleanBullets.size > 1) cleanBullets.size else 1
+        try {
+            for (activeIdx in 0 until frameCount) {
+                val frameBmp = if (activeIdx == frameCount - 1) {
+                    baseBg
+                } else {
+                    baseBg.copy(Bitmap.Config.ARGB_8888, true)
+                }
+                val canvas = Canvas(frameBmp)
+                val highlightIdx = if (cleanBullets.size > 1) activeIdx else 0
+                if (isBroadcast) {
+                    drawBroadcastCards(canvas, cleanTitle, cleanBullets, highlightIdx)
+                } else {
+                    drawStadiumFlashCards(canvas, cleanTitle, cleanBullets, highlightIdx)
+                }
+
+                val targetFile = if (frameCount > 1) {
+                    File(dir, "${batchName}_$activeIdx.png")
+                } else {
+                    mainFile
+                }
+                FileOutputStream(targetFile).use { out ->
+                    frameBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+                }
+                if (activeIdx == 0 && frameCount > 1) {
+                    FileOutputStream(mainFile).use { out ->
+                        frameBmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+                    }
+                }
+                if (frameBmp !== baseBg) {
+                    frameBmp.recycle()
+                }
+            }
+        } finally {
+            if (!baseBg.isRecycled) baseBg.recycle()
+        }
+
+        if (frameCount > 1) {
+            val fracs = bulletEndFractions?.takeIf { it.size == frameCount }
+                ?: List(frameCount) { i -> (i + 1).toFloat() / frameCount.toFloat() }
+            val metaFile = File(dir, "$batchName.meta")
+            runCatching {
+                metaFile.writeText(fracs.joinToString(",") { "%.4f".format(java.util.Locale.US, it) })
+            }
+        }
+
+        return Uri.fromFile(mainFile).toString()
+    }
+
+    private fun drawStadiumFlashCards(
+        canvas: Canvas,
+        cleanTitle: String,
+        cleanBullets: List<String>,
+        activeIndex: Int,
+    ) {
         val cardLeft = 108f
         val cardWidth = 960f
         val goldWedgeW = 86f
         val tabWidth = 80f
-        val skew = 36f
-        val textPadL = 28f
-        val textPadR = 30f
-        val topMargin = 115f
-        val maxBottom = 900f
+        val skew = 34f
+        val textPadL = 26f
+        val textPadR = 28f
+        val topMargin = 92f
+        val maxBottom = 945f
+        val rowGap = if (cleanBullets.size >= 3) 10f else 12f
 
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -85,7 +148,7 @@ object NewsBannerRenderer {
         }
         val tagPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            textSize = 23f
+            textSize = 22f
             color = AndroidColor.parseColor("#FFD500")
             letterSpacing = 0.08f
         }
@@ -93,42 +156,45 @@ object NewsBannerRenderer {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
 
-        var titleSize = 44f
-        var bulletSize = 33f
-        var headerH = 148f
+        var titleSize = 42f
+        var bulletSize = if (cleanBullets.size >= 3) 29f else 32f
+        var headerH = 136f
         var bulletHeights = emptyList<Float>()
 
-        while (bulletSize >= 19f) {
+        while (bulletSize >= 16f) {
             titlePaint.textSize = titleSize
             val titleMaxW = cardWidth - goldWedgeW - textPadL - textPadR - skew
             val titleLines = wrapLines(cleanTitle, titlePaint, titleMaxW)
-            headerH = 54f + titleLines.size * (titleSize * 1.24f) + 22f
+            headerH = 50f + titleLines.size * (titleSize * 1.22f) + 20f
 
             bulletPaint.textSize = bulletSize
-            val bLineH = bulletSize * 1.32f
+            val bLineH = bulletSize * 1.28f
             val bMaxW = cardWidth - tabWidth - textPadL - textPadR - skew
             bulletHeights = cleanBullets.map { b ->
                 val bLines = wrapLines(b, bulletPaint, bMaxW)
-                bLines.size * bLineH + 36f
+                bLines.size * bLineH + 30f
             }
 
-            val totalH = headerH + 16f + bulletHeights.sum() + (cleanBullets.size * 12f)
+            val totalH = headerH + 14f + bulletHeights.sum() + (maxOf(0, cleanBullets.size - 1) * rowGap)
             if (topMargin + totalH <= maxBottom) break
 
-            bulletSize -= 2f
-            titleSize = (titleSize - 2f).coerceAtLeast(28f)
+            bulletSize -= 1.5f
+            titleSize = (titleSize - 1.5f).coerceAtLeast(26f)
         }
 
-        val totalBlockH = headerH + 16f + bulletHeights.sum() + maxOf(0, cleanBullets.size - 1) * 12f
-        var currY = topMargin + ((maxBottom - topMargin - totalBlockH).coerceAtLeast(0f) * 0.40f)
+        val totalBlockH = headerH + 14f + bulletHeights.sum() + maxOf(0, cleanBullets.size - 1) * rowGap
+        var currY = topMargin + ((maxBottom - topMargin - totalBlockH).coerceAtLeast(0f) * 0.35f)
 
         val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = AndroidColor.argb(145, 0, 0, 0)
             setShadowLayer(20f, 5f, 9f, AndroidColor.argb(180, 0, 0, 0))
         }
+        val activeGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = AndroidColor.argb(190, 255, 213, 0)
+            setShadowLayer(26f, 0f, 0f, AndroidColor.argb(235, 255, 213, 0))
+        }
         val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = 2.8f
         }
 
         val hdrSkew = skew * (headerH / 120f).coerceIn(0.85f, 1.3f)
@@ -167,55 +233,64 @@ object NewsBannerRenderer {
         canvas.drawPath(slantedRect(cardLeft, currY, cardWidth, headerH, hdrSkew), borderPaint)
 
         val hdrTextX = hdrMainX + textPadL
-        canvas.drawText("⚡ FLASH NEWS", hdrTextX, currY + 38f, tagPaint)
+        canvas.drawText("⚡ FLASH NEWS", hdrTextX, currY + 36f, tagPaint)
 
         titlePaint.textSize = titleSize
         titlePaint.color = AndroidColor.WHITE
         val titleLines = wrapLines(cleanTitle, titlePaint, cardWidth - goldWedgeW - textPadL - textPadR - hdrSkew)
-        var ty = currY + 48f + titleSize
+        var ty = currY + 46f + titleSize
         titleLines.forEach { line ->
             canvas.drawText(line, hdrTextX, ty, titlePaint)
-            ty += titleSize * 1.24f
+            ty += titleSize * 1.22f
         }
 
-        currY += headerH + 16f
+        currY += headerH + 14f
 
         bulletPaint.textSize = bulletSize
-        val bLineH = bulletSize * 1.32f
+        val bLineH = bulletSize * 1.28f
         val bMaxW = cardWidth - tabWidth - textPadL - textPadR - skew
 
         val numPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            textSize = 26f
-            color = AndroidColor.parseColor("#FFE600")
+            textSize = 25f
             textAlign = Paint.Align.CENTER
         }
-        val goldStripPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = AndroidColor.parseColor("#FFB300")
-        }
+        val stripPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
         cleanBullets.forEachIndexed { idx, sentence ->
-            val bh = bulletHeights.getOrElse(idx) { 80f }
+            val bh = bulletHeights.getOrElse(idx) { 74f }
             val rowSkew = skew * (bh / 100f).coerceIn(0.65f, 1.15f)
             val rowLeft = cardLeft - 6f
+            val isActive = idx == activeIndex
 
             val fullCardPath = slantedRect(rowLeft, currY, cardWidth, bh, rowSkew)
-            canvas.drawPath(fullCardPath, shadowPaint)
+            canvas.drawPath(fullCardPath, if (isActive) activeGlowPaint else shadowPaint)
 
             val tabPath = slantedRect(rowLeft, currY, tabWidth, bh, rowSkew)
             val tabPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                shader = LinearGradient(
-                    rowLeft, currY, rowLeft + tabWidth, currY + bh,
-                    AndroidColor.parseColor("#2A0A8F"),
-                    AndroidColor.parseColor("#12044A"),
-                    Shader.TileMode.CLAMP,
-                )
+                shader = if (isActive) {
+                    LinearGradient(
+                        rowLeft, currY, rowLeft + tabWidth, currY + bh,
+                        AndroidColor.parseColor("#FF1744"),
+                        AndroidColor.parseColor("#A80028"),
+                        Shader.TileMode.CLAMP,
+                    )
+                } else {
+                    LinearGradient(
+                        rowLeft, currY, rowLeft + tabWidth, currY + bh,
+                        AndroidColor.parseColor("#2A0A8F"),
+                        AndroidColor.parseColor("#12044A"),
+                        Shader.TileMode.CLAMP,
+                    )
+                }
             }
             canvas.drawPath(tabPath, tabPaint)
 
+            stripPaint.color = if (isActive) AndroidColor.WHITE else AndroidColor.parseColor("#FFB300")
             val stripPath = slantedRect(rowLeft + tabWidth - 5f, currY, 6f, bh, rowSkew)
-            canvas.drawPath(stripPath, goldStripPaint)
+            canvas.drawPath(stripPath, stripPaint)
 
+            numPaint.color = if (isActive) AndroidColor.WHITE else AndroidColor.parseColor("#FFE600")
             val numLabel = String.format("%02d", idx + 1)
             canvas.drawText(
                 numLabel,
@@ -228,21 +303,30 @@ object NewsBannerRenderer {
             val bodyW = cardWidth - tabWidth
             val bodyPath = slantedRect(bodyX, currY, bodyW, bh, rowSkew)
             val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                shader = LinearGradient(
-                    bodyX, currY, bodyX + bodyW, currY + bh,
-                    AndroidColor.parseColor("#FFFFFF"),
-                    AndroidColor.parseColor("#E3EAF7"),
-                    Shader.TileMode.CLAMP,
-                )
+                shader = if (isActive) {
+                    LinearGradient(
+                        bodyX, currY, bodyX + bodyW, currY + bh,
+                        AndroidColor.parseColor("#FFF59D"),
+                        AndroidColor.parseColor("#FFD54F"),
+                        Shader.TileMode.CLAMP,
+                    )
+                } else {
+                    LinearGradient(
+                        bodyX, currY, bodyX + bodyW, currY + bh,
+                        AndroidColor.parseColor("#ECEFF8"),
+                        AndroidColor.parseColor("#D5DFF0"),
+                        Shader.TileMode.CLAMP,
+                    )
+                }
             }
             canvas.drawPath(bodyPath, bodyPaint)
 
-            borderPaint.color = AndroidColor.parseColor("#CCFFFFFF")
-            borderPaint.strokeWidth = 2.2f
+            borderPaint.color = if (isActive) AndroidColor.parseColor("#FFFF00") else AndroidColor.parseColor("#99FFFFFF")
+            borderPaint.strokeWidth = if (isActive) 4.2f else 1.8f
             canvas.drawPath(fullCardPath, borderPaint)
 
             val lines = wrapLines(sentence, bulletPaint, bMaxW)
-            var ly = currY + 22f + bulletSize * 0.9f
+            var ly = currY + 18f + bulletSize * 0.9f
             val bxText = bodyX + textPadL + rowSkew * 0.32f
             lines.forEach { line ->
                 drawHighlightedLine(
@@ -251,54 +335,32 @@ object NewsBannerRenderer {
                     startX = bxText,
                     y = ly,
                     paint = bulletPaint,
-                    tamilColor = AndroidColor.parseColor("#0F0A38"),
-                    highlightColor = AndroidColor.parseColor("#C80036"),
+                    tamilColor = if (isActive) AndroidColor.parseColor("#0A0424") else AndroidColor.parseColor("#1D2247"),
+                    highlightColor = if (isActive) AndroidColor.parseColor("#C80028") else AndroidColor.parseColor("#9C1A3C"),
                 )
                 ly += bLineH
             }
 
-            currY += bh + 12f
+            currY += bh + rowGap
         }
-
-        val dir = File(context.filesDir, "news_banners").apply { mkdirs() }
-        val file = File(dir, "news_banner_${System.currentTimeMillis()}_${fileCounter.incrementAndGet()}.png")
-        FileOutputStream(file).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-        }
-        bitmap.recycle()
-        return Uri.fromFile(file).toString()
     }
 
-    /**
-     * Template 2 - "Night Broadcast Card": flat (non-slanted) rounded cards on a dark night
-     * stadium with crimson header + gold number badges.
-     */
-    private fun createBroadcastCardBitmap(
-        context: Context,
-        title: String,
-        bullets: List<String>,
-        playerCutoutUri: String? = null,
-    ): String {
-        val width = 1920
-        val height = 1080
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-
-        drawNightBroadcastBackground(canvas, width.toFloat(), height.toFloat())
-        drawPlayerCutoutOnRight(canvas, playerCutoutUri, width.toFloat(), height.toFloat())
-
-        val cleanTitle = title.trim().ifEmpty { "FLASH NEWS" }
-        val cleanBullets = bullets.map { it.trim() }.filter { it.isNotEmpty() }
-
+    private fun drawBroadcastCards(
+        canvas: Canvas,
+        cleanTitle: String,
+        cleanBullets: List<String>,
+        activeIndex: Int,
+    ) {
         val cardLeft = 108f
         val cardWidth = 960f
         val accentW = 16f
         val badgeArea = 92f
-        val padL = 34f
-        val padR = 30f
-        val topMargin = 115f
-        val maxBottom = 900f
-        val radius = 22f
+        val padL = 32f
+        val padR = 28f
+        val topMargin = 92f
+        val maxBottom = 945f
+        val radius = 20f
+        val rowGap = if (cleanBullets.size >= 3) 10f else 12f
 
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -307,7 +369,7 @@ object NewsBannerRenderer {
         }
         val tagPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            textSize = 23f
+            textSize = 22f
             color = AndroidColor.parseColor("#FFD54F")
             letterSpacing = 0.10f
         }
@@ -315,38 +377,42 @@ object NewsBannerRenderer {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
 
-        var titleSize = 44f
-        var bulletSize = 33f
-        var headerH = 148f
+        var titleSize = 42f
+        var bulletSize = if (cleanBullets.size >= 3) 29f else 32f
+        var headerH = 136f
         var bulletHeights = emptyList<Float>()
 
-        while (bulletSize >= 19f) {
+        while (bulletSize >= 16f) {
             titlePaint.textSize = titleSize
             val titleMaxW = cardWidth - accentW - padL - padR
             val titleLines = wrapLines(cleanTitle, titlePaint, titleMaxW)
-            headerH = 56f + titleLines.size * (titleSize * 1.24f) + 22f
+            headerH = 52f + titleLines.size * (titleSize * 1.22f) + 20f
 
             bulletPaint.textSize = bulletSize
-            val bLineH = bulletSize * 1.32f
+            val bLineH = bulletSize * 1.28f
             val bMaxW = cardWidth - accentW - badgeArea - padR
             bulletHeights = cleanBullets.map { b ->
                 val bLines = wrapLines(b, bulletPaint, bMaxW)
-                bLines.size * bLineH + 36f
+                bLines.size * bLineH + 30f
             }
 
-            val totalH = headerH + 16f + bulletHeights.sum() + (cleanBullets.size * 12f)
+            val totalH = headerH + 14f + bulletHeights.sum() + (maxOf(0, cleanBullets.size - 1) * rowGap)
             if (topMargin + totalH <= maxBottom) break
 
-            bulletSize -= 2f
-            titleSize = (titleSize - 2f).coerceAtLeast(28f)
+            bulletSize -= 1.5f
+            titleSize = (titleSize - 1.5f).coerceAtLeast(26f)
         }
 
-        val totalBlockH = headerH + 16f + bulletHeights.sum() + maxOf(0, cleanBullets.size - 1) * 12f
-        var currY = topMargin + ((maxBottom - topMargin - totalBlockH).coerceAtLeast(0f) * 0.40f)
+        val totalBlockH = headerH + 14f + bulletHeights.sum() + maxOf(0, cleanBullets.size - 1) * rowGap
+        var currY = topMargin + ((maxBottom - topMargin - totalBlockH).coerceAtLeast(0f) * 0.35f)
 
         val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = AndroidColor.argb(150, 0, 0, 0)
             setShadowLayer(22f, 4f, 10f, AndroidColor.argb(190, 0, 0, 0))
+        }
+        val activeGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = AndroidColor.argb(195, 255, 213, 0)
+            setShadowLayer(26f, 0f, 0f, AndroidColor.argb(235, 255, 193, 7))
         }
         val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -354,9 +420,7 @@ object NewsBannerRenderer {
         val goldPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = AndroidColor.parseColor("#FFC107")
         }
-        val redPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = AndroidColor.parseColor("#E5173F")
-        }
+        val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
         val hdrRect = RectF(cardLeft, currY, cardLeft + cardWidth, currY + headerH)
         canvas.drawRoundRect(hdrRect, radius, radius, shadowPaint)
@@ -383,62 +447,79 @@ object NewsBannerRenderer {
         canvas.drawRoundRect(hdrRect, radius, radius, borderPaint)
 
         val hdrTextX = cardLeft + accentW + padL
-        canvas.drawCircle(hdrTextX + 8f, currY + 31f, 8f, goldPaint)
-        canvas.drawText("BREAKING FLASH NEWS", hdrTextX + 28f, currY + 38f, tagPaint)
+        canvas.drawCircle(hdrTextX + 8f, currY + 30f, 8f, goldPaint)
+        canvas.drawText("BREAKING FLASH NEWS", hdrTextX + 28f, currY + 37f, tagPaint)
 
         titlePaint.textSize = titleSize
         val titleLines = wrapLines(cleanTitle, titlePaint, cardWidth - accentW - padL - padR)
-        var ty = currY + 52f + titleSize
+        var ty = currY + 48f + titleSize
         titleLines.forEach { line ->
             canvas.drawText(line, hdrTextX, ty, titlePaint)
-            ty += titleSize * 1.24f
+            ty += titleSize * 1.22f
         }
 
-        currY += headerH + 16f
+        currY += headerH + 14f
 
         bulletPaint.textSize = bulletSize
-        val bLineH = bulletSize * 1.32f
+        val bLineH = bulletSize * 1.28f
         val bMaxW = cardWidth - accentW - badgeArea - padR
 
         val numPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            textSize = 28f
-            color = AndroidColor.parseColor("#1A1A1A")
+            textSize = 27f
             textAlign = Paint.Align.CENTER
         }
+        val badgeCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
         cleanBullets.forEachIndexed { idx, sentence ->
-            val bh = bulletHeights.getOrElse(idx) { 80f }
+            val bh = bulletHeights.getOrElse(idx) { 74f }
             val rowRect = RectF(cardLeft, currY, cardLeft + cardWidth, currY + bh)
+            val isActive = idx == activeIndex
 
-            canvas.drawRoundRect(rowRect, radius, radius, shadowPaint)
+            canvas.drawRoundRect(rowRect, radius, radius, if (isActive) activeGlowPaint else shadowPaint)
 
             val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                shader = LinearGradient(
-                    rowRect.left, rowRect.top, rowRect.right, rowRect.bottom,
-                    AndroidColor.parseColor("#F2101018"),
-                    AndroidColor.parseColor("#F21E1A26"),
-                    Shader.TileMode.CLAMP,
-                )
+                shader = if (isActive) {
+                    LinearGradient(
+                        rowRect.left, rowRect.top, rowRect.right, rowRect.bottom,
+                        intArrayOf(
+                            AndroidColor.parseColor("#E5173F"),
+                            AndroidColor.parseColor("#AD082A"),
+                            AndroidColor.parseColor("#6E0016"),
+                        ),
+                        floatArrayOf(0f, 0.55f, 1f),
+                        Shader.TileMode.CLAMP,
+                    )
+                } else {
+                    LinearGradient(
+                        rowRect.left, rowRect.top, rowRect.right, rowRect.bottom,
+                        AndroidColor.parseColor("#DC0E0E14"),
+                        AndroidColor.parseColor("#DC181520"),
+                        Shader.TileMode.CLAMP,
+                    )
+                }
             }
             val rowClip = Path().apply { addRoundRect(rowRect, radius, radius, Path.Direction.CW) }
             canvas.save()
             canvas.clipPath(rowClip)
             canvas.drawRect(rowRect, bodyPaint)
-            canvas.drawRect(cardLeft, currY, cardLeft + accentW, currY + bh, redPaint)
+            accentPaint.color = if (isActive) AndroidColor.parseColor("#FFE600") else AndroidColor.parseColor("#99E5173F")
+            canvas.drawRect(cardLeft, currY, cardLeft + accentW, currY + bh, accentPaint)
             canvas.restore()
 
-            borderPaint.color = AndroidColor.argb(210, 255, 193, 7)
-            borderPaint.strokeWidth = 2.4f
+            borderPaint.color = if (isActive) AndroidColor.parseColor("#FFE600") else AndroidColor.argb(110, 255, 193, 7)
+            borderPaint.strokeWidth = if (isActive) 4.2f else 1.6f
             canvas.drawRoundRect(rowRect, radius, radius, borderPaint)
 
             val badgeCx = cardLeft + accentW + badgeArea / 2f
             val badgeCy = currY + bh / 2f
-            canvas.drawCircle(badgeCx, badgeCy, 29f, goldPaint)
+            badgeCirclePaint.color = if (isActive) AndroidColor.WHITE else AndroidColor.parseColor("#D9A800")
+            canvas.drawCircle(badgeCx, badgeCy, 27f, badgeCirclePaint)
+            numPaint.color = if (isActive) AndroidColor.parseColor("#B80C2E") else AndroidColor.parseColor("#1A1A1A")
             canvas.drawText(String.format("%02d", idx + 1), badgeCx, badgeCy + 10f, numPaint)
 
             val lines = wrapLines(sentence, bulletPaint, bMaxW)
-            var ly = currY + 22f + bulletSize * 0.9f
+            var ly = currY + 18f + bulletSize * 0.9f
             val bxText = cardLeft + accentW + badgeArea
             lines.forEach { line ->
                 drawHighlightedLine(
@@ -447,27 +528,19 @@ object NewsBannerRenderer {
                     startX = bxText,
                     y = ly,
                     paint = bulletPaint,
-                    tamilColor = AndroidColor.WHITE,
-                    highlightColor = AndroidColor.parseColor("#FFD54F"),
+                    tamilColor = if (isActive) AndroidColor.WHITE else AndroidColor.argb(200, 255, 255, 255),
+                    highlightColor = if (isActive) AndroidColor.parseColor("#FFE600") else AndroidColor.parseColor("#FFD54F"),
                 )
                 ly += bLineH
             }
 
-            currY += bh + 12f
+            currY += bh + rowGap
         }
-
-        val dir = File(context.filesDir, "news_banners").apply { mkdirs() }
-        val file = File(dir, "news_banner_${System.currentTimeMillis()}_${fileCounter.incrementAndGet()}.png")
-        FileOutputStream(file).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-        }
-        bitmap.recycle()
-        return Uri.fromFile(file).toString()
     }
 
     /**
-     * Composites the player cutout PNG directly onto the right side of the 1920x1080
-     * News Alert banner so the photo and News Alert act as ONE single timeline clip.
+     * Composites the player cutout PNG HIGHER UP on the right side of the 1920x1080
+     * News Alert banner so the head and shoulders sit prominently in the upper broadcast zone.
      */
     private fun drawPlayerCutoutOnRight(
         canvas: Canvas,
@@ -481,14 +554,14 @@ object NewsBannerRenderer {
         if (!file.exists() || file.length() <= 0L) return
 
         val decoded = runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull() ?: return
-        val faded = applySoftBottomFadeCopy(decoded, 0.14f)
+        val faded = applySoftBottomFadeCopy(decoded, 0.16f)
         if (faded !== decoded) decoded.recycle()
 
         try {
             val zoneLeft = 1095f
-            val zoneRight = w - 28f
-            val zoneTop = 75f
-            val zoneBottom = h - 18f
+            val zoneRight = w - 32f
+            val zoneTop = 36f
+            val zoneBottom = h * 0.84f // Raised significantly higher above bottom pitch
             val zoneW = (zoneRight - zoneLeft).coerceAtLeast(100f)
             val zoneH = (zoneBottom - zoneTop).coerceAtLeast(100f)
 
@@ -496,19 +569,19 @@ object NewsBannerRenderer {
             val dw = faded.width * scale
             val dh = faded.height * scale
             val left = zoneLeft + (zoneW - dw) / 2f
-            val top = zoneBottom - dh
+            val top = zoneTop + (zoneH - dh) * 0.25f
 
             val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 shader = RadialGradient(
                     left + dw * 0.5f,
-                    top + dh * 0.45f,
+                    top + dh * 0.42f,
                     max(dw, dh) * 0.62f,
                     intArrayOf(AndroidColor.argb(95, 255, 215, 90), AndroidColor.TRANSPARENT),
                     null,
                     Shader.TileMode.CLAMP,
                 )
             }
-            canvas.drawCircle(left + dw * 0.5f, top + dh * 0.45f, max(dw, dh) * 0.62f, haloPaint)
+            canvas.drawCircle(left + dw * 0.5f, top + dh * 0.42f, max(dw, dh) * 0.62f, haloPaint)
 
             val bmpPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
             canvas.drawBitmap(faded, null, RectF(left, top, left + dw, top + dh), bmpPaint)
@@ -541,7 +614,6 @@ object NewsBannerRenderer {
         return copy
     }
 
-    /** Dark night stadium: near-black sky, crimson + gold floodlights, dark pitch strip. */
     private fun drawNightBroadcastBackground(canvas: Canvas, w: Float, h: Float) {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
 
