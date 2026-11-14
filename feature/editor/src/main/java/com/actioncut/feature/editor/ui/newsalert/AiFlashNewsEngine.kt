@@ -36,6 +36,162 @@ object AiFlashNewsEngine {
         "gemini-3-flash-preview",
     )
 
+    private val PLAYER_ALIAS_MAP = listOf(
+        "ஷ்ரேயாஸ் அய்யர்" to "Shreyas Iyer",
+        "ஷ்ரேயாஸ் ஐயர்" to "Shreyas Iyer",
+        "ஸ்ரேயாஸ் அய்யர்" to "Shreyas Iyer",
+        "ஸ்ரேயாஸ் ஐயர்" to "Shreyas Iyer",
+        "ஷ்ரேயாஸ்" to "Shreyas Iyer",
+        "ஸ்ரேயாஸ்" to "Shreyas Iyer",
+        "இஷான் கிஷன்" to "Ishan Kishan",
+        "இஷான் கிஷான்" to "Ishan Kishan",
+        "இஷான்" to "Ishan Kishan",
+        "விராட் கோலி" to "Virat Kohli",
+        "விராட் கோஹ்லி" to "Virat Kohli",
+        "விராட்" to "Virat Kohli",
+        "கோலி" to "Virat Kohli",
+        "கோஹ்லி" to "Virat Kohli",
+        "ரோஹித் சர்மா" to "Rohit Sharma",
+        "ரோகித் சர்மா" to "Rohit Sharma",
+        "ரோஹித்" to "Rohit Sharma",
+        "ரோகித்" to "Rohit Sharma",
+        "ருதுராஜ் கெய்க்வாட்" to "Ruturaj Gaikwad",
+        "ருதுராஜ்" to "Ruturaj Gaikwad",
+        "கெய்க்வாட்" to "Ruturaj Gaikwad",
+        "சுப்மன் கில்" to "Shubman Gill",
+        "சுப்மன்" to "Shubman Gill",
+        "சூர்யகுமார் யாதவ்" to "Suryakumar Yadav",
+        "சூர்யகுமார்" to "Suryakumar Yadav",
+        "கேஎல் ராகுல்" to "KL Rahul",
+        "கே.எல். ராகுல்" to "KL Rahul",
+        "ராகுல்" to "KL Rahul",
+        "ஜஸ்பிரித் பும்ரா" to "Jasprit Bumrah",
+        "பும்ரா" to "Jasprit Bumrah",
+        "ஹர்திக் பாண்டியா" to "Hardik Pandya",
+        "ஹர்திக்" to "Hardik Pandya",
+        "பாண்டியா" to "Hardik Pandya",
+        "ரவீந்திர ஜடேஜா" to "Ravindra Jadeja",
+        "ஜடேஜா" to "Ravindra Jadeja",
+        "சஞ்சு சாம்சன்" to "Sanju Samson",
+        "சஞ்சு" to "Sanju Samson",
+        "சாம்சன்" to "Sanju Samson",
+        "முகமது சிராஜ்" to "Mohammed Siraj",
+        "சிராஜ்" to "Mohammed Siraj",
+        "முகமது ஷமி" to "Mohammed Shami",
+        "ஷமி" to "Mohammed Shami",
+        "ரிஷப் பண்ட்" to "Rishabh Pant",
+        "ரிஷப்" to "Rishabh Pant",
+        "பண்ட்" to "Rishabh Pant",
+        "அக்சர் படேல்" to "Axar Patel",
+        "அக்ஷர் படேல்" to "Axar Patel",
+        "குல்தீப் யாதவ்" to "Kuldeep Yadav",
+        "குல்தீப்" to "Kuldeep Yadav",
+        "அர்ஷ்தீப் சிங்" to "Arshdeep Singh",
+        "அர்ஷ்தீப்" to "Arshdeep Singh",
+        "யஷஸ்வி ஜெய்ஸ்வால்" to "Yashasvi Jaiswal",
+        "ஜெய்ஸ்வால்" to "Yashasvi Jaiswal",
+        "திலக் வர்மா" to "Tilak Varma",
+        "அபிஷேக் சர்மா" to "Abhishek Sharma",
+        "ரிங்கு சிங்" to "Rinku Singh",
+        "சிவம் துபே" to "Shivam Dube",
+        "ஹர்ஷித் ராணா" to "Harshit Rana",
+        "வருண் சக்கரவர்த்தி" to "Varun Chakaravarthy",
+        "வாஷிங்டன் சுந்தர்" to "Washington Sundar",
+        "எம்எஸ் தோனி" to "MS Dhoni",
+        "தோனி" to "MS Dhoni",
+        "கவுதம் கம்பீர்" to "Gautam Gambhir",
+        "கம்பீர்" to "Gautam Gambhir",
+        "நிதீஷ் குமார் ரெட்டி" to "Nitish Kumar Reddy",
+        "நிதீஷ் ரெட்டி" to "Nitish Kumar Reddy",
+        "அன்ஷுல் கம்போஜ்" to "Anshul Kamboj",
+        "நமன் தீர்" to "Naman Dhir",
+        "ஆகிப் நபி" to "Auqib Nabi",
+        "குர்நூர் பிரார்" to "Gurnoor Brar",
+        "மிட்செல் சான்ட்னர்" to "Mitchell Santner",
+        "சான்ட்னர்" to "Mitchell Santner",
+        "மேட் ஹென்றி" to "Matt Henry",
+        "டிம் செய்ஃபெர்ட்" to "Tim Seifert",
+    )
+
+    private val CRICKET_TERM_RULES: List<Pair<Regex, String>> = listOf(
+        // Teams & Franchise names
+        Regex("(?<=^|\\s)இந்திய\\s+அணி(?=$|\\s|[.,!?-])") to "Team India",
+        Regex("(?<=^|\\s)இந்தியா(?=$|\\s|[.,!?-])") to "India",
+        Regex("(?<=^|\\s)ஆஸ்திரேலியா(?=$|\\s|[.,!?-])") to "Australia",
+        Regex("(?<=^|\\s)இங்கிலாந்து(?=$|\\s|[.,!?-])") to "England",
+        Regex("(?<=^|\\s)நியூசிலாந்து(?=$|\\s|[.,!?-])") to "New Zealand",
+        Regex("(?<=^|\\s)தென்\\s*ஆப்பிரிக்கா(?=$|\\s|[.,!?-])") to "South Africa",
+        Regex("(?<=^|\\s)பாகிஸ்தான்(?=$|\\s|[.,!?-])") to "Pakistan",
+        Regex("(?<=^|\\s)இலங்கை(?=$|\\s|[.,!?-])") to "Sri Lanka",
+        Regex("(?<=^|\\s)வங்கதேசம்(?=$|\\s|[.,!?-])") to "Bangladesh",
+        Regex("(?<=^|\\s)ஆப்கானிஸ்தான்(?=$|\\s|[.,!?-])") to "Afghanistan",
+        Regex("(?<=^|\\s)வெஸ்ட்\\s*இண்டீஸ்(?=$|\\s|[.,!?-])") to "West Indies",
+        Regex("(?<=^|\\s)சிஎஸ்கே(?=$|\\s|[.,!?-])") to "CSK",
+        Regex("(?<=^|\\s)ஆர்சிபி(?=$|\\s|[.,!?-])") to "RCB",
+        Regex("(?<=^|\\s)எம்ஐ(?=$|\\s|[.,!?-])") to "MI",
+        Regex("(?<=^|\\s)கேகேஆர்(?=$|\\s|[.,!?-])") to "KKR",
+        Regex("(?<=^|\\s)டீம்(?=$|\\s|[.,!?-])") to "Team",
+        Regex("(?<=^|\\s)டீமை(?=$|\\s|[.,!?-])") to "Team-ஐ",
+        Regex("(?<=^|\\s)டீமின்(?=$|\\s|[.,!?-])") to "Team-ன்",
+        // Batting / Bowling / Wicket / Ball / Run / Over / Out / Score
+        Regex("(?<=^|\\s)நாட்\\s*அவுட்(?=$|\\s|[.,!?-])") to "not out",
+        Regex("(?<=^|\\s)ரன்\\s*அவுட்(?=$|\\s|[.,!?-])") to "run out",
+        Regex("(?<=^|\\s)அவுட்டாகி(?=$|\\s|[.,!?-])") to "out ஆகி",
+        Regex("(?<=^|\\s)அவுட்(?=$|\\s|[.,!?-])") to "out",
+        Regex("(?<=^|\\s)பேட்ஸ்மேன்கள்(?=$|\\s|[.,!?-])") to "batsmen",
+        Regex("(?<=^|\\s)பேட்ஸ்மேன்(?=$|\\s|[.,!?-])") to "batsman",
+        Regex("(?<=^|\\s)பேட்டிங்கில்(?=$|\\s|[.,!?-])") to "batting-ல்",
+        Regex("(?<=^|\\s)பேட்டிங்(?=$|\\s|[.,!?-])") to "batting",
+        Regex("(?<=^|\\s)பேட்(?=$|\\s|[.,!?-])") to "bat",
+        Regex("(?<=^|\\s)பவுலர்கள்(?=$|\\s|[.,!?-])") to "bowlers",
+        Regex("(?<=^|\\s)பவுலர்(?=$|\\s|[.,!?-])") to "bowler",
+        Regex("(?<=^|\\s)பவுலிங்கில்(?=$|\\s|[.,!?-])") to "bowling-ல்",
+        Regex("(?<=^|\\s)பவுலிங்(?=$|\\s|[.,!?-])") to "bowling",
+        Regex("(?<=^|\\s)பந்துவீச்சாளர்கள்(?=$|\\s|[.,!?-])") to "bowlers",
+        Regex("(?<=^|\\s)பந்துவீச்சாளர்(?=$|\\s|[.,!?-])") to "bowler",
+        Regex("(?<=^|\\s)பந்துவீச்சு(?=$|\\s|[.,!?-])") to "bowling",
+        Regex("(?<=^|\\s)பந்துகளை(?=$|\\s|[.,!?-])") to "balls-ஐ",
+        Regex("(?<=^|\\s)பந்துகளில்(?=$|\\s|[.,!?-])") to "balls-ல்",
+        Regex("(?<=^|\\s)பந்துகள்(?=$|\\s|[.,!?-])") to "balls",
+        Regex("(?<=^|\\s)பந்தில்(?=$|\\s|[.,!?-])") to "ball-ல்",
+        Regex("(?<=^|\\s)பந்து(?=$|\\s|[.,!?-])") to "ball",
+        Regex("(?<=^|\\s|\\d)பால்ல(?=$|\\s|[.,!?-])") to "balls-ல்",
+        Regex("(?<=^|\\s|\\d)பாலில்(?=$|\\s|[.,!?-])") to "ball-ல்",
+        Regex("(?<=^|\\s|\\d)பால்ஸ்(?=$|\\s|[.,!?-])") to "balls",
+        Regex("(?<=^|\\s|\\d)பால்(?=$|\\s|[.,!?-])") to "ball",
+        Regex("(?<=^|\\s)விக்கெட்டுகளை(?=$|\\s|[.,!?-])") to "wickets-ஐ",
+        Regex("(?<=^|\\s)விக்கெட்டுகள்(?=$|\\s|[.,!?-])") to "wickets",
+        Regex("(?<=^|\\s)விக்கெட்கள்(?=$|\\s|[.,!?-])") to "wickets",
+        Regex("(?<=^|\\s)விக்கெட்டை(?=$|\\s|[.,!?-])") to "wicket-ஐ",
+        Regex("(?<=^|\\s)விக்கெட்(?=$|\\s|[.,!?-])") to "wicket",
+        Regex("(?<=^|\\s|\\d)ரன்களை(?=$|\\s|[.,!?-])") to "runs-ஐ",
+        Regex("(?<=^|\\s|\\d)ரன்களில்(?=$|\\s|[.,!?-])") to "runs-ல்",
+        Regex("(?<=^|\\s|\\d)ரன்கள்(?=$|\\s|[.,!?-])") to "runs",
+        Regex("(?<=^|\\s|\\d)ரன்(?=$|\\s|[.,!?-])") to "runs",
+        Regex("(?<=^|\\s|\\d)ஓவர்களில்(?=$|\\s|[.,!?-])") to "overs-ல்",
+        Regex("(?<=^|\\s|\\d)ஓவர்கள்(?=$|\\s|[.,!?-])") to "overs",
+        Regex("(?<=^|\\s|\\d)ஓவரில்(?=$|\\s|[.,!?-])") to "over-ல்",
+        Regex("(?<=^|\\s|\\d)ஓவர்ல(?=$|\\s|[.,!?-])") to "overs-ல்",
+        Regex("(?<=^|\\s|\\d)ஓவர்(?=$|\\s|[.,!?-])") to "over",
+        Regex("(?<=^|\\s)ஸ்கோரை(?=$|\\s|[.,!?-])") to "score-ஐ",
+        Regex("(?<=^|\\s)ஸ்கோரில்(?=$|\\s|[.,!?-])") to "score-ல்",
+        Regex("(?<=^|\\s)ஸ்கோர்(?=$|\\s|[.,!?-])") to "score",
+        Regex("(?<=^|\\s)டார்கெட்(?=$|\\s|[.,!?-])") to "target",
+        Regex("(?<=^|\\s)சிக்ஸர்கள்(?=$|\\s|[.,!?-])") to "sixes",
+        Regex("(?<=^|\\s)சிக்ஸர்(?=$|\\s|[.,!?-])") to "six",
+        Regex("(?<=^|\\s)பவுண்டரிகள்(?=$|\\s|[.,!?-])") to "fours",
+        Regex("(?<=^|\\s)பவுண்டரி(?=$|\\s|[.,!?-])") to "four",
+        Regex("(?<=^|\\s)கேட்ச்(?=$|\\s|[.,!?-])") to "catch",
+        Regex("(?<=^|\\s)கேப்டன்(?=$|\\s|[.,!?-])") to "captain",
+        Regex("(?<=^|\\s)கோச்(?=$|\\s|[.,!?-])") to "coach",
+        Regex("(?<=^|\\s)பயிற்சியாளர்(?=$|\\s|[.,!?-])") to "coach",
+        Regex("(?<=^|\\s)ஸ்ட்ரைக்\\s*ரேட்(?=$|\\s|[.,!?-])") to "strike rate",
+        Regex("(?<=^|\\s)எகானமி(?=$|\\s|[.,!?-])") to "economy",
+        Regex("(?<=^|\\s)பவர்பிளே(?=$|\\s|[.,!?-])") to "powerplay",
+        Regex("(?<=^|\\s)இன்னிங்ஸ்(?=$|\\s|[.,!?-])") to "innings",
+        Regex("(?<=^|\\s)மேட்ச்(?=$|\\s|[.,!?-])") to "match",
+    )
+
     data class GenerationResult(
         val segments: List<FlashNewsSegment>,
         val usedAi: Boolean,
@@ -164,16 +320,21 @@ object AiFlashNewsEngine {
 
             Do NOT combine two DIFFERENT players (e.g., Shreyas Iyer and Virat Kohli) into the same Flash News card! Whenever the script switches to a new player, create a separate card at that point.
 
-            STRICT LANGUAGE, KEY-POINTS & DIGITAL NUMBERS RULES:
-            1. Rewrite conversational/spoken monologue into crisp, high-impact IMPORTANT PLAYER KEY POINTS in clean, grammatically COMPLETE Tamil sentences (தமிழ் எழுத்துகளில் மட்டுமே!). NEVER leave a sentence incomplete or cut off!
+            STRICT LANGUAGE, ENGLISH CRICKET TERMS & DIGITAL NUMBERS RULES:
+            1. Rewrite conversational/spoken monologue into crisp, high-impact IMPORTANT PLAYER KEY POINTS in clean, grammatically COMPLETE Tamil sentences. NEVER leave a sentence incomplete or cut off!
             2. Remove casual spoken slang/filler ("மக்களே", "யோசிச்சு பாருங்க", "கத்துறாங்க", "கமெண்ட் பாக்ஸ்ல சொல்லுங்க") and convert them into sharp TV news key points.
             3. ALWAYS USE DIGITAL NUMBERS (0-9) for ALL numbers, runs, balls, overs, wickets, dates, and records! (e.g., "351 runs", "16 balls", "6.5 overs", "50 runs", "100*", "4 wickets", "1st time"). NEVER spell numbers in Tamil words!
-            4. Keep ONLY player/coach/team names and numeric stats/short cricket units ("runs", "balls", "overs", "wickets", "SR") in English inside the Tamil sentences.
+            4. MANDATORY ENGLISH WORDS INSIDE TAMIL SENTENCES (NEVER transliterate these into Tamil script!):
+               - ALL Player & Coach Names in English (e.g., "Ishan Kishan", "Virat Kohli", "Shreyas Iyer", "Gautam Gambhir" — NEVER "இஷான் கிஷன்").
+               - ALL Team Names & "Team" in English (e.g., "Team India", "India", "Australia", "New Zealand", "CSK", "MI", "RCB" — NEVER "டீம்", "இந்தியா").
+               - ALL Cricket Terms & Units in English: "bat", "batting", "batsman", "batsmen", "ball", "balls", "bowl", "bowling", "bowler", "wicket", "wickets", "run", "runs", "over", "overs", "score", "target", "out", "not out", "catch", "LBW", "four", "fours", "six", "sixes", "strike rate", "SR", "economy", "captain", "coach", "match", "innings", "powerplay", "century", "fifty", "IPL", "T20", "ODI", "Test".
+               Example GOOD sentence: "Team மொத்தமாகத் தடுமாறிய போது Ishan Kishan மட்டும் 53 balls-ல் 27 runs எடுத்து out ஆனார்."
+               Example BAD sentence (DO NOT write like this): "டீம் மொத்தமாகத் தடுமாறிய போது இஷான் கிஷன் 53 பால்ல 27 ரன்கள் எடுத்து அவுட்டானார்."
             5. Provide **3 to 4 crisp, complete key-point bullets** per player card (matching our 4-box news graphic layout: 01, 02, 03, 04). Each bullet should be 8 to 18 words, complete in meaning, and chronologically ordered as spoken in the article so each box can be highlighted while spoken.
             6. $playerHint
             7. For EACH extracted player card, return:
-               - "title": short punchy Tamil badge title (2 to 4 words, e.g., "Shreyas Iyer சாதனை", "Virat Kohli அதிரடி", "Naman Dhir அப்டேட்")
-               - "bullets": array of 3 or 4 complete Tamil key-point sentences (with digital numbers!)
+               - "title": short punchy title with English Player/Team name + Tamil tag (2 to 4 words, e.g., "Ishan Kishan போராட்டம்", "Shreyas Iyer சாதனை", "Virat Kohli அதிரடி")
+               - "bullets": array of 3 or 4 complete Tamil+English-terms key-point sentences (with digital numbers!)
                - "playerName": full English name of the HUMAN cricketer/coach (MUST NOT be empty!)
                - "anchorText": EXACT 3 to 5 consecutive words copied verbatim (untouched!) from the original ARTICLE right where this player begins to be discussed (used for offline voice sync).
                - "startFraction": approximate float 0.0..0.95 as backup.
@@ -236,15 +397,16 @@ object AiFlashNewsEngine {
 
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
-            val title = o.optString("title", "FLASH NEWS").trim()
+            val player = o.optString("playerName", "").trim().takeIf { it.isNotEmpty() } ?: continue
+            val rawTitle = o.optString("title", "$player FLASH NEWS").trim()
+            val title = enforceCricketEnglishTerms(rawTitle, player)
             val bArr = o.optJSONArray("bullets") ?: JSONArray()
             val bullets = (0 until bArr.length())
-                .map { bArr.optString(it, "").trim() }
+                .map { enforceCricketEnglishTerms(bArr.optString(it, "").trim(), player) }
                 .filter { it.isNotEmpty() }
                 .take(4)
             if (bullets.isEmpty()) continue
 
-            val player = o.optString("playerName", "").trim().takeIf { it.isNotEmpty() } ?: continue
             val anchor = o.optString("anchorText", "").trim().takeIf { it.isNotEmpty() }
             val aiFrac = o.optDouble("startFraction", (i.toDouble() / max(arr.length(), 1)))
                 .toFloat().coerceIn(0.0f, 0.96f)
@@ -270,6 +432,27 @@ object AiFlashNewsEngine {
             )
         }
         return out.sortedBy { it.startFraction }
+    }
+
+    /** Ensures player/team names and bat/ball/wicket/runs/overs/score/out terms stay in crisp English. */
+    private fun enforceCricketEnglishTerms(input: String, activePlayer: String? = null): String {
+        var s = normalizeCommonTamilNumbers(input)
+        for ((tamilAlias, engName) in PLAYER_ALIAS_MAP) {
+            if (s.contains(tamilAlias)) {
+                s = s.replace(tamilAlias, engName)
+            }
+        }
+        if (!activePlayer.isNullOrBlank()) {
+            for ((tamilAlias, engName) in PLAYER_ALIAS_MAP) {
+                if (engName.equals(activePlayer, ignoreCase = true) && s.contains(tamilAlias)) {
+                    s = s.replace(tamilAlias, activePlayer)
+                }
+            }
+        }
+        for ((pattern, replacement) in CRICKET_TERM_RULES) {
+            s = s.replace(pattern, replacement)
+        }
+        return s.replace(Regex("\\s+"), " ").trim()
     }
 
     private fun extractApiError(body: String): String? = runCatching {
@@ -368,7 +551,8 @@ object AiFlashNewsEngine {
         val weighted = ArrayList<WeightedSentence>(rawSentences.size)
         var cumWeight = 0f
         for (raw in rawSentences) {
-            val cleaned = cleanDisplaySentence(raw)
+            val detected = detectMentionedPlayer(raw, knownPlayers)
+            val cleaned = enforceCricketEnglishTerms(cleanDisplaySentence(raw), detected)
             val w = estimateSpokenWeight(raw)
             if (cleaned.length >= 10) {
                 weighted.add(WeightedSentence(raw = raw, cleaned = cleaned, startWeight = cumWeight))
@@ -391,7 +575,7 @@ object AiFlashNewsEngine {
                 // Continuation sentence for the active player (up to 4 boxes)
                 if (out.isNotEmpty() && out.last().bullets.size < 4 && (frac - currentAnchorFrac) <= 0.18f) {
                     val prev = out.last()
-                    val updatedBullets = prev.bullets + item.cleaned
+                    val updatedBullets = prev.bullets + enforceCricketEnglishTerms(item.cleaned, prev.playerName)
                     out[out.lastIndex] = prev.copy(
                         bullets = updatedBullets,
                         title = buildSmartTitle(prev.playerName, updatedBullets),
@@ -406,7 +590,7 @@ object AiFlashNewsEngine {
                 (frac - currentAnchorFrac) <= 0.15f
             ) {
                 val prev = out.last()
-                val updatedBullets = prev.bullets + item.cleaned
+                val updatedBullets = prev.bullets + enforceCricketEnglishTerms(item.cleaned, player)
                 out[out.lastIndex] = prev.copy(
                     bullets = updatedBullets,
                     title = buildSmartTitle(prev.playerName, updatedBullets),
@@ -416,7 +600,7 @@ object AiFlashNewsEngine {
 
             lastPlayerKey = player
             currentAnchorFrac = frac
-            val bulletsList = listOf(item.cleaned)
+            val bulletsList = listOf(enforceCricketEnglishTerms(item.cleaned, player))
             out.add(
                 FlashNewsSegment(
                     title = buildSmartTitle(player, bulletsList),
@@ -496,9 +680,9 @@ object AiFlashNewsEngine {
             combined.contains("சாதனை") || combined.contains("record") || combined.contains("முதல் முறை") -> "சாதனை"
             combined.contains("சதம்") || combined.contains("century") || Regex("\\b1\\d\\d\\*?\\b").containsMatchIn(combined) -> "சதம்"
             combined.contains("அரைசதம்") || combined.contains("fifty") -> "அரைசதம்"
-            combined.contains("அதிரடி") || combined.contains("சிக்ஸர்") || combined.contains("பவுண்டரி") -> "அதிரடி"
-            combined.contains("விக்கெட்") || combined.contains("ஆட்டமிழ") || combined.contains("பவுலிங்") -> "அப்டேட்"
-            combined.contains("கோச்") || combined.contains("பயிற்சியாளர்") || combined.contains("திட்டம்") -> "திட்டம்"
+            combined.contains("அதிரடி") || combined.contains("six") || combined.contains("four") -> "அதிரடி"
+            combined.contains("wicket") || combined.contains("out") || combined.contains("bowling") -> "அப்டேட்"
+            combined.contains("coach") || combined.contains("திட்டம்") -> "திட்டம்"
             combined.contains("காயம்") || combined.contains("injury") -> "காயம் அப்டேட்"
             combined.contains("வெற்றி") || combined.contains("win") -> "வெற்றி"
             else -> "அப்டேட்"
