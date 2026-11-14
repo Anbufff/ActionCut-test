@@ -80,7 +80,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToLong
 
@@ -192,10 +191,6 @@ fun NewsAlertTemplatesDialog(
     }
 }
 
-/**
- * Flash News Text:
- * பழைய Dialog அமைப்பு மாறாமல், முழு கட்டுரையை Paste செய்து ✨ AI Auto-Sync செய்யும் வசதியுடன்.
- */
 @Composable
 fun FlashNewsTextDialog(
     initialText: String = "",
@@ -283,7 +278,7 @@ fun FlashNewsTextDialog(
                             singleLine = true,
                             placeholder = {
                                 Text(
-                                    "Google AI Studio Free Gemini API Key (Optional for offline)",
+                                    "Google AI Studio Free Gemini API Key",
                                     color = Color(0xFF777777),
                                     fontSize = 12.sp,
                                 )
@@ -371,15 +366,16 @@ fun FlashNewsTextDialog(
                                 scope.launch {
                                     val res = AiFlashNewsEngine.generateSegments(context, text, knownPlayerNames)
                                     isBusy = false
-                                    res.onSuccess { (segments, usedAi) ->
-                                        if (!usedAi && apiKey.isBlank()) {
+                                    res.onSuccess { result ->
+                                        if (!result.usedAi) {
+                                            val reason = result.aiError ?: "No Gemini API Key"
                                             Toast.makeText(
                                                 context,
-                                                "Offline Smart Sync (${segments.size} slides). Add Gemini Key for AI summaries.",
-                                                Toast.LENGTH_SHORT,
+                                                "Offline mode ($reason) — ${result.segments.size} slides",
+                                                Toast.LENGTH_LONG,
                                             ).show()
                                         }
-                                        onAiAutoSync(segments)
+                                        onAiAutoSync(result.segments)
                                     }.onFailure { err ->
                                         Toast.makeText(
                                             context,
@@ -422,6 +418,12 @@ object AiFlashNewsEngine {
     private const val PREFS = "actioncut_ai_news"
     private const val KEY_API = "gemini_api_key"
 
+    data class GenerationResult(
+        val segments: List<FlashNewsSegment>,
+        val usedAi: Boolean,
+        val aiError: String? = null,
+    )
+
     fun getSavedApiKey(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_API, "")
@@ -438,20 +440,24 @@ object AiFlashNewsEngine {
         context: Context,
         fullArticle: String,
         knownPlayers: List<String>,
-    ): Result<Pair<List<FlashNewsSegment>, Boolean>> = withContext(Dispatchers.IO) {
+    ): Result<GenerationResult> = withContext(Dispatchers.IO) {
         val key = getSavedApiKey(context).trim()
+        var aiErrorMsg: String? = null
         if (key.isNotEmpty()) {
             val aiResult = callGeminiWithFallback(key, fullArticle, knownPlayers)
             if (aiResult.isSuccess) {
                 val list = aiResult.getOrNull().orEmpty()
-                if (list.isNotEmpty()) return@withContext Result.success(list to true)
+                if (list.isNotEmpty()) {
+                    return@withContext Result.success(GenerationResult(list, usedAi = true))
+                }
             }
+            aiErrorMsg = aiResult.exceptionOrNull()?.message?.take(90) ?: "AI error"
         }
         val fallback = offlineFallbackSegments(fullArticle, knownPlayers)
         if (fallback.isNotEmpty()) {
-            Result.success(fallback to false)
+            Result.success(GenerationResult(fallback, usedAi = false, aiError = aiErrorMsg))
         } else {
-            Result.failure(IllegalStateException("Could not extract Flash News from text"))
+            Result.failure(IllegalStateException(aiErrorMsg ?: "Could not extract Flash News from text"))
         }
     }
 
@@ -460,7 +466,13 @@ object AiFlashNewsEngine {
         article: String,
         knownPlayers: List<String>,
     ): Result<List<FlashNewsSegment>> {
-        val models = listOf("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash")
+        // Active 2026 Gemini Flash models first, with legacy fallback
+        val models = listOf(
+            "gemini-3.5-flash-lite",
+            "gemini-3.8-flash",
+            "gemini-3-flash",
+            "gemini-2.5-flash",
+        )
         var lastError: Throwable? = null
         for (model in models) {
             val res = runCatching { callGeminiModel(apiKey, model, article, knownPlayers) }
@@ -480,24 +492,25 @@ object AiFlashNewsEngine {
     ): List<FlashNewsSegment> {
         val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
         val playerHint = if (knownPlayers.isNotEmpty()) {
-            "Known player names in local library (prefer exact match if mentioned): ${knownPlayers.take(80).joinToString(", ")}."
+            "Known player names in local library (prefer exact match if mentioned or implied as captain/coach): ${knownPlayers.take(120).joinToString(", ")}."
         } else {
             ""
         }
 
         val prompt = """
             You are a Tamil Cricket TV News Flash Graphics editor.
-            Read the following Tamil cricket voiceover script carefully and extract 7 to 9 key Flash News moments in exact chronological order from start to end of the article.
+            Read the following Tamil cricket voiceover script carefully and extract 8 to 9 key Flash News moments in exact chronological order from start to end of the article.
 
             STRICT RULES:
             1. Remove filler conversational phrases ("மக்களே", "யோசிச்சு பாருங்க", "கமெண்ட் பாக்ஸ்ல சொல்லுங்க").
             2. Convert Tamil spoken numbers into crisp English digits + units (e.g., "முன்னூத்தி ஐம்பத்தியொன்னு" -> "351 runs", "ஆறு புள்ளி அஞ்சு ஓவர்" -> "6.5 overs", "ஒன்பது ஓவர்ல எண்பத்திரண்டு" -> "9 overs 82 runs", "பதினாறு பந்துல ஒன்பது" -> "16 balls 9 runs").
-            3. Keep cricket player and coach names in English (e.g., "Gautam Gambhir", "Nitish Kumar Reddy", "Anshul Kamboj", "Rohit Sharma", "Virat Kohli", "Shubman Gill").
+            3. Keep cricket player and coach names in English (e.g., "Gautam Gambhir", "Nitish Kumar Reddy", "Anshul Kamboj", "Rohit Sharma", "Virat Kohli", "Shubman Gill", "Suryakumar Yadav").
             4. $playerHint
-            5. For each moment return:
+            5. IMPORTANT: Even if a paragraph refers to "கேப்டன்" (captain), "கோச்" (coach), or "அவர்" (he) without repeating the name, infer the actual cricketer/coach from the full article context and set "playerName" to their full English name so their photo appears on screen!
+            6. For each moment return:
                - "title": short punchy Tamil badge title (2 to 4 words, e.g., "அதிர்ச்சி தோல்வி", "கம்பீர் எச்சரிக்கை", "Nitish Kumar சிக்கல்", "இறுதி முடிவு")
-               - "bullets": array of 1 or 2 short punchy Tamil+English bullet points (each 8 to 18 words max so it fits cleanly on a TV news banner)
-               - "playerName": English name of the main cricketer/coach discussed in that segment (or "" if general team news)
+               - "bullets": array of 1 or 2 complete, self-contained Tamil+English bullet points (each 8 to 18 words max; NEVER cut off a sentence mid-way)
+               - "playerName": English full name of the main cricketer/coach discussed in that segment (or "" only if no player/coach is involved)
                - "startFraction": float from 0.02 to 0.90 representing where in the article this moment happens chronologically.
 
             Return ONLY a valid JSON array of objects, no extra text.
@@ -519,7 +532,7 @@ object AiFlashNewsEngine {
             put(
                 "generationConfig",
                 JSONObject()
-                    .put("temperature", 0.25)
+                    .put("temperature", 0.2)
                     .put("responseMimeType", "application/json"),
             )
         }
@@ -538,7 +551,12 @@ object AiFlashNewsEngine {
             ?.bufferedReader()?.use { it.readText() }.orEmpty()
         conn.disconnect()
 
-        require(code in 200..299) { "HTTP $code: $body" }
+        if (code !in 200..299) {
+            val apiMsg = runCatching {
+                JSONObject(body).getJSONObject("error").optString("message")
+            }.getOrNull()
+            throw IllegalStateException("HTTP $code (${apiMsg ?: model})")
+        }
 
         val root = JSONObject(body)
         val rawText = root.getJSONArray("candidates")
@@ -570,7 +588,7 @@ object AiFlashNewsEngine {
                 .filter { it.isNotEmpty() }
             if (bullets.isEmpty()) continue
             val player = o.optString("playerName", "").trim().takeIf { it.isNotEmpty() }
-            val frac = o.optDouble("startFraction", (i + 0.5) / max(arr.length(), 1))
+            val frac = o.optDouble("startFraction", (i + 0.5) / kotlin.math.max(arr.length(), 1))
                 .toFloat().coerceIn(0.01f, 0.94f)
             out.add(FlashNewsSegment(title = title, bullets = bullets, playerName = player, startFraction = frac))
         }
@@ -582,17 +600,26 @@ object AiFlashNewsEngine {
         knownPlayers: List<String>,
     ): List<FlashNewsSegment> {
         val cleaned = normalizeCommonTamilNumbers(fullArticle)
-        val rawBlocks = cleaned
-            .split(Regex("\\n+"))
+        // Merge short lines (<28 chars like "ஆனா இங்க") into paragraphs so fragments never clip
+        val rawParas = cleaned.split(Regex("\\n+"))
             .map { it.trim() }
-            .filter { it.length >= 12 }
+            .filter { it.isNotEmpty() }
 
-        val units = if (rawBlocks.size >= 4) {
-            rawBlocks
+        val mergedUnits = ArrayList<String>()
+        for (p in rawParas) {
+            if (mergedUnits.isNotEmpty() && (mergedUnits.last().length < 36 || p.length < 28)) {
+                mergedUnits[mergedUnits.lastIndex] = "${mergedUnits.last()} $p"
+            } else {
+                mergedUnits.add(p)
+            }
+        }
+
+        val units = if (mergedUnits.size >= 4) {
+            mergedUnits
         } else {
             cleaned.split(Regex("(?<!\\d)\\.(?!\\d)\\s+"))
                 .map { it.trim() }
-                .filter { it.length >= 12 }
+                .filter { it.length >= 20 }
         }
 
         if (units.isEmpty()) {
@@ -608,23 +635,38 @@ object AiFlashNewsEngine {
 
         val targetCount = min(9, units.size).coerceAtLeast(1)
         val out = ArrayList<FlashNewsSegment>(targetCount)
+        var lastPlayer: String? = null
+
         for (k in 0 until targetCount) {
             val idx = ((k.toFloat() / targetCount) * units.size).toInt().coerceIn(0, units.size - 1)
             val block = units[idx]
             val sentences = block.split(Regex("(?<!\\d)\\.(?!\\d)\\s+"))
                 .map { it.trim() }
-                .filter { it.isNotEmpty() }
-            val b1 = sentences.getOrElse(0) { block }.take(130)
-            val b2 = sentences.getOrNull(1)?.take(130)
-            val bullets = listOfNotNull(b1.takeIf { it.isNotEmpty() }, b2?.takeIf { it.isNotEmpty() })
-            val player = detectMentionedPlayer(block, knownPlayers)
+                .filter { it.length >= 10 }
+
+            val b1 = (sentences.getOrElse(0) { block }).take(135)
+            val b2 = sentences.getOrNull(1)?.takeIf { it.length >= 16 }?.take(135)
+            val bullets = listOfNotNull(b1.takeIf { it.isNotEmpty() }, b2)
+
+            // Detect player in block; if pronoun-only block ("அவர்", "இவர்", "கேப்டன்"), carry context
+            val directPlayer = detectMentionedPlayer(block, knownPlayers)
+            val player = directPlayer ?: if (
+                lastPlayer != null &&
+                (block.contains("அவர்") || block.contains("இவர்") || block.contains("இவர") || block.contains("கேப்டன்"))
+            ) {
+                lastPlayer
+            } else {
+                detectMentionedPlayer(fullArticle, knownPlayers)
+            }
+            if (directPlayer != null) lastPlayer = directPlayer
+
             val title = when {
                 k == targetCount - 1 -> "இறுதி முடிவு"
                 player != null -> "$player அப்டேட்"
                 k == 0 -> "முக்கிய செய்தி"
                 else -> "FLASH NEWS ${k + 1}"
             }
-            val frac = (0.04f + (k.toFloat() / max(targetCount, 1)) * 0.86f).coerceIn(0.02f, 0.92f)
+            val frac = (0.04f + (k.toFloat() / kotlin.math.max(targetCount, 1)) * 0.86f).coerceIn(0.02f, 0.92f)
             out.add(FlashNewsSegment(title = title, bullets = bullets, playerName = player, startFraction = frac))
         }
         return out
@@ -632,36 +674,57 @@ object AiFlashNewsEngine {
 
     private fun detectMentionedPlayer(text: String, knownPlayers: List<String>): String? {
         val lower = text.lowercase()
+        // 1. Exact full-name or last-name match against user's CARD ADD + CRIC CDN library
         knownPlayers.firstOrNull { p ->
             val pn = p.trim().lowercase()
             pn.length >= 4 && lower.contains(pn)
         }?.let { return it }
 
+        knownPlayers.firstOrNull { p ->
+            val parts = p.trim().lowercase().split(Regex("\\s+")).filter { it.length >= 4 }
+            parts.any { token -> lower.contains(token) }
+        }?.let { return it }
+
+        // 2. Tamil + English cricketer/coach keyword map
         val commonMap = listOf(
-            "nitish kumar reddy" to "Nitish Kumar Reddy",
+            "nitish" to "Nitish Kumar Reddy",
             "நிதீஷ்" to "Nitish Kumar Reddy",
-            "anshul kamboj" to "Anshul Kamboj",
+            "ரெட்டி" to "Nitish Kumar Reddy",
+            "anshul" to "Anshul Kamboj",
+            "kamboj" to "Anshul Kamboj",
             "அன்ஷுல்" to "Anshul Kamboj",
-            "gautam gambhir" to "Gautam Gambhir",
+            "கம்போஜ்" to "Anshul Kamboj",
+            "gambhir" to "Gautam Gambhir",
             "கம்பீர்" to "Gautam Gambhir",
-            "rohit sharma" to "Rohit Sharma",
+            "கோச்" to "Gautam Gambhir",
+            "பயிற்சியாளர்" to "Gautam Gambhir",
+            "rohit" to "Rohit Sharma",
             "ரோஹித்" to "Rohit Sharma",
-            "virat kohli" to "Virat Kohli",
+            "virat" to "Virat Kohli",
+            "kohli" to "Virat Kohli",
+            "விராட்" to "Virat Kohli",
             "கோலி" to "Virat Kohli",
-            "shubman gill" to "Shubman Gill",
+            "shubman" to "Shubman Gill",
+            "gill" to "Shubman Gill",
+            "சுப்மன்" to "Shubman Gill",
             "கில்" to "Shubman Gill",
-            "kl rahul" to "KL Rahul",
+            "suryakumar" to "Suryakumar Yadav",
+            "surya" to "Suryakumar Yadav",
+            "சூர்யகுமார்" to "Suryakumar Yadav",
+            "சூர்யா" to "Suryakumar Yadav",
+            "கேப்டன்" to "Suryakumar Yadav",
+            "rahul" to "KL Rahul",
             "ராகுல்" to "KL Rahul",
             "bumrah" to "Jasprit Bumrah",
             "பும்ரா" to "Jasprit Bumrah",
             "hardik" to "Hardik Pandya",
             "ஹர்திக்" to "Hardik Pandya",
-            "suryakumar" to "Suryakumar Yadav",
-            "சூர்யகுமார்" to "Suryakumar Yadav",
             "jadeja" to "Ravindra Jadeja",
             "ஜடேஜா" to "Ravindra Jadeja",
             "sanju" to "Sanju Samson",
             "சஞ்சு" to "Sanju Samson",
+            "samson" to "Sanju Samson",
+            "சாம்சன்" to "Sanju Samson",
             "siraj" to "Mohammed Siraj",
             "சிராஜ்" to "Mohammed Siraj",
             "shami" to "Mohammed Shami",
@@ -676,7 +739,28 @@ object AiFlashNewsEngine {
             "அர்ஷ்தீப்" to "Arshdeep Singh",
             "jaiswal" to "Yashasvi Jaiswal",
             "ஜெய்ஸ்வால்" to "Yashasvi Jaiswal",
-            "gill" to "Shubman Gill",
+            "tilak" to "Tilak Varma",
+            "திலக்" to "Tilak Varma",
+            "abhishek" to "Abhishek Sharma",
+            "அபிஷேக்" to "Abhishek Sharma",
+            "rinku" to "Rinku Singh",
+            "ரிங்கு" to "Rinku Singh",
+            "dube" to "Shivam Dube",
+            "துபே" to "Shivam Dube",
+            "harshit" to "Harshit Rana",
+            "ஹர்ஷித்" to "Harshit Rana",
+            "ராணா" to "Harshit Rana",
+            "varun" to "Varun Chakaravarthy",
+            "வருண்" to "Varun Chakaravarthy",
+            "washington" to "Washington Sundar",
+            "வாஷிங்டன்" to "Washington Sundar",
+            "சுந்தர்" to "Washington Sundar",
+            "ishan" to "Ishan Kishan",
+            "இஷான்" to "Ishan Kishan",
+            "shreyas" to "Shreyas Iyer",
+            "iyer" to "Shreyas Iyer",
+            "ஷ்ரேயாஸ்" to "Shreyas Iyer",
+            "அய்யர்" to "Shreyas Iyer",
             "dhoni" to "MS Dhoni",
             "தோனி" to "MS Dhoni",
         )
@@ -697,10 +781,6 @@ object AiFlashNewsEngine {
             .replace("ஒன்பது ரன்", "9 runs")
     }
 
-    /**
-     * Computes voice-pause-aligned (startMs, endMs) windows for each Flash News burst so the
-     * banner pops in ~8-11s at important moments and clears cleanly between segments.
-     */
     suspend fun detectVoicePauseStartsMs(
         context: Context,
         audioClips: List<Clip>,
@@ -711,7 +791,6 @@ object AiFlashNewsEngine {
         val safeTotal = totalDurationMs.coerceAtLeast(segments.size * 6_000L)
         val count = segments.size
 
-        // Ideal burst length: ~10s for 6-min video, scaled down gracefully for shorter clips
         val maxWindowPerSeg = (safeTotal / count.toFloat()).toLong().coerceAtLeast(2_500L)
         val burstDur = min(10_500L, (maxWindowPerSeg * 0.58f).toLong().coerceAtLeast(2_200L))
 
@@ -726,7 +805,6 @@ object AiFlashNewsEngine {
                 .roundToLong()
                 .coerceIn(minNextStart, (safeTotal - burstDur).coerceAtLeast(minNextStart))
 
-            // Snap to nearest quiet speech pause within +-3.5 seconds if audio pauses exist
             val snapped = quietBuckets
                 .filter { abs(it - nominalStart) <= 3_500L && it >= minNextStart && it + burstDur <= safeTotal }
                 .minByOrNull { abs(it - nominalStart) }
@@ -885,7 +963,6 @@ object NewsBannerRenderer {
             color = AndroidColor.parseColor("#FFB300")
         }
 
-        // Auto-fit font size so all bullets fit inside the 1080p banner without clipping
         var chosenSize = 36f
         while (chosenSize >= 22f) {
             textPaint.textSize = chosenSize
@@ -907,7 +984,6 @@ object NewsBannerRenderer {
         val lineHeight = chosenSize * 1.38f
         var currY = topY
 
-        // 1. Yellow Highlight Title Badge (like Screenshot "இறுதி முடிவு")
         if (cleanTitle.isNotEmpty()) {
             bulletPaint.color = AndroidColor.parseColor("#FFB300")
             canvas.drawCircle(startX, currY - chosenSize * 0.30f, 9f, bulletPaint)
@@ -931,7 +1007,6 @@ object NewsBannerRenderer {
             textPaint.setShadowLayer(4f, 1f, 2f, AndroidColor.argb(140, 0, 0, 0))
         }
 
-        // 2. Crisp White Bold Bullets with 'o' Markers
         textPaint.color = AndroidColor.WHITE
         cleanBullets.forEach { sentence ->
             bulletPaint.color = AndroidColor.parseColor("#FF9800")
