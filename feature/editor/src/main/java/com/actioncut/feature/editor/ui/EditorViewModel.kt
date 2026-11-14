@@ -459,8 +459,9 @@ class EditorViewModel @Inject constructor(
 
     /**
      * AI Auto-Sync:
-     * Places ONE combined NEWS ALERT clip (Flash News cards + Player Cutout baked together)
-     * at EVERY player or team mention, synced to the voiceover and never overlapping Scorecards.
+     * Places ONE combined NEWS ALERT clip (4-box Flash News + higher Player Cutout) ONLY when
+     * a valid player photo is found (skips segments without a photo), synced to the voiceover
+     * and never overlapping any CRIC CDN Scorecard.
      */
     fun addAiFlashNewsSequence(segments: List<FlashNewsSegment>) {
         if (segments.isEmpty()) return
@@ -490,7 +491,6 @@ class EditorViewModel @Inject constructor(
                 maxOf(videoEndMs, currentTimeline.durationMs, segments.size * 15_000L)
             }
 
-            // Never place Flash News / Player Cutouts over any CRIC or CRIC CDN Scorecard clip!
             val scorecardRanges = currentTimeline.allClips
                 .filter { it.scorecard != null }
                 .map { it.timelineStartMs..it.timelineEndMs }
@@ -509,40 +509,41 @@ class EditorViewModel @Inject constructor(
             val generatedClips = ArrayList<Clip>()
             val missingPlayers = LinkedHashSet<String>()
             var bannerCount = 0
-            var cutoutCount = 0
 
             withContext(Dispatchers.IO) {
                 segments.forEachIndexed { idx, seg ->
                     val window = windows.getOrNull(idx) ?: return@forEachIndexed
                     val (startMs, endMs) = window
 
-                    var cutoutUri: String? = null
+                    // Skip any segment that does NOT have a valid player photo
                     val rawPlayerName = seg.playerName?.trim().orEmpty()
-                    if (rawPlayerName.isNotEmpty() && !isLikelyTeamName(rawPlayerName)) {
-                        val photoFile = resolvePlayerPhotoFile(rawPlayerName, libraryPlayers, cdnIndex)
-                        if (photoFile != null && photoFile.exists() && photoFile.length() > 0L) {
-                            val photoUri = Uri.fromFile(photoFile).toString()
-                            cutoutUri = AiCutoutManager.getOrCreateCutoutUri(
-                                context = context,
-                                imageUriStr = photoUri,
-                                forceRefresh = false,
-                                softBottomFade = false,
-                            )
-                            if (!cutoutUri.isNullOrBlank()) {
-                                cutoutCount++
-                            } else {
-                                missingPlayers.add(rawPlayerName)
-                            }
-                        } else {
-                            missingPlayers.add(rawPlayerName)
-                        }
+                    if (rawPlayerName.isEmpty() || isLikelyTeamName(rawPlayerName)) {
+                        return@forEachIndexed
+                    }
+                    val photoFile = resolvePlayerPhotoFile(rawPlayerName, libraryPlayers, cdnIndex)
+                    if (photoFile == null || !photoFile.exists() || photoFile.length() <= 0L) {
+                        missingPlayers.add(rawPlayerName)
+                        return@forEachIndexed
+                    }
+                    val photoUri = Uri.fromFile(photoFile).toString()
+                    val cutoutUri = AiCutoutManager.getOrCreateCutoutUri(
+                        context = context,
+                        imageUriStr = photoUri,
+                        forceRefresh = false,
+                        softBottomFade = false,
+                    )
+                    if (cutoutUri.isNullOrBlank()) {
+                        missingPlayers.add(rawPlayerName)
+                        return@forEachIndexed
                     }
 
+                    val bulletEndFractions = AiFlashNewsEngine.computeBulletEndFractions(seg.bullets)
                     val bannerUri = NewsBannerRenderer.createSegmentBannerBitmap(
                         context = context,
                         title = seg.title,
                         bullets = seg.bullets,
                         playerCutoutUri = cutoutUri,
+                        bulletEndFractions = bulletEndFractions,
                     )
                     val bannerClip = Clip(
                         id = "banner_ai_${System.currentTimeMillis()}_$idx",
@@ -558,11 +559,12 @@ class EditorViewModel @Inject constructor(
             }
 
             if (generatedClips.isEmpty()) {
-                Toast.makeText(
-                    context,
-                    "All Flash News fell inside Scorecard — none added.",
-                    Toast.LENGTH_LONG,
-                ).show()
+                val missMsg = if (missingPlayers.isNotEmpty()) {
+                    "No player photos found (add in CARD ADD): ${missingPlayers.take(4).joinToString(", ")}"
+                } else {
+                    "No Flash News with player photo available (or fell inside Scorecard)."
+                }
+                Toast.makeText(context, missMsg, Toast.LENGTH_LONG).show()
                 return@launch
             }
 
@@ -585,13 +587,13 @@ class EditorViewModel @Inject constructor(
             val firstClip = generatedClips.first()
             _uiState.update { it.copy(selectedClipId = firstClip.id) }
             val missingNote = if (missingPlayers.isNotEmpty()) {
-                "\nMissing photo (add in CARD ADD): ${missingPlayers.take(3).joinToString(", ")}"
+                "\nSkipped (no photo in CARD ADD): ${missingPlayers.take(3).joinToString(", ")}"
             } else {
                 ""
             }
             Toast.makeText(
                 context,
-                "$bannerCount Flash News ($cutoutCount with Cutout) synced as single clips!$missingNote",
+                "$bannerCount Flash News cards synced!$missingNote",
                 Toast.LENGTH_LONG,
             ).show()
         }
