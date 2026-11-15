@@ -11,12 +11,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,7 +27,7 @@ import com.actioncut.core.designsystem.component.ToolItem
 
 /**
  * Contextual action bar shown above the toolbar whenever a clip is selected.
- * Includes Split, Duplicate, Delete, Trim R, and Done.
+ * Left-side Card button toggles the queued Auto Card popup; includes Split, Duplicate, Delete, Trim R, and Done.
  */
 @Composable
 fun SelectedClipBar(
@@ -37,11 +37,16 @@ fun SelectedClipBar(
     onTrimRight: () -> Unit = {},
     onDeselect: () -> Unit,
     modifier: Modifier = Modifier,
-    /** Only for scorecard clips: switches between the 3 scorecard designs. */
+    /** Only for scorecard / auto-card clips: switches between designs. */
     onTheme: (() -> Unit)? = null,
     themeLabel: String = "Design",
+    /** Left-side Card queue button (replaces static "Clip" label). */
+    onCardClick: () -> Unit = {},
+    cardLabel: String = "Card",
+    isCardActive: Boolean = false,
 ) {
     val scrollState = rememberScrollState()
+    val useScroll = onTheme != null || cardLabel != "Card"
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -50,16 +55,16 @@ fun SelectedClipBar(
         tonalElevation = 2.dp,
     ) {
         Row(
-            modifier = (if (onTheme != null) Modifier.horizontalScroll(scrollState) else Modifier)
+            modifier = (if (useScroll) Modifier.horizontalScroll(scrollState) else Modifier)
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                text = "Clip",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(end = 4.dp),
+            ToolItem(
+                label = cardLabel,
+                icon = Icons.Filled.Dashboard,
+                selected = isCardActive,
+                onClick = onCardClick,
             )
             ToolItem(label = "Split", icon = Icons.Filled.ContentCut, onClick = onSplit)
             ToolItem(label = "Duplicate", icon = Icons.Filled.ContentCopy, onClick = onDuplicate)
@@ -68,8 +73,10 @@ fun SelectedClipBar(
             if (onTheme != null) {
                 ToolItem(label = themeLabel, icon = Icons.Filled.Palette, onClick = onTheme)
                 androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
-            } else {
+            } else if (!useScroll) {
                 androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+            } else {
+                androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
             }
             ToolItem(label = "Done", icon = Icons.Filled.Done, onClick = onDeselect)
         }
