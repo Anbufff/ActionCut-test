@@ -433,6 +433,181 @@ class EditorViewModel @Inject constructor(
         return if (file.exists() && file.length() > 0L) Uri.fromFile(file).toString() else null
     }
 
+    fun setAutoCardQueue(entries: List<AutoCardEntry>, durationMs: Long) {
+        if (entries.isEmpty()) return
+        _uiState.update {
+            it.copy(
+                autoCardQueue = entries,
+                autoCardQueueIndex = 0,
+                autoCardDurationMs = durationMs.coerceIn(2_000L, 60_000L),
+                isCardPopupVisible = false,
+            )
+        }
+        Toast.makeText(
+            context,
+            "${entries.size} Cards saved! Playhead-ல் 'Card' பட்டனைத் தட்டவும்.",
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+
+    fun toggleCardPopup() {
+        _uiState.update { state ->
+            if (state.autoCardQueue.isEmpty()) {
+                state.copy(isCardPopupVisible = false)
+            } else {
+                state.copy(isCardPopupVisible = !state.isCardPopupVisible)
+            }
+        }
+    }
+
+    fun closeCardPopup() {
+        _uiState.update { it.copy(isCardPopupVisible = false) }
+    }
+
+    fun prevQueuedCard() {
+        _uiState.update { state ->
+            if (state.autoCardQueue.isEmpty()) return@update state
+            val prev = (state.autoCardQueueIndex - 1 + state.autoCardQueue.size) % state.autoCardQueue.size
+            state.copy(autoCardQueueIndex = prev)
+        }
+    }
+
+    fun nextQueuedCard() {
+        _uiState.update { state ->
+            if (state.autoCardQueue.isEmpty()) return@update state
+            val next = (state.autoCardQueueIndex + 1) % state.autoCardQueue.size
+            state.copy(autoCardQueueIndex = next)
+        }
+    }
+
+    fun insertCurrentQueuedCardAtPlayhead() {
+        val snapshot = _uiState.value
+        val queue = snapshot.autoCardQueue
+        val idx = snapshot.autoCardQueueIndex
+        val entry = queue.getOrNull(idx) ?: return
+        val dur = snapshot.autoCardDurationMs.coerceIn(2_000L, 60_000L)
+        val playhead = snapshot.playheadMs.coerceAtLeast(0L)
+
+        _uiState.update { it.copy(isCardPopupVisible = false) }
+        Toast.makeText(context, "Adding Card ${idx + 1}: ${entry.playerName}...", Toast.LENGTH_SHORT).show()
+
+        viewModelScope.launch {
+            val cardUri = withContext(Dispatchers.IO) {
+                val libraryPlayers = PlayerLibrary(context).all()
+                val cdnIndex = loadCdnPhotoIndex()
+                val rawPhotoUri = entry.customPhotoUri ?: resolvePlayerPhotoFile(
+                    entry.playerName,
+                    libraryPlayers,
+                    cdnIndex,
+                )?.let { Uri.fromFile(it).toString() }
+
+                val cutoutUri = if (!rawPhotoUri.isNullOrBlank()) {
+                    AiCutoutManager.getOrCreateCutoutUri(
+                        context = context,
+                        imageUriStr = rawPhotoUri,
+                        forceRefresh = false,
+                        softBottomFade = false,
+                    ) ?: rawPhotoUri
+                } else {
+                    null
+                }
+                AutoCardRenderer.renderCardToFile(context, entry, cutoutUri)
+            }
+
+            val clipId = "autocard_${System.currentTimeMillis()}_$idx"
+            val baseClip = Clip(
+                id = clipId,
+                type = ClipType.IMAGE,
+                mediaUri = cardUri,
+                timelineStartMs = 0L,
+                timelineEndMs = dur,
+                effects = listOf(VisualEffect(VisualEffectType.ZOOM_PULSE, 1f)),
+                keyframes = listOf(
+                    Keyframe(0L, scale = 1.0f),
+                    Keyframe(dur / 2, scale = 1.10f),
+                    Keyframe(dur, scale = 1.0f),
+                ),
+                transitionToNext = Transition(TransitionType.SEAMLESS_MERGE, 0L),
+            )
+
+            mutate(structural = true) { timeline ->
+                val videoTrack = timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
+                if (videoTrack == null) {
+                    val (withTrack, trackId) = TimelineEditor.addTrack(timeline, TrackType.VIDEO)
+                    TimelineEditor.appendClip(withTrack, trackId, baseClip)
+                } else {
+                    val trackEnd = videoTrack.durationMs
+                    if (playhead >= trackEnd - TimelineEditor.MIN_CLIP_DURATION_MS) {
+                        TimelineEditor.appendClip(timeline, videoTrack.id, baseClip)
+                    } else {
+                        val target = videoTrack.clips.firstOrNull {
+                            playhead >= it.timelineStartMs && playhead < it.timelineEndMs
+                        }
+                        when {
+                            target == null -> {
+                                val placed = baseClip.copy(
+                                    timelineStartMs = playhead,
+                                    timelineEndMs = playhead + dur,
+                                )
+                                TimelineEditor.insertClip(timeline, videoTrack.id, placed)
+                            }
+                            playhead <= target.timelineStartMs + TimelineEditor.MIN_CLIP_DURATION_MS -> {
+                                val insertAt = target.timelineStartMs
+                                val placed = baseClip.copy(
+                                    timelineStartMs = insertAt,
+                                    timelineEndMs = insertAt + dur,
+                                )
+                                TimelineEditor.insertClip(timeline, videoTrack.id, placed)
+                            }
+                            playhead >= target.timelineEndMs - TimelineEditor.MIN_CLIP_DURATION_MS -> {
+                                val insertAt = target.timelineEndMs
+                                val placed = baseClip.copy(
+                                    timelineStartMs = insertAt,
+                                    timelineEndMs = insertAt + dur,
+                                )
+                                TimelineEditor.insertClip(timeline, videoTrack.id, placed)
+                            }
+                            else -> {
+                                val afterSplit = TimelineEditor.splitClip(timeline, target.id, playhead)
+                                val placed = baseClip.copy(
+                                    timelineStartMs = playhead,
+                                    timelineEndMs = playhead + dur,
+                                )
+                                TimelineEditor.insertClip(afterSplit, videoTrack.id, placed)
+                            }
+                        }
+                    }
+                }
+            }
+
+            var finishedAll = false
+            _uiState.update { cur ->
+                val nextIdx = cur.autoCardQueueIndex + 1
+                if (nextIdx >= cur.autoCardQueue.size) {
+                    finishedAll = true
+                    cur.copy(
+                        selectedClipId = clipId,
+                        autoCardQueue = emptyList(),
+                        autoCardQueueIndex = 0,
+                        isCardPopupVisible = false,
+                    )
+                } else {
+                    cur.copy(
+                        selectedClipId = clipId,
+                        autoCardQueueIndex = nextIdx,
+                        isCardPopupVisible = false,
+                    )
+                }
+            }
+
+            if (finishedAll) {
+                Toast.makeText(context, "அனைத்து Cards-ம் Main Track-ல் சேர்க்கப்பட்டன!", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(context, "Card ${idx + 1} added! அடுத்து Card ${idx + 2} தயார்.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     fun addAutoCardSequence(entries: List<AutoCardEntry>, durationPerCardMs: Long) {
         if (entries.isEmpty()) return
         Toast.makeText(context, "Creating ${entries.size} Auto Cards...", Toast.LENGTH_SHORT).show()
@@ -618,7 +793,6 @@ class EditorViewModel @Inject constructor(
                     val window = windows.getOrNull(idx) ?: return@forEachIndexed
                     val (startMs, endMs) = window
 
-                    // Skip any segment that does NOT have a valid player photo
                     val rawPlayerName = seg.playerName?.trim().orEmpty()
                     if (rawPlayerName.isEmpty() || isLikelyTeamName(rawPlayerName)) {
                         return@forEachIndexed
