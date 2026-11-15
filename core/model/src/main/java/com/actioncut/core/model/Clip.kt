@@ -15,6 +15,32 @@ enum class ClipType {
 }
 
 /**
+ * Entrance animation options for selected PiP / overlay clips.
+ */
+@Serializable
+enum class PipAnimation(val label: String) {
+    SLIDE_LEFT("Slide In from Left"),
+    ZOOM_IN("Zoom In"),
+    SLIDE_UP("Slide Up"),
+    NONE("None"),
+}
+
+/**
+ * Shared 0.5s ease-out entrance curve for both preview and export.
+ */
+object PipAnimations {
+    const val DURATION_MS = 500L
+
+    fun easeOut(timeInClipMs: Long): Float {
+        if (timeInClipMs <= 0L) return 0f
+        if (timeInClipMs >= DURATION_MS) return 1f
+        val t = timeInClipMs.toFloat() / DURATION_MS.toFloat()
+        val inv = 1f - t
+        return (1f - inv * inv * inv).coerceIn(0f, 1f)
+    }
+}
+
+/**
  * A single placed segment on a [Track] — the atomic editable unit of the timeline.
  *
  * Two time spaces are tracked:
@@ -37,6 +63,7 @@ enum class ClipType {
  * @property audioFade Fade-in/out envelope.
  * @property transitionToNext Transition blended into the following clip.
  * @property scorecard Optional dynamic cricket scorecard metadata & keyframes.
+ * @property pipAnimation Entrance animation for PiP / overlay clips.
  */
 @Serializable
 data class Clip(
@@ -63,6 +90,7 @@ data class Clip(
     val keyframes: List<Keyframe> = emptyList(),
     val speedRamp: SpeedRamp = SpeedRamp.NONE,
     val scorecard: ScorecardClipData? = null,
+    val pipAnimation: PipAnimation = PipAnimation.NONE,
 ) {
     /** Length occupied on the timeline. */
     val timelineDurationMs: Long get() = (timelineEndMs - timelineStartMs).coerceAtLeast(0L)
