@@ -97,7 +97,7 @@ fun AutoCardDialog(
     }
 
     val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val bottomSpace = maxOf(navInset, 16.dp)
+    val bottomSpace = maxOf(navInset, 64.dp)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -112,9 +112,9 @@ fun AutoCardDialog(
                     .fillMaxSize()
                     .statusBarsPadding()
                     .imePadding()
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
                     .padding(bottom = bottomSpace),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -130,7 +130,7 @@ fun AutoCardDialog(
                         Text(
                             text = "ஒவ்வொரு Player-க்கும் தனி Design + Jersey Color-ல் Main Track-ல் இணையும்",
                             color = Color(0xFF9E9E9E),
-                            fontSize = 11.5.sp,
+                            fontSize = 11.sp,
                         )
                     }
                     IconButton(onClick = onDismiss) {
@@ -148,10 +148,10 @@ fun AutoCardDialog(
                             fontSize = 13.sp,
                         )
                     },
-                    textStyle = TextStyle(color = Color.White, fontSize = 13.5.sp, lineHeight = 19.sp),
+                    textStyle = TextStyle(color = Color.White, fontSize = 13.sp, lineHeight = 18.sp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(155.dp)
+                        .height(125.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(Color(0xFF1C1C20)),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -290,7 +290,7 @@ fun AutoCardDialog(
                                             modifier = Modifier.size(13.dp),
                                         )
                                         Text(
-                                            text = if (pickedUri != null) "Picked" else if (hasPhoto) "Photo ✓" else "+ Photo",
+                                            text = if (pickedUri != null) "Picked" else if (hasPhoto) "Photo" else "+ Photo",
                                             color = if (hasPhoto) Color(0xFF4DFF88) else Color(0xFFFFC107),
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.SemiBold,
@@ -317,7 +317,7 @@ fun AutoCardDialog(
                     OutlinedButton(
                         onClick = onDismiss,
                         shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.height(48.dp),
+                        modifier = Modifier.height(46.dp),
                     ) {
                         Text("Cancel", color = Color.White, fontWeight = FontWeight.SemiBold)
                     }
@@ -340,20 +340,22 @@ fun AutoCardDialog(
                         ),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp),
+                            .height(46.dp),
                     ) {
                         Icon(
                             Icons.Filled.AutoAwesome,
                             contentDescription = null,
                             tint = Color.Black,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(17.dp),
                         )
-                        Spacer(Modifier.size(6.dp))
+                        Spacer(Modifier.size(5.dp))
                         Text(
-                            text = "Add ${parsedEntries.size} Cards to Main Track",
+                            text = "Add ${parsedEntries.size} Cards to Track",
                             color = Color.Black,
-                            fontSize = 13.5.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
