@@ -5,8 +5,10 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -38,10 +40,12 @@ import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.CropRect
 import com.actioncut.core.model.ExportSettings
 import com.actioncut.core.model.ExportState
+import com.actioncut.core.model.Keyframes
+import com.actioncut.core.model.PipAnimation
+import com.actioncut.core.model.PipAnimations
 import com.actioncut.core.model.Project
 import com.actioncut.core.model.Resolution
 import com.actioncut.core.model.TrackType
-import com.actioncut.core.model.Transform
 import com.actioncut.core.model.TransitionType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
@@ -56,6 +60,13 @@ class Media3VideoExporter @Inject constructor(
     @ApplicationContext private val context: Context,
     private val reverser: com.actioncut.core.media.reverse.VideoReverser,
 ) : VideoExporter {
+
+    private data class PipVideoSpec(
+        val uncropW1: Float,
+        val uncropH1: Float,
+        val basePipW: Int,
+        val basePipH: Int,
+    )
 
     override fun export(
         project: Project,
@@ -82,7 +93,11 @@ class Media3VideoExporter @Inject constructor(
             .flatMap { it.clips }
             .sortedByDescending { it.mediaUri?.contains("news_banner") == true }
 
-        val (clips, preparedPipOverlays) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+        val pipVideoClips = rawOverlayClips
+            .filter { it.mediaUri != null && it.type == ClipType.VIDEO }
+            .sortedBy { it.timelineStartMs }
+
+        val (clips, preparedPipOverlays, pipVideoSpecs) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             val processedClips = rawClips.map { clip ->
                 if (clip.isReversed && clip.type == ClipType.VIDEO && clip.mediaUri != null) {
                     val reversedUri = reverser.reverse(clip.mediaUri!!, clip.sourceInMs, clip.sourceOutMs)
@@ -109,19 +124,17 @@ class Media3VideoExporter @Inject constructor(
 
             val processedOverlays = rawOverlayClips.map { ov ->
                 if (ov.type == ClipType.IMAGE && ov.mediaUri != null && ov.mediaUri?.contains("news_banner") != true) {
-                    val processedUri = renderExactPipOverlayToCanvas(context, ov, targetWidth, targetHeight)
-                    ov.copy(
-                        mediaUri = processedUri,
-                        type = ClipType.STICKER,
-                        transform = Transform(offsetX = 0f, offsetY = 0f, scale = 1f, rotationDegrees = 0f),
-                        crop = null,
-                    )
+                    preparePipImageOverlay(context, ov, targetWidth, targetHeight)
                 } else {
                     ov
                 }
             }
 
-            processedClips to processedOverlays
+            val specs = pipVideoClips.associate { pip ->
+                pip.id to probePipVideoSpec(context, pip, targetWidth, targetHeight)
+            }
+
+            Triple(processedClips, processedOverlays, specs)
         }
 
         val handler = Handler(Looper.getMainLooper())
@@ -205,19 +218,12 @@ class Media3VideoExporter @Inject constructor(
 
                 val sequences = mutableListOf(videoSequence)
 
-                val pipVideoClips = project.timeline.tracks
-                    .filter { it.type == TrackType.OVERLAY }
-                    .flatMap { it.clips }
-                    .filter { it.mediaUri != null && it.type == ClipType.VIDEO }
-                    .sortedBy { it.timelineStartMs }
                 if (pipVideoClips.isNotEmpty()) {
                     sequences += EditedMediaItemSequence.withVideoFrom(
-                        pipVideoClips.map {
-                            it.toEditedMediaItem(
-                                targetWidth, targetHeight, settings, emptyList(),
-                                Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP,
-                                watermarkBuffers = sharedWatermarkBuffers,
-                            )
+                        pipVideoClips.map { pip ->
+                            val spec = pipVideoSpecs[pip.id]
+                                ?: PipVideoSpec(targetWidth.toFloat(), targetHeight.toFloat(), targetWidth, targetHeight)
+                            pip.toPipVideoEditedMediaItem(spec)
                         },
                     )
                 }
@@ -234,7 +240,12 @@ class Media3VideoExporter @Inject constructor(
 
                 val compositionBuilder = Composition.Builder(sequences)
                 if (pipVideoClips.isNotEmpty()) {
-                    compositionBuilder.setVideoCompositorSettings(pipCompositorSettings(pipVideoClips.first()))
+                    val primaryPip = pipVideoClips.first()
+                    val spec = pipVideoSpecs[primaryPip.id]
+                        ?: PipVideoSpec(targetWidth.toFloat(), targetHeight.toFloat(), targetWidth, targetHeight)
+                    compositionBuilder.setVideoCompositorSettings(
+                        pipCompositorSettings(primaryPip, spec, targetWidth, targetHeight),
+                    )
                 }
                 val composition = compositionBuilder.build()
 
@@ -294,13 +305,13 @@ class Media3VideoExporter @Inject constructor(
         }
     }
 
-    private fun renderExactPipOverlayToCanvas(
+    private fun preparePipImageOverlay(
         context: Context,
         clip: Clip,
         targetWidth: Int,
         targetHeight: Int,
-    ): String = runCatching {
-        val uriStr = clip.mediaUri ?: return@runCatching ""
+    ): Clip = runCatching {
+        val uriStr = clip.mediaUri ?: return@runCatching clip
 
         val isAiCutout = clip.filter?.id?.contains("cutout") == true
         val cutoutFile = File(context.cacheDir, "cutout_${uriStr.hashCode()}.png")
@@ -319,76 +330,146 @@ class Media3VideoExporter @Inject constructor(
             }
         }
 
-        if (srcBmp == null) return@runCatching uriStr
-
-        val fullCanvasBmp = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(fullCanvasBmp)
-
-        val t = if (clip.keyframes.isNotEmpty()) {
-            com.actioncut.core.model.Keyframes.propsAt(clip, 0L).transform
-        } else {
-            clip.transform
-        }
-
-        val cx = targetWidth / 2f + (t.offsetX / 2f) * targetWidth
-        val cy = targetHeight / 2f + (t.offsetY / 2f) * targetHeight
-
-        val srcW = srcBmp.width.toFloat()
-        val srcH = srcBmp.height.toFloat()
-        val srcAspect = srcW / srcH
-        val canvasAspect = targetWidth.toFloat() / targetHeight.toFloat()
-        val pw: Float
-        val ph: Float
-        if (srcAspect >= canvasAspect) {
-            pw = targetWidth * t.scale
-            ph = pw / srcAspect
-        } else {
-            ph = targetHeight * t.scale
-            pw = ph * srcAspect
-        }
-
-        val left = cx - pw / 2f
-        val top = cy - ph / 2f
-
-        val crop = clip.crop ?: CropRect(0f, 0f, 1f, 1f)
-        val cropRect = RectF(
-            left + pw * crop.left,
-            top + ph * crop.top,
-            left + pw * crop.right,
-            top + ph * crop.bottom,
-        )
-
-        canvas.save()
-        canvas.clipRect(cropRect)
+        if (srcBmp == null) return@runCatching clip
 
         val isFlipped = clip.filter?.id?.contains("flip") == true
-        if (isFlipped) {
-            canvas.scale(-1f, 1f, cx, cy)
-        }
-        val totalRot = clip.rotationDegrees + t.rotationDegrees
-        if (totalRot != 0f) {
-            canvas.rotate(totalRot, cx, cy)
+        val flippedBmp = if (isFlipped) {
+            val m = Matrix().apply { preScale(-1f, 1f) }
+            Bitmap.createBitmap(srcBmp, 0, 0, srcBmp.width, srcBmp.height, m, true).also {
+                if (it !== srcBmp) srcBmp.recycle()
+            }
+        } else {
+            srcBmp
         }
 
-        val dstRect = RectF(left, top, left + pw, top + ph)
+        val baseBmp = if (clip.rotationDegrees != 0) {
+            val m = Matrix().apply { postRotate(clip.rotationDegrees.toFloat()) }
+            Bitmap.createBitmap(flippedBmp, 0, 0, flippedBmp.width, flippedBmp.height, m, true).also {
+                if (it !== flippedBmp) flippedBmp.recycle()
+            }
+        } else {
+            flippedBmp
+        }
 
-        canvas.drawBitmap(
-            srcBmp,
-            null,
-            dstRect,
-            Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG),
-        )
-        canvas.restore()
-        srcBmp.recycle()
+        val uncroppedAspect = baseBmp.width.toFloat() / baseBmp.height.toFloat().coerceAtLeast(1f)
+        val canvasAspect = targetWidth.toFloat() / targetHeight.toFloat().coerceAtLeast(1f)
+        val (uncropW1, uncropH1) = if (uncroppedAspect >= canvasAspect) {
+            targetWidth.toFloat() to (targetWidth / uncroppedAspect)
+        } else {
+            (targetHeight * uncroppedAspect) to targetHeight.toFloat()
+        }
+
+        val crop = clip.crop ?: CropRect(0f, 0f, 1f, 1f)
+        val sx = (crop.left * baseBmp.width).roundToInt().coerceIn(0, baseBmp.width - 1)
+        val sy = (crop.top * baseBmp.height).roundToInt().coerceIn(0, baseBmp.height - 1)
+        val sw = ((crop.right - crop.left) * baseBmp.width).roundToInt().coerceIn(1, baseBmp.width - sx)
+        val sh = ((crop.bottom - crop.top) * baseBmp.height).roundToInt().coerceIn(1, baseBmp.height - sy)
+
+        val croppedBmp = Bitmap.createBitmap(baseBmp, sx, sy, sw, sh)
+        if (croppedBmp !== baseBmp) baseBmp.recycle()
+
+        val visW1 = (uncropW1 * (crop.right - crop.left)).roundToInt().coerceAtLeast(2)
+        val visH1 = (uncropH1 * (crop.bottom - crop.top)).roundToInt().coerceAtLeast(2)
+        val finalBmp = if (croppedBmp.width != visW1 || croppedBmp.height != visH1) {
+            Bitmap.createScaledBitmap(croppedBmp, visW1, visH1, true).also {
+                if (it !== croppedBmp) croppedBmp.recycle()
+            }
+        } else {
+            croppedBmp
+        }
 
         val outFile = File(context.cacheDir, "pip_rendered_${clip.id}.png")
         FileOutputStream(outFile).use { fos ->
-            fullCanvasBmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
+            finalBmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
         }
-        fullCanvasBmp.recycle()
+        finalBmp.recycle()
 
-        Uri.fromFile(outFile).toString()
-    }.getOrDefault(clip.mediaUri ?: "")
+        val shiftRatioX = ((crop.left + crop.right - 1f) * uncropW1) / targetWidth
+        val shiftRatioY = ((crop.top + crop.bottom - 1f) * uncropH1) / targetHeight
+
+        val adjTransform = clip.transform.copy(
+            offsetX = clip.transform.offsetX + shiftRatioX * clip.transform.scale,
+            offsetY = clip.transform.offsetY + shiftRatioY * clip.transform.scale,
+        )
+        val adjKeyframes = clip.keyframes.map { kf ->
+            kf.copy(
+                offsetX = kf.offsetX + shiftRatioX * kf.scale,
+                offsetY = kf.offsetY + shiftRatioY * kf.scale,
+            )
+        }
+
+        clip.copy(
+            mediaUri = Uri.fromFile(outFile).toString(),
+            type = ClipType.STICKER,
+            rotationDegrees = 0,
+            crop = null,
+            transform = adjTransform,
+            keyframes = adjKeyframes,
+        )
+    }.getOrDefault(clip)
+
+    private fun probePipVideoSpec(
+        context: Context,
+        clip: Clip,
+        targetWidth: Int,
+        targetHeight: Int,
+    ): PipVideoSpec {
+        var natW = targetWidth
+        var natH = targetHeight
+        var metaRot = 0
+        val retriever = MediaMetadataRetriever()
+        runCatching {
+            retriever.setDataSource(context, Uri.parse(clip.mediaUri))
+            val w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
+            val h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+            val r = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            if (w != null && h != null && w > 0 && h > 0) {
+                natW = w
+                natH = h
+                metaRot = r
+            }
+        }
+        runCatching { retriever.release() }
+
+        val totalFixedRot = ((metaRot + clip.rotationDegrees) % 360 + 360) % 360
+        val effW = if (totalFixedRot == 90 || totalFixedRot == 270) natH else natW
+        val effH = if (totalFixedRot == 90 || totalFixedRot == 270) natW else natH
+
+        val uncroppedAspect = effW.toFloat() / effH.toFloat().coerceAtLeast(1f)
+        val canvasAspect = targetWidth.toFloat() / targetHeight.toFloat().coerceAtLeast(1f)
+        val (uncropW1, uncropH1) = if (uncroppedAspect >= canvasAspect) {
+            targetWidth.toFloat() to (targetWidth / uncroppedAspect)
+        } else {
+            (targetHeight * uncroppedAspect) to targetHeight.toFloat()
+        }
+        val crop = clip.crop ?: CropRect(0f, 0f, 1f, 1f)
+        val basePipW = even((uncropW1 * (crop.right - crop.left)).roundToInt().coerceAtLeast(16))
+        val basePipH = even((uncropH1 * (crop.bottom - crop.top)).roundToInt().coerceAtLeast(16))
+        return PipVideoSpec(uncropW1, uncropH1, basePipW, basePipH)
+    }
+
+    private fun Clip.toPipVideoEditedMediaItem(spec: PipVideoSpec): EditedMediaItem {
+        val mediaItem = MediaItem.Builder()
+            .setUri(mediaUri)
+            .setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(sourceInMs)
+                    .setEndPositionMs(if (sourceOutMs > sourceInMs) sourceOutMs else C.TIME_END_OF_SOURCE)
+                    .build(),
+            )
+            .build()
+
+        val videoEffects = EffectMapper.previewVideoEffects(this).toMutableList()
+        videoEffects += Presentation.createForWidthAndHeight(
+            spec.basePipW,
+            spec.basePipH,
+            Presentation.LAYOUT_STRETCH_TO_FIT,
+        )
+        return EditedMediaItem.Builder(mediaItem)
+            .setRemoveAudio(true)
+            .setEffects(Effects(emptyList(), videoEffects))
+            .build()
+    }
 
     private fun createBlurredBackdropImage(
         context: Context,
@@ -547,20 +628,70 @@ class Media3VideoExporter @Inject constructor(
             .build()
     }
 
-    private fun pipCompositorSettings(pip: Clip): VideoCompositorSettings =
+    private fun pipCompositorSettings(
+        pip: Clip,
+        spec: PipVideoSpec,
+        targetWidth: Int,
+        targetHeight: Int,
+    ): VideoCompositorSettings =
         object : VideoCompositorSettings {
             override fun getOutputSize(inputSizes: List<Size>): Size = inputSizes.first()
             override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings =
                 if (inputId == 1) {
-                    val props = com.actioncut.core.model.Keyframes.propsAt(pip, presentationTimeUs / 1000L)
+                    val timeInClipMs = (presentationTimeUs / 1_000L).coerceAtLeast(0L)
+                    val props = Keyframes.propsAt(pip, timeInClipMs)
                     val t = props.transform
+                    val crop = pip.crop ?: CropRect(0f, 0f, 1f, 1f)
+                    val targetOffX =
+                        (t.offsetX + ((crop.left + crop.right - 1f) * spec.uncropW1 * t.scale) / targetWidth)
+                            .coerceIn(-1f, 1f)
+                    val targetOffY =
+                        (t.offsetY + ((crop.top + crop.bottom - 1f) * spec.uncropH1 * t.scale) / targetHeight)
+                            .coerceIn(-1f, 1f)
+                    val eased = if (pip.pipAnimation == PipAnimation.NONE) 1f else PipAnimations.easeOut(timeInClipMs)
+
+                    val ox: Float
+                    val oy: Float
+                    val bx: Float
+                    val by: Float
+                    val animScale: Float
+                    when (pip.pipAnimation) {
+                        PipAnimation.SLIDE_LEFT -> {
+                            ox = 1f - eased
+                            oy = 0f
+                            bx = -1f + (targetOffX + 1f) * eased
+                            by = -targetOffY
+                            animScale = 1f
+                        }
+                        PipAnimation.SLIDE_UP -> {
+                            ox = 0f
+                            oy = 1f - eased
+                            bx = targetOffX
+                            by = -1f + ((-targetOffY) + 1f) * eased
+                            animScale = 1f
+                        }
+                        PipAnimation.ZOOM_IN -> {
+                            ox = 0f
+                            oy = 0f
+                            bx = targetOffX
+                            by = -targetOffY
+                            animScale = 0.05f + 0.95f * eased
+                        }
+                        PipAnimation.NONE -> {
+                            ox = 0f
+                            oy = 0f
+                            bx = targetOffX
+                            by = -targetOffY
+                            animScale = 1f
+                        }
+                    }
+
+                    val finalScale = (t.scale * animScale).coerceAtLeast(0.01f)
                     StaticOverlaySettings.Builder()
-                        .setScale(t.scale, t.scale)
-                        .setOverlayFrameAnchor(0f, 0f)
-                        .setBackgroundFrameAnchor(
-                            t.offsetX.coerceIn(-1f, 1f),
-                            -t.offsetY.coerceIn(-1f, 1f),
-                        )
+                        .setScale(finalScale, finalScale)
+                        .setOverlayFrameAnchor(ox, oy)
+                        .setBackgroundFrameAnchor(bx, by)
+                        .setAlphaScale(props.opacity.coerceIn(0f, 1f))
                         .build()
                 } else {
                     StaticOverlaySettings.Builder().build()
