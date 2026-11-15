@@ -28,6 +28,7 @@ import com.actioncut.core.model.FitMode
 import com.actioncut.core.model.Keyframe
 import com.actioncut.core.model.MediaItem
 import com.actioncut.core.model.MediaType
+import com.actioncut.core.model.PipAnimation
 import com.actioncut.core.model.Project
 import com.actioncut.core.model.ScorecardClipData
 import com.actioncut.core.model.ScorecardKeyframe
@@ -90,6 +91,7 @@ class EditorViewModel @Inject constructor(
     private val undoStack = ArrayDeque<Timeline>()
     private val redoStack = ArrayDeque<Timeline>()
     private var saveJob: Job? = null
+    private var previewAnimJob: Job? = null
 
     @Volatile
     private var isUserScrubbing: Boolean = false
@@ -191,9 +193,13 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    fun togglePlayPause() = playerController.togglePlayPause()
+    fun togglePlayPause() {
+        previewAnimJob?.cancel()
+        playerController.togglePlayPause()
+    }
 
     fun pause() {
+        previewAnimJob?.cancel()
         if (_uiState.value.isPlaying) {
             playerController.pause()
             _uiState.update { it.copy(isPlaying = false) }
@@ -201,6 +207,7 @@ class EditorViewModel @Inject constructor(
     }
 
     fun beginScrub() {
+        previewAnimJob?.cancel()
         isUserScrubbing = true
         playerController.beginScrub()
         if (_uiState.value.isPlaying) {
@@ -222,6 +229,7 @@ class EditorViewModel @Inject constructor(
     }
 
     fun seekTo(positionMs: Long) {
+        previewAnimJob?.cancel()
         val clamped = positionMs.coerceIn(0, _uiState.value.durationMs)
         playerController.seekTo(clamped)
         _uiState.update { it.copy(playheadMs = clamped) }
@@ -943,6 +951,7 @@ class EditorViewModel @Inject constructor(
                 crop = CropRect(0f, 0f, 1f, 1f),
                 effects = emptyList(),
                 keyframes = emptyList(),
+                pipAnimation = PipAnimation.SLIDE_LEFT,
             )
             val track = _uiState.value.timeline.tracks
                 .firstOrNull { it.type == TrackType.OVERLAY }
@@ -955,6 +964,36 @@ class EditorViewModel @Inject constructor(
                 }
             }
             _uiState.update { it.copy(selectedClipId = clip.id) }
+            previewPipEntrance(clip)
+        }
+    }
+
+    fun setPipAnimation(clipId: String, animation: PipAnimation) {
+        val clip = currentClip(clipId) ?: return
+        if (clip.pipAnimation == animation) {
+            if (animation != PipAnimation.NONE) previewPipEntrance(clip)
+            return
+        }
+        mutate(structural = false) { timeline ->
+            TimelineEditor.updateClip(timeline, clipId) { it.copy(pipAnimation = animation) }
+        }
+        val updated = currentClip(clipId) ?: return
+        if (animation != PipAnimation.NONE) {
+            previewPipEntrance(updated)
+        }
+    }
+
+    private fun previewPipEntrance(clip: Clip) {
+        previewAnimJob?.cancel()
+        if (_uiState.value.isPlaying) return
+        val startMs = clip.timelineStartMs
+        val previewDur = minOf(550L, (clip.timelineDurationMs - 40L).coerceAtLeast(0L))
+        if (previewDur < 80L) return
+        previewAnimJob = viewModelScope.launch {
+            playerController.seekTo(startMs)
+            playerController.play()
+            delay(previewDur)
+            playerController.pause()
         }
     }
 
@@ -1337,6 +1376,7 @@ class EditorViewModel @Inject constructor(
         mutate(structural = false) {
             TimelineEditor.updateClip(it, clipId) { c -> c.copy(crop = crop) }
         }
+        playerController.refreshPreviewEffects(_uiState.value.timeline)
     }
 
     fun addKeyframeAtPlayhead() = withSelected { id ->
