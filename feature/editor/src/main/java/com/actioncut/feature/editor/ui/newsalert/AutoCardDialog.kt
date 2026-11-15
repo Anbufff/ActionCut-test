@@ -1,8 +1,10 @@
 package com.actioncut.feature.editor.ui.newsalert
 
 import android.content.Intent
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.Button
@@ -52,6 +55,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -74,8 +79,34 @@ fun AutoCardDialog(
     var durationSec by remember { mutableIntStateOf(8) }
     var pickingForIndex by remember { mutableIntStateOf(-1) }
 
+    var useCustomBg by remember { mutableStateOf(AutoCardRenderer.isCustomBackgroundEnabled(context)) }
+    var customBgVersion by remember { mutableIntStateOf(0) }
+    val hasSavedCustomBg = remember(customBgVersion) { AutoCardRenderer.getCustomBackgroundFile(context) != null }
+    val customBgThumb = remember(customBgVersion) { AutoCardRenderer.loadCustomBackgroundThumb(context) }
+
     val customPhotoMap = remember { mutableStateMapOf<Int, String>() }
     val customLayoutMap = remember { mutableStateMapOf<Int, Int>() }
+
+    val bgPhotoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            val saved = AutoCardRenderer.saveCustomBackground(context, uri)
+            if (saved) {
+                useCustomBg = true
+                customBgVersion++
+                Toast.makeText(context, "Background saved!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "Could not read background image", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     val photoPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -114,7 +145,7 @@ fun AutoCardDialog(
                     .imePadding()
                     .padding(horizontal = 14.dp, vertical = 8.dp)
                     .padding(bottom = bottomSpace),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -128,7 +159,7 @@ fun AutoCardDialog(
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            text = "ஒவ்வொரு Player-க்கும் தனி Design + Jersey Color-ல் Main Track-ல் இணையும்",
+                            text = "ஒவ்வொரு Player-க்கும் தனி Design + Background-ல் Main Track-ல் இணையும்",
                             color = Color(0xFF9E9E9E),
                             fontSize = 11.sp,
                         )
@@ -151,7 +182,7 @@ fun AutoCardDialog(
                     textStyle = TextStyle(color = Color.White, fontSize = 13.sp, lineHeight = 18.sp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(125.dp)
+                        .height(112.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(Color(0xFF1C1C20)),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -179,6 +210,110 @@ fun AutoCardDialog(
                             label = "${sec}s",
                             selected = durationSec == sec,
                             onClick = { durationSec = sec },
+                        )
+                    }
+                }
+
+                // Background Selector Row: Auto Templates vs Saved Custom Background (Upload / Change / Delete)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "BG:",
+                        color = Color(0xFFBBBBBB),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    SelectableChip(
+                        label = "Auto Templates",
+                        selected = !useCustomBg,
+                        onClick = {
+                            AutoCardRenderer.setCustomBackgroundEnabled(context, false)
+                            useCustomBg = false
+                        },
+                    )
+                    if (hasSavedCustomBg) {
+                        if (customBgThumb != null) {
+                            Image(
+                                bitmap = customBgThumb.asImageBitmap(),
+                                contentDescription = "Custom BG",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(30.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .border(
+                                        width = if (useCustomBg) 2.dp else 1.dp,
+                                        color = if (useCustomBg) Color(0xFF00E5FF) else Color(0xFF44444C),
+                                        shape = RoundedCornerShape(6.dp),
+                                    ),
+                            )
+                        }
+                        SelectableChip(
+                            label = "Custom BG",
+                            selected = useCustomBg,
+                            onClick = {
+                                AutoCardRenderer.setCustomBackgroundEnabled(context, true)
+                                useCustomBg = true
+                            },
+                        )
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF262630))
+                                .clickable { bgPhotoPicker.launch(arrayOf("image/*")) }
+                                .padding(horizontal = 9.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.Image,
+                                contentDescription = "Change BG",
+                                tint = Color(0xFF00E5FF),
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                                text = "Change",
+                                color = Color(0xFF00E5FF),
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFF3A181D))
+                                .clickable {
+                                    AutoCardRenderer.deleteCustomBackground(context)
+                                    useCustomBg = false
+                                    customBgVersion++
+                                    Toast.makeText(context, "Background deleted", Toast.LENGTH_SHORT).show()
+                                }
+                                .padding(horizontal = 9.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = "Delete BG",
+                                tint = Color(0xFFFF6B7A),
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                                text = "Delete",
+                                color = Color(0xFFFF6B7A),
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    } else {
+                        SelectableChip(
+                            label = "+ Upload BG",
+                            selected = false,
+                            onClick = { bgPhotoPicker.launch(arrayOf("image/*")) },
                         )
                     }
                 }
