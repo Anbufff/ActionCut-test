@@ -42,6 +42,8 @@ import com.actioncut.core.model.TransitionType
 import com.actioncut.core.model.VisualEffect
 import com.actioncut.core.model.VisualEffectType
 import com.actioncut.feature.editor.ui.newsalert.AiFlashNewsEngine
+import com.actioncut.feature.editor.ui.newsalert.AutoCardEntry
+import com.actioncut.feature.editor.ui.newsalert.AutoCardRenderer
 import com.actioncut.feature.editor.ui.newsalert.FlashNewsSegment
 import com.actioncut.feature.editor.ui.newsalert.NewsBannerRenderer
 import com.actioncut.feature.editor.ui.pip.AiCutoutManager
@@ -283,7 +285,7 @@ class EditorViewModel @Inject constructor(
             EditorTool.ROTATE -> { rotateSelected(); clearTool() }
             EditorTool.MUTE -> { toggleMuteSelected(); clearTool() }
             EditorTool.EXTRACT_AUDIO -> { detachAudioFromSelected(); clearTool() }
-            EditorTool.AUDIO, EditorTool.PIP, EditorTool.CRIC, EditorTool.CRIC_CDN, EditorTool.CARD_ADD, EditorTool.PLAYER, EditorTool.NEWS_ALERT -> clearTool()
+            EditorTool.AUDIO, EditorTool.PIP, EditorTool.CRIC, EditorTool.CRIC_CDN, EditorTool.CARD_ADD, EditorTool.PLAYER, EditorTool.NEWS_ALERT, EditorTool.AUTO_CARD -> clearTool()
             else -> _uiState.update { it.copy(activeTool = tool) }
         }
     }
@@ -421,6 +423,107 @@ class EditorViewModel @Inject constructor(
                 }
             }
             _uiState.update { it.copy(selectedClipId = clip.id) }
+        }
+    }
+
+    fun resolvePlayerPhotoUriForAutoCard(playerName: String): String? {
+        val libraryPlayers = runCatching { PlayerLibrary(context).all() }.getOrDefault(emptyList())
+        val cdnIndex = loadCdnPhotoIndex()
+        val file = resolvePlayerPhotoFile(playerName, libraryPlayers, cdnIndex) ?: return null
+        return if (file.exists() && file.length() > 0L) Uri.fromFile(file).toString() else null
+    }
+
+    fun addAutoCardSequence(entries: List<AutoCardEntry>, durationPerCardMs: Long) {
+        if (entries.isEmpty()) return
+        Toast.makeText(context, "Creating ${entries.size} Auto Cards...", Toast.LENGTH_SHORT).show()
+        viewModelScope.launch {
+            val libraryPlayers = withContext(Dispatchers.IO) { PlayerLibrary(context).all() }
+            val cdnIndex = withContext(Dispatchers.IO) { loadCdnPhotoIndex() }
+
+            val videoTrack = _uiState.value.timeline.tracks.firstOrNull { it.type == TrackType.VIDEO }
+            var currentEnd = videoTrack?.durationMs ?: 0L
+            val dur = durationPerCardMs.coerceIn(2_000L, 60_000L)
+
+            val newClips = withContext(Dispatchers.IO) {
+                entries.mapIndexed { idx, entry ->
+                    val rawPhotoUri = entry.customPhotoUri ?: resolvePlayerPhotoFile(
+                        entry.playerName,
+                        libraryPlayers,
+                        cdnIndex,
+                    )?.let { Uri.fromFile(it).toString() }
+
+                    val cutoutUri = if (!rawPhotoUri.isNullOrBlank()) {
+                        AiCutoutManager.getOrCreateCutoutUri(
+                            context = context,
+                            imageUriStr = rawPhotoUri,
+                            forceRefresh = false,
+                            softBottomFade = false,
+                        ) ?: rawPhotoUri
+                    } else {
+                        null
+                    }
+
+                    val cardUri = AutoCardRenderer.renderCardToFile(context, entry, cutoutUri)
+                    val clip = Clip(
+                        id = "autocard_${System.currentTimeMillis()}_$idx",
+                        type = ClipType.IMAGE,
+                        mediaUri = cardUri,
+                        timelineStartMs = currentEnd,
+                        timelineEndMs = currentEnd + dur,
+                        effects = listOf(VisualEffect(VisualEffectType.ZOOM_PULSE, 1f)),
+                        keyframes = listOf(
+                            Keyframe(0L, scale = 1.0f),
+                            Keyframe(dur / 2, scale = 1.10f),
+                            Keyframe(dur, scale = 1.0f),
+                        ),
+                        transitionToNext = Transition(TransitionType.SEAMLESS_MERGE, 0L),
+                    )
+                    currentEnd = clip.timelineEndMs
+                    clip
+                }
+            }
+
+            if (newClips.isEmpty()) return@launch
+            mutate(structural = true) { timeline ->
+                if (videoTrack != null) {
+                    var updated = timeline
+                    newClips.forEach { c ->
+                        updated = TimelineEditor.appendClip(updated, videoTrack.id, c)
+                    }
+                    updated
+                } else {
+                    val (withTrack, trackId) = TimelineEditor.addTrack(timeline, TrackType.VIDEO)
+                    var updated = withTrack
+                    newClips.forEach { c ->
+                        updated = TimelineEditor.appendClip(updated, trackId, c)
+                    }
+                    updated
+                }
+            }
+            _uiState.update { it.copy(selectedClipId = newClips.first().id) }
+            Toast.makeText(context, "${newClips.size} Auto Cards Main Track-ல் சேர்க்கப்பட்டன!", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    fun cycleAutoCardDesign() = withSelected { clipId ->
+        val clip = currentClip(clipId) ?: return@withSelected
+        val uri = clip.mediaUri ?: return@withSelected
+        if (!AutoCardRenderer.isAutoCardUri(uri)) return@withSelected
+        viewModelScope.launch {
+            val res = withContext(Dispatchers.IO) {
+                AutoCardRenderer.cycleCardDesign(context, uri)
+            } ?: return@launch
+            val (newUri, newLayoutIdx) = res
+            mutate(structural = true) { timeline ->
+                TimelineEditor.updateClip(timeline, clipId) { c ->
+                    c.copy(mediaUri = newUri)
+                }
+            }
+            Toast.makeText(
+                context,
+                "Design: ${AutoCardRenderer.layoutName(newLayoutIdx)}",
+                Toast.LENGTH_SHORT,
+            ).show()
         }
     }
 
