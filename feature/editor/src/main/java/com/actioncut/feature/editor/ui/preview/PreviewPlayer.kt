@@ -809,7 +809,7 @@ private fun PipLayer(
             }
         }
 
-        // Unbounded wrapper so zoomed PiP (> canvas height/width) is never clamped or misaligned
+        // 1. Visual PiP + border + 4 corner handles (unbounded so large zoom never clamps)
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -828,7 +828,6 @@ private fun PipLayer(
                     alpha = props.opacity * autoAnimAlpha
                 },
         ) {
-            // 1. Clipped PiP media content
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -896,14 +895,126 @@ private fun PipLayer(
                 }
             }
 
-            // 2. Interactive touch box covering ONLY the visible cropped area + 22dp handle margin
-            val padPx = 22f * density
+            if (isSelected) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .drawBehind {
+                            val stroke = Stroke(
+                                width = 2f * density,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f),
+                            )
+                            drawRoundRect(
+                                color = cyanColor,
+                                topLeft = Offset(cL, cT),
+                                size = Size(cW, cH),
+                                cornerRadius = CornerRadius(2f * density),
+                                style = stroke,
+                            )
+                        },
+                )
+
+                // Top-left ✕ Delete handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (cL - 14f * density).roundToInt(),
+                                (cT - 14f * density).roundToInt(),
+                            )
+                        }
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF1F1F24))
+                        .border(2.dp, Color.White, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Delete",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+
+                // Top-right Flip handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (cR - 14f * density).roundToInt(),
+                                (cT - 14f * density).roundToInt(),
+                            )
+                        }
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                        .border(2.dp, Color.White, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Flip,
+                        contentDescription = "Flip",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+
+                // Bottom-left Animation Effects handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (cL - 14f * density).roundToInt(),
+                                (cB - 14f * density).roundToInt(),
+                            )
+                        }
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                        .border(2.dp, Color.White, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Animation,
+                        contentDescription = "Animation Effects",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+
+                // Bottom-right Scale handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (cR - 14f * density).roundToInt(),
+                                (cB - 14f * density).roundToInt(),
+                            )
+                        }
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .border(3.dp, cyanColor, CircleShape),
+                )
+            }
+        }
+
+        // 2. Unclamped Touch Box placed directly on the canvas covering ONLY the visible cropped box + 24dp margin
+        val padPx = 24f * density
+        val screenCL = (w / 2f) + animTx - (pipPixelW / 2f) + cL
+        val screenCT = (h / 2f) + animTy - (pipPixelH / 2f) + cT
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .wrapContentSize(align = Alignment.TopStart, unbounded = true),
+        ) {
             Box(
                 modifier = Modifier
                     .offset {
-                        IntOffset((cL - padPx).roundToInt(), (cT - padPx).roundToInt())
+                        IntOffset((screenCL - padPx).roundToInt(), (screenCT - padPx).roundToInt())
                     }
-                    .size(((cW + 2f * padPx) / density).dp, ((cH + 2f * padPx) / density).dp)
+                    .requiredSize(((cW + 2f * padPx) / density).dp, ((cH + 2f * padPx) / density).dp)
                     .onGloballyPositioned { touchBoxCoords = it }
                     .pointerInput(active.id, isSelected, liveCrop, w, h, effectiveAspect) {
                         awaitEachGesture {
@@ -919,7 +1030,7 @@ private fun PipLayer(
                             val ty = down.position.y
 
                             val handleRadius = 26f * density
-                            val scaleRadius = 32f * density
+                            val scaleRadius = 38f * density
 
                             val target = when {
                                 isSelected && hypot(tx - relL, ty - relT) <= handleRadius -> DragTarget.DELETE_HANDLE
@@ -1027,111 +1138,6 @@ private fun PipLayer(
                         }
                     },
             )
-
-            // 3. Selection border + 4 corner handles
-            if (isSelected) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .drawBehind {
-                            val stroke = Stroke(
-                                width = 2f * density,
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), 0f),
-                            )
-                            drawRoundRect(
-                                color = cyanColor,
-                                topLeft = Offset(cL, cT),
-                                size = Size(cW, cH),
-                                cornerRadius = CornerRadius(2f * density),
-                                style = stroke,
-                            )
-                        },
-                )
-
-                // Top-left ✕ Delete handle
-                Box(
-                    modifier = Modifier
-                        .offset {
-                            IntOffset(
-                                (cL - 14f * density).roundToInt(),
-                                (cT - 14f * density).roundToInt(),
-                            )
-                        }
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF1F1F24))
-                        .border(2.dp, Color.White, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Close,
-                        contentDescription = "Delete",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-
-                // Top-right Flip handle
-                Box(
-                    modifier = Modifier
-                        .offset {
-                            IntOffset(
-                                (cR - 14f * density).roundToInt(),
-                                (cT - 14f * density).roundToInt(),
-                            )
-                        }
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
-                        .border(2.dp, Color.White, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Flip,
-                        contentDescription = "Flip",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-
-                // Bottom-left Animation Effects handle
-                Box(
-                    modifier = Modifier
-                        .offset {
-                            IntOffset(
-                                (cL - 14f * density).roundToInt(),
-                                (cB - 14f * density).roundToInt(),
-                            )
-                        }
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
-                        .border(2.dp, Color.White, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Animation,
-                        contentDescription = "Animation Effects",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-
-                // Bottom-right Scale handle
-                Box(
-                    modifier = Modifier
-                        .offset {
-                            IntOffset(
-                                (cR - 14f * density).roundToInt(),
-                                (cB - 14f * density).roundToInt(),
-                            )
-                        }
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(Color.White)
-                        .border(3.dp, cyanColor, CircleShape),
-                )
-            }
         }
 
         if (isSelected && showAnimMenu) {
