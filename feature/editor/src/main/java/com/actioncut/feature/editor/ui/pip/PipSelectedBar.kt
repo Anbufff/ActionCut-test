@@ -12,9 +12,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -167,7 +169,7 @@ fun PipSelectedBar(
  * Freeform Crop (Free Crop) mode on top of the selected clip/PiP.
  * Shows the full original image/video frame, 4 pink L-shaped corner handles,
  * dimmed outside area, 3x3 grid only while dragging, Reset (circular arrow),
- * and bottom bar (✕ cancel, Crop, ✓ apply).
+ * and bottom bar (✕ cancel, Crop, ✓ apply) positioned cleanly above the nav bar.
  */
 @Composable
 fun FreeCropDialog(
@@ -201,6 +203,9 @@ fun FreeCropDialog(
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     var isDragging by remember { mutableStateOf(false) }
 
+    val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val bottomSpace = maxOf(navInset, 56.dp)
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false),
@@ -213,7 +218,7 @@ fun FreeCropDialog(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
-                    .navigationBarsPadding(),
+                    .padding(bottom = bottomSpace),
             ) {
                 Box(
                     modifier = Modifier
@@ -396,7 +401,7 @@ fun FreeCropDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                        .padding(horizontal = 16.dp, vertical = 2.dp),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -418,45 +423,50 @@ fun FreeCropDialog(
                 }
 
                 // Bottom bar: ✕ cancel, Crop title, ✓ apply
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+                Surface(
+                    color = Color(0xFF16161A),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    IconButton(onClick = onDismiss) {
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = "Cancel",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp),
-                        )
-                    }
-                    Text(
-                        text = "Crop",
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    IconButton(
-                        enabled = originalBitmap != null,
-                        onClick = {
-                            onApplyCrop(
-                                CropRect(
-                                    left = leftRatio,
-                                    top = topRatio,
-                                    right = rightRatio,
-                                    bottom = bottomRatio,
-                                ),
-                            )
-                        },
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(
-                            imageVector = Icons.Filled.Check,
-                            contentDescription = "Apply crop",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp),
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Cancel",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp),
+                            )
+                        }
+                        Text(
+                            text = "Crop",
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleMedium,
                         )
+                        IconButton(
+                            enabled = originalBitmap != null,
+                            onClick = {
+                                onApplyCrop(
+                                    CropRect(
+                                        left = leftRatio,
+                                        top = topRatio,
+                                        right = rightRatio,
+                                        bottom = bottomRatio,
+                                    ),
+                                )
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = "Apply crop",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp),
+                            )
+                        }
                     }
                 }
             }
