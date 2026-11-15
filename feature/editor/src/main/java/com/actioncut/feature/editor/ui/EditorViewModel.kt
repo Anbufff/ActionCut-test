@@ -1352,7 +1352,7 @@ class EditorViewModel @Inject constructor(
         val clip = currentClip(clipId) ?: return
         mutate(structural = false) { timeline ->
             TimelineEditor.updateClip(timeline, clipId) { c ->
-                val newScale = scale.coerceIn(0.15f, 4.0f)
+                val newScale = scale.coerceIn(0.10f, 20.0f)
                 val newTransform = c.transform.copy(scale = newScale)
                 val updatedKfs = c.keyframes.map { it.copy(scale = newScale) }
                 c.copy(transform = newTransform, keyframes = updatedKfs)
