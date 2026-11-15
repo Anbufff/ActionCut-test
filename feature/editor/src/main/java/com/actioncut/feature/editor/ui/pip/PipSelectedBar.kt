@@ -169,7 +169,7 @@ fun PipSelectedBar(
  * Freeform Crop (Free Crop) mode on top of the selected clip/PiP.
  * Shows the full original image/video frame, 4 pink L-shaped corner handles,
  * dimmed outside area, 3x3 grid only while dragging, Reset (circular arrow),
- * and bottom bar (✕ cancel, Crop, ✓ apply) positioned cleanly above the nav bar.
+ * and bottom bar (✕ cancel, Crop, ✓ apply) positioned comfortably above the nav bar.
  */
 @Composable
 fun FreeCropDialog(
@@ -204,7 +204,7 @@ fun FreeCropDialog(
     var isDragging by remember { mutableStateOf(false) }
 
     val navInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val bottomSpace = maxOf(navInset, 56.dp)
+    val bottomSpace = maxOf(navInset + 24.dp, 84.dp)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -430,7 +430,7 @@ fun FreeCropDialog(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
