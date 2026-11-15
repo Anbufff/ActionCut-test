@@ -11,11 +11,19 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Animation
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,23 +51,19 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.CachePolicy
 import coil.request.ImageRequest
+import com.actioncut.core.designsystem.component.SelectableChip
 import com.actioncut.core.designsystem.component.rememberHaptic
 import com.actioncut.core.media.template.FbTemplateBarRenderer
 import com.actioncut.core.media.template.NewsCrickWatermarkRenderer
 import com.actioncut.core.model.*
 import com.actioncut.feature.editor.ui.pip.AiCutoutManager
 import com.actioncut.feature.editor.ui.scorecard.ScorecardManager
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 private enum class DragTarget {
-    NONE, MOVE_PIP, SCALE,
-    CORNER_TL, CORNER_TR, CORNER_BL, CORNER_BR,
-    EDGE_T, EDGE_B, EDGE_L, EDGE_R
+    NONE, MOVE_PIP, SCALE, ANIM_HANDLE
 }
 
 private data class BannerFrameSet(
@@ -82,6 +86,7 @@ fun PreviewPlayer(
     pipClips: List<Clip> = emptyList(),
     onScaleOverlay: (String, Float) -> Unit = { _, _ -> },
     onCropChange: (String, CropRect) -> Unit = { _, _ -> },
+    onSetPipAnimation: (String, PipAnimation) -> Unit = { _, _ -> },
     isCropModeActive: Boolean = false,
     fitMode: FitMode = FitMode.FILL,
     backgroundColorArgb: Int = 0xFF000000.toInt(),
@@ -540,8 +545,7 @@ fun PreviewPlayer(
                         onSelect = onSelectOverlay,
                         onMove = onMoveOverlay,
                         onScale = onScaleOverlay,
-                        onCropChange = onCropChange,
-                        isCropModeActive = isCropModeActive,
+                        onSetPipAnimation = onSetPipAnimation,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -618,8 +622,7 @@ private fun PipLayer(
     onSelect: (String) -> Unit,
     onMove: (String, Float, Float) -> Unit,
     onScale: (String, Float) -> Unit,
-    onCropChange: (String, CropRect) -> Unit,
-    isCropModeActive: Boolean = false,
+    onSetPipAnimation: (String, PipAnimation) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val active = pipClips.firstOrNull {
@@ -629,6 +632,8 @@ private fun PipLayer(
     val context = LocalContext.current
     val isAiCutoutOn = active.filter?.id?.contains("cutout") == true
     val isFlipped = active.filter?.id?.contains("flip") == true
+
+    var showAnimMenu by remember(active.id) { mutableStateOf(false) }
 
     var cutoutUri by remember(active.id, active.filter?.id) {
         mutableStateOf(
@@ -692,16 +697,21 @@ private fun PipLayer(
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
         val density = LocalDensity.current.density
-        val t = active.transform
+        val elapsedMs = (playheadMs - active.timelineStartMs).coerceAtLeast(0L)
+        val props = Keyframes.propsAt(active, elapsedMs)
+        val t = props.transform
         val isSelected = active.id == selectedClipId
         val cyanColor = Color(0xFF00E5FF)
 
+        if (!isSelected && showAnimMenu) {
+            showAnimMenu = false
+        }
+
         val autoAnimAlpha = if (active.id.startsWith("pip_ai_")) {
-            val elapsed = (playheadMs - active.timelineStartMs).coerceAtLeast(0L)
             val remaining = (active.timelineEndMs - playheadMs).coerceAtLeast(0L)
             val fadeMs = 280f
             when {
-                elapsed < fadeMs -> (elapsed / fadeMs).coerceIn(0f, 1f)
+                elapsedMs < fadeMs -> (elapsedMs / fadeMs).coerceIn(0f, 1f)
                 remaining < fadeMs -> (remaining / fadeMs).coerceIn(0f, 1f)
                 else -> 1f
             }
@@ -710,9 +720,9 @@ private fun PipLayer(
         var liveOffsetX by remember(active.id, t.offsetX) { mutableFloatStateOf(t.offsetX) }
         var liveOffsetY by remember(active.id, t.offsetY) { mutableFloatStateOf(t.offsetY) }
         var liveScale by remember(active.id, t.scale) { mutableFloatStateOf(t.scale) }
+        var isDraggingPip by remember(active.id) { mutableStateOf(false) }
 
-        val baseCrop = active.crop ?: CropRect(0f, 0f, 1f, 1f)
-        var liveCrop by remember(active.id, baseCrop) { mutableStateOf(baseCrop) }
+        val liveCrop = active.crop ?: CropRect(0f, 0f, 1f, 1f)
 
         val canvasAspect = if (h > 0f) w / h else (16f / 9f)
         val effectiveAspect = if (mediaAspectRatio > 0f) mediaAspectRatio else canvasAspect
@@ -731,20 +741,63 @@ private fun PipLayer(
         val cB = pipPixelH * liveCrop.bottom
         val cW = (cR - cL).coerceAtLeast(10f)
         val cH = (cB - cT).coerceAtLeast(10f)
-        val cCenterX = (cL + cR) / 2f
-        val cCenterY = (cT + cB) / 2f
+
+        val eased = if (isDraggingPip || active.pipAnimation == PipAnimation.NONE) {
+            1f
+        } else {
+            PipAnimations.easeOut(elapsedMs)
+        }
+
+        val visCenterOffX = ((liveCrop.left + liveCrop.right) / 2f - 0.5f) * pipPixelW
+        val visCenterOffY = ((liveCrop.top + liveCrop.bottom) / 2f - 0.5f) * pipPixelH
+        val restTx = (liveOffsetX / 2f) * w
+        val restTy = (liveOffsetY / 2f) * h
+
+        val animTx: Float
+        val animTy: Float
+        val animScale: Float
+        when (active.pipAnimation) {
+            PipAnimation.SLIDE_LEFT -> {
+                val startTx = -(w / 2f) - visCenterOffX - cW / 2f
+                animTx = startTx + (restTx - startTx) * eased
+                animTy = restTy
+                animScale = 1f
+            }
+            PipAnimation.SLIDE_UP -> {
+                val startTy = (h / 2f) - visCenterOffY + cH / 2f
+                animTx = restTx
+                animTy = startTy + (restTy - startTy) * eased
+                animScale = 1f
+            }
+            PipAnimation.ZOOM_IN -> {
+                animTx = restTx
+                animTy = restTy
+                animScale = 0.05f + 0.95f * eased
+            }
+            PipAnimation.NONE -> {
+                animTx = restTx
+                animTy = restTy
+                animScale = 1f
+            }
+        }
 
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
                 .size((pipPixelW / density).dp, (pipPixelH / density).dp)
                 .graphicsLayer {
-                    translationX = (liveOffsetX / 2f) * w
-                    translationY = (liveOffsetY / 2f) * h
+                    translationX = animTx
+                    translationY = animTy
+                    scaleX = animScale
+                    scaleY = animScale
+                    transformOrigin = TransformOrigin(
+                        (liveCrop.left + liveCrop.right) / 2f,
+                        (liveCrop.top + liveCrop.bottom) / 2f,
+                    )
                     rotationZ = t.rotationDegrees
-                    alpha = active.opacity * autoAnimAlpha
+                    alpha = props.opacity * autoAnimAlpha
                 }
-                .pointerInput(active.id, isSelected, isCropModeActive) {
+                .pointerInput(active.id, isSelected, liveCrop) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         onSelect(active.id)
@@ -753,49 +806,42 @@ private fun PipLayer(
                         val ph = size.height.toFloat()
 
                         val curL = pw * liveCrop.left
-                        val curT = ph * liveCrop.top
                         val curR = pw * liveCrop.right
                         val curB = ph * liveCrop.bottom
 
                         val tx = down.position.x
                         val ty = down.position.y
 
-                        val cropSide = minOf(curR - curL, curB - curT).coerceAtLeast(1f)
-                        val cornerRadius = minOf(38f * density, cropSide * 0.22f)
-                        val edgeRadius = minOf(32f * density, cropSide * 0.16f)
-                        val scaleRadius = minOf(42f * density, cropSide * 0.25f)
+                        val animHandleRadius = 26f * density
+                        val scaleRadius = 32f * density
 
-                        val target = if (isCropModeActive) {
-                            when {
-                                hypot(tx - curL, ty - curT) < cornerRadius -> DragTarget.CORNER_TL
-                                hypot(tx - curR, ty - curT) < cornerRadius -> DragTarget.CORNER_TR
-                                hypot(tx - curL, ty - curB) < cornerRadius -> DragTarget.CORNER_BL
-                                hypot(tx - curR, ty - curB) < cornerRadius -> DragTarget.CORNER_BR
-
-                                abs(ty - curT) < edgeRadius && tx in (curL - edgeRadius)..(curR + edgeRadius) -> DragTarget.EDGE_T
-                                abs(ty - curB) < edgeRadius && tx in (curL - edgeRadius)..(curR + edgeRadius) -> DragTarget.EDGE_B
-                                abs(tx - curL) < edgeRadius && ty in (curT - edgeRadius)..(curB + edgeRadius) -> DragTarget.EDGE_L
-                                abs(tx - curR) < edgeRadius && ty in (curT - edgeRadius)..(curB + edgeRadius) -> DragTarget.EDGE_R
-
-                                tx in curL..curR && ty in curT..curB -> DragTarget.MOVE_PIP
-                                else -> DragTarget.NONE
-                            }
-                        } else {
-                            when {
-                                hypot(tx - pw, ty - ph) < scaleRadius -> DragTarget.SCALE
-                                else -> DragTarget.MOVE_PIP
-                            }
+                        val target = when {
+                            isSelected && hypot(tx - curL, ty - curB) <= animHandleRadius -> DragTarget.ANIM_HANDLE
+                            isSelected && hypot(tx - curR, ty - curB) <= scaleRadius -> DragTarget.SCALE
+                            else -> DragTarget.MOVE_PIP
                         }
 
                         var prevPointers = 0
                         var prevDistance = 0f
+                        var totalAnimMove = 0f
+
+                        if (target != DragTarget.ANIM_HANDLE) {
+                            isDraggingPip = true
+                        }
 
                         do {
                             val event = awaitPointerEvent()
                             val pointers = event.changes.filter { it.pressed }
                             if (pointers.isEmpty()) break
 
-                            if (pointers.size >= 2 && !isCropModeActive) {
+                            if (target == DragTarget.ANIM_HANDLE) {
+                                val pointer = pointers[0]
+                                totalAnimMove += hypot(
+                                    pointer.position.x - pointer.previousPosition.x,
+                                    pointer.position.y - pointer.previousPosition.y,
+                                )
+                                pointer.consume()
+                            } else if (pointers.size >= 2) {
                                 val p1 = pointers[0].position
                                 val p2 = pointers[1].position
                                 val currentDistance = hypot(p1.x - p2.x, p1.y - p2.y)
@@ -821,8 +867,6 @@ private fun PipLayer(
                                 val pointer = pointers[0]
                                 val dx = pointer.position.x - pointer.previousPosition.x
                                 val dy = pointer.position.y - pointer.previousPosition.y
-                                val dxFrac = if (pw > 0f) dx / pw else 0f
-                                val dyFrac = if (ph > 0f) dy / ph else 0f
 
                                 when (target) {
                                     DragTarget.MOVE_PIP -> {
@@ -834,59 +878,19 @@ private fun PipLayer(
                                         liveScale = (liveScale + (dx + dy) / (2f * w)).coerceIn(0.15f, 4.0f)
                                         pointer.consume()
                                     }
-                                    DragTarget.CORNER_TL -> {
-                                        val newL = (liveCrop.left + dxFrac).coerceIn(0f, liveCrop.right - 0.05f)
-                                        val newT = (liveCrop.top + dyFrac).coerceIn(0f, liveCrop.bottom - 0.05f)
-                                        liveCrop = liveCrop.copy(left = newL, top = newT)
-                                        pointer.consume()
-                                    }
-                                    DragTarget.CORNER_TR -> {
-                                        val newR = (liveCrop.right + dxFrac).coerceIn(liveCrop.left + 0.05f, 1f)
-                                        val newT = (liveCrop.top + dyFrac).coerceIn(0f, liveCrop.bottom - 0.05f)
-                                        liveCrop = liveCrop.copy(right = newR, top = newT)
-                                        pointer.consume()
-                                    }
-                                    DragTarget.CORNER_BL -> {
-                                        val newL = (liveCrop.left + dxFrac).coerceIn(0f, liveCrop.right - 0.05f)
-                                        val newB = (liveCrop.bottom + dyFrac).coerceIn(liveCrop.top + 0.05f, 1f)
-                                        liveCrop = liveCrop.copy(left = newL, bottom = newB)
-                                        pointer.consume()
-                                    }
-                                    DragTarget.CORNER_BR -> {
-                                        val newR = (liveCrop.right + dxFrac).coerceIn(liveCrop.left + 0.05f, 1f)
-                                        val newB = (liveCrop.bottom + dyFrac).coerceIn(liveCrop.top + 0.05f, 1f)
-                                        liveCrop = liveCrop.copy(right = newR, bottom = newB)
-                                        pointer.consume()
-                                    }
-                                    DragTarget.EDGE_T -> {
-                                        val newT = (liveCrop.top + dyFrac).coerceIn(0f, liveCrop.bottom - 0.05f)
-                                        liveCrop = liveCrop.copy(top = newT)
-                                        pointer.consume()
-                                    }
-                                    DragTarget.EDGE_B -> {
-                                        val newB = (liveCrop.bottom + dyFrac).coerceIn(liveCrop.top + 0.05f, 1f)
-                                        liveCrop = liveCrop.copy(bottom = newB)
-                                        pointer.consume()
-                                    }
-                                    DragTarget.EDGE_L -> {
-                                        val newL = (liveCrop.left + dxFrac).coerceIn(0f, liveCrop.right - 0.05f)
-                                        liveCrop = liveCrop.copy(left = newL)
-                                        pointer.consume()
-                                    }
-                                    DragTarget.EDGE_R -> {
-                                        val newR = (liveCrop.right + dxFrac).coerceIn(liveCrop.left + 0.05f, 1f)
-                                        liveCrop = liveCrop.copy(right = newR)
-                                        pointer.consume()
-                                    }
                                     else -> {}
                                 }
                             }
                         } while (true)
 
-                        onMove(active.id, liveOffsetX, liveOffsetY)
-                        onScale(active.id, liveScale)
-                        if (isCropModeActive) {
-                            onCropChange(active.id, liveCrop)
+                        isDraggingPip = false
+                        if (target == DragTarget.ANIM_HANDLE) {
+                            if (totalAnimMove < 16f * density) {
+                                showAnimMenu = !showAnimMenu
+                            }
+                        } else {
+                            onMove(active.id, liveOffsetX, liveOffsetY)
+                            onScale(active.id, liveScale)
                         }
                     }
                 },
@@ -977,89 +981,83 @@ private fun PipLayer(
                         },
                 )
 
-                if (isCropModeActive) {
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset((cCenterX - 11 * density).roundToInt(), (cT - 11 * density).roundToInt()) }
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(cyanColor)
-                            .border(2.5.dp, Color.White, CircleShape),
+                // Bottom-left Animation Effects handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (cL - 14f * density).roundToInt(),
+                                (cB - 14f * density).roundToInt(),
+                            )
+                        }
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                        .border(2.dp, Color.White, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Animation,
+                        contentDescription = "Animation Effects",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
                     )
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset((cCenterX - 11 * density).roundToInt(), (cB - 11 * density).roundToInt()) }
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(cyanColor)
-                            .border(2.5.dp, Color.White, CircleShape),
-                    )
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset((cL - 11 * density).roundToInt(), (cCenterY - 11 * density).roundToInt()) }
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(cyanColor)
-                            .border(2.5.dp, Color.White, CircleShape),
-                    )
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset((cR - 11 * density).roundToInt(), (cCenterY - 11 * density).roundToInt()) }
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(cyanColor)
-                            .border(2.5.dp, Color.White, CircleShape),
-                    )
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset((cL - 5 * density).roundToInt(), (cT - 5 * density).roundToInt()) }
-                            .size(24.dp)
-                            .drawBehind {
-                                val strokeW = 4.5f * density
-                                drawLine(cyanColor, Offset(0f, 0f), Offset(size.width, 0f), strokeW)
-                                drawLine(cyanColor, Offset(0f, 0f), Offset(0f, size.height), strokeW)
-                            },
-                    )
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset((cR - 19 * density).roundToInt(), (cT - 5 * density).roundToInt()) }
-                            .size(24.dp)
-                            .drawBehind {
-                                val strokeW = 4.5f * density
-                                drawLine(cyanColor, Offset(0f, 0f), Offset(size.width, 0f), strokeW)
-                                drawLine(cyanColor, Offset(size.width, 0f), Offset(size.width, size.height), strokeW)
-                            },
-                    )
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset((cL - 5 * density).roundToInt(), (cB - 19 * density).roundToInt()) }
-                            .size(24.dp)
-                            .drawBehind {
-                                val strokeW = 4.5f * density
-                                drawLine(cyanColor, Offset(0f, size.height), Offset(size.width, size.height), strokeW)
-                                drawLine(cyanColor, Offset(0f, 0f), Offset(0f, size.height), strokeW)
-                            },
-                    )
-                    Box(
-                        modifier = Modifier
-                            .offset { IntOffset((cR - 19 * density).roundToInt(), (cB - 19 * density).roundToInt()) }
-                            .size(24.dp)
-                            .drawBehind {
-                                val strokeW = 4.5f * density
-                                drawLine(cyanColor, Offset(0f, size.height), Offset(size.width, size.height), strokeW)
-                                drawLine(cyanColor, Offset(size.width, 0f), Offset(size.width, size.height), strokeW)
-                            },
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .offset(x = 8.dp, y = 8.dp)
-                            .size(30.dp)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                            .border(3.5.dp, cyanColor, CircleShape),
-                    )
+                }
+
+                // Bottom-right Scale handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (cR - 14f * density).roundToInt(),
+                                (cB - 14f * density).roundToInt(),
+                            )
+                        }
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .border(3.dp, cyanColor, CircleShape),
+                )
+            }
+        }
+
+        if (isSelected && showAnimMenu) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                shape = RoundedCornerShape(14.dp),
+                tonalElevation = 6.dp,
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LazyRow(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        items(PipAnimation.entries) { anim ->
+                            SelectableChip(
+                                label = anim.label,
+                                selected = active.pipAnimation == anim,
+                                onClick = { onSetPipAnimation(active.id, anim) },
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = { showAnimMenu = false },
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Close animation list",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                 }
             }
         }
@@ -1082,7 +1080,7 @@ private fun OverlayLayer(
         overlays
             .filter { playheadMs >= it.timelineStartMs && playheadMs < it.timelineEndMs }
             .forEach { clip ->
-                val props = com.actioncut.core.model.Keyframes.propsAt(clip, playheadMs - clip.timelineStartMs)
+                val props = Keyframes.propsAt(clip, playheadMs - clip.timelineStartMs)
                 val t = props.transform
                 val glyph = clip.text?.text ?: ""
                 val baseSp = clip.text?.fontSizeSp ?: 24f
@@ -1169,7 +1167,7 @@ private fun NewsBannerImage(
         initialValue = null,
         key1 = uri,
     ) {
-        value = withContext(Dispatchers.IO) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
                 val path = Uri.parse(uri).path ?: return@runCatching null
                 val basePath = if (path.endsWith(".png", ignoreCase = true)) {
@@ -1237,7 +1235,7 @@ private fun StickerImage(uri: String, widthPx: Float, modifier: Modifier = Modif
         initialValue = null,
         key1 = uri,
     ) {
-        value = withContext(Dispatchers.IO) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
                 BitmapFactory.decodeFile(Uri.parse(uri).path)?.asImageBitmap()
             }.getOrNull()
