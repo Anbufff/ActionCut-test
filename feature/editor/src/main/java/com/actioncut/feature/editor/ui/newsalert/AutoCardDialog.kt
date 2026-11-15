@@ -72,6 +72,7 @@ fun AutoCardDialog(
     knownPlayerNames: List<String>,
     resolvePhotoUri: (String) -> String?,
     onDismiss: () -> Unit,
+    onSaveQueue: (entries: List<AutoCardEntry>, durationMs: Long) -> Unit,
     onGenerateAndAdd: (entries: List<AutoCardEntry>, durationMs: Long) -> Unit,
 ) {
     val context = LocalContext.current
@@ -159,7 +160,7 @@ fun AutoCardDialog(
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            text = "ஒவ்வொரு Player-க்கும் தனி Design + Background-ல் Main Track-ல் இணையும்",
+                            text = "Cards-ஐ Queue-வில் சேமித்து Voiceover இடத்தில் 1-Tap-ல் சேர்க்கலாம்",
                             color = Color(0xFF9E9E9E),
                             fontSize = 11.sp,
                         )
@@ -214,7 +215,6 @@ fun AutoCardDialog(
                     }
                 }
 
-                // Background Selector Row: Auto Templates vs Saved Custom Background (Upload / Change / Delete)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -445,29 +445,39 @@ fun AutoCardDialog(
                     }
                 }
 
+                val buildFinalEntries: () -> List<AutoCardEntry> = {
+                    parsedEntries.mapIndexed { idx, e ->
+                        e.copy(
+                            customPhotoUri = customPhotoMap[idx],
+                            layoutIdx = customLayoutMap[idx] ?: e.layoutIdx,
+                        )
+                    }
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     OutlinedButton(
                         onClick = onDismiss,
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.height(46.dp),
                     ) {
-                        Text("Cancel", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        Text("Cancel", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    OutlinedButton(
+                        enabled = parsedEntries.isNotEmpty(),
+                        onClick = { onGenerateAndAdd(buildFinalEntries(), durationSec * 1_000L) },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.height(46.dp),
+                    ) {
+                        Text("All", color = Color(0xFF00E5FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
 
                     Button(
                         enabled = parsedEntries.isNotEmpty(),
-                        onClick = {
-                            val finalEntries = parsedEntries.mapIndexed { idx, e ->
-                                e.copy(
-                                    customPhotoUri = customPhotoMap[idx],
-                                    layoutIdx = customLayoutMap[idx] ?: e.layoutIdx,
-                                )
-                            }
-                            onGenerateAndAdd(finalEntries, durationSec * 1_000L)
-                        },
+                        onClick = { onSaveQueue(buildFinalEntries(), durationSec * 1_000L) },
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color(0xFFFFC107),
@@ -481,11 +491,11 @@ fun AutoCardDialog(
                             Icons.Filled.AutoAwesome,
                             contentDescription = null,
                             tint = Color.Black,
-                            modifier = Modifier.size(17.dp),
+                            modifier = Modifier.size(16.dp),
                         )
-                        Spacer(Modifier.size(5.dp))
+                        Spacer(Modifier.size(4.dp))
                         Text(
-                            text = "Add ${parsedEntries.size} Cards to Track",
+                            text = "Save ${parsedEntries.size} Cards",
                             color = Color.Black,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
