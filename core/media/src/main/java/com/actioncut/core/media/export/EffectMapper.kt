@@ -135,11 +135,16 @@ object EffectMapper {
             effects += templateOverlay
         }
 
-        overlayEffect(clip, overlays, targetWidth)?.let { effects += it }
+        overlayEffect(clip, overlays, targetWidth, targetHeight)?.let { effects += it }
         return effects
     }
 
-    private fun overlayEffect(clip: Clip, overlays: List<Clip>, targetWidth: Int): Effect? {
+    private fun overlayEffect(
+        clip: Clip,
+        overlays: List<Clip>,
+        targetWidth: Int,
+        targetHeight: Int,
+    ): Effect? {
         val overlapping = overlays.filter { ov ->
             ov.timelineStartMs < clip.timelineEndMs && ov.timelineEndMs > clip.timelineStartMs
         }
@@ -162,13 +167,20 @@ object EffectMapper {
                 .build()
             TextOverlay.createStaticTextOverlay(span, settings)
         }
-        val imageOverlays: List<TextureOverlay> = images.mapNotNull { imageOverlay(it, clip, targetWidth) }
+        val imageOverlays: List<TextureOverlay> = images.mapNotNull {
+            imageOverlay(it, clip, targetWidth, targetHeight)
+        }
         val textureOverlays: List<TextureOverlay> = textOverlays + imageOverlays
         if (textureOverlays.isEmpty()) return null
         return OverlayEffect(textureOverlays)
     }
 
-    private fun imageOverlay(ov: Clip, clip: Clip, targetWidth: Int): TextureOverlay? {
+    private fun imageOverlay(
+        ov: Clip,
+        clip: Clip,
+        targetWidth: Int,
+        targetHeight: Int,
+    ): TextureOverlay? {
         val uriStr = ov.mediaUri ?: return null
         val uri = Uri.parse(uriStr)
         val file = if (uri.scheme == "file") File(uri.path ?: "") else File(uriStr)
@@ -219,6 +231,21 @@ object EffectMapper {
         }
 
         val bitmap = BitmapFactory.decodeFile(path) ?: return null
+        val startUs = (ov.timelineStartMs - clip.timelineStartMs).coerceAtLeast(0L) * 1_000L
+        val endUs = (ov.timelineEndMs - clip.timelineStartMs).coerceAtLeast(0L) * 1_000L
+
+        if (path.contains("pip_rendered_") && targetHeight > 0) {
+            return AnimatedPipBitmapOverlay(
+                bitmap = bitmap,
+                targetWidth = targetWidth,
+                targetHeight = targetHeight,
+                clip = ov,
+                hostClipStartMs = clip.timelineStartMs,
+                startUs = startUs,
+                endUs = endUs,
+            )
+        }
+
         val factor = (targetWidth * ov.transform.scale) / bitmap.width.toFloat()
         val visible = StaticOverlaySettings.Builder()
             .setBackgroundFrameAnchor(
@@ -229,8 +256,6 @@ object EffectMapper {
             .setRotationDegrees(ov.transform.rotationDegrees)
             .build()
         val hidden = StaticOverlaySettings.Builder().setAlphaScale(0f).build()
-        val startUs = (ov.timelineStartMs - clip.timelineStartMs).coerceAtLeast(0L) * 1_000L
-        val endUs = (ov.timelineEndMs - clip.timelineStartMs).coerceAtLeast(0L) * 1_000L
         return TimedBitmapOverlay(bitmap, visible, hidden, startUs, endUs)
     }
 
