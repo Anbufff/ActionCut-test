@@ -1,6 +1,7 @@
 package com.actioncut.feature.editor.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,22 +11,31 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,6 +48,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -48,6 +59,7 @@ import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.TrackType
 import com.actioncut.feature.editor.ui.newsalert.AutoCardDialog
+import com.actioncut.feature.editor.ui.newsalert.AutoCardEntry
 import com.actioncut.feature.editor.ui.newsalert.AutoCardRenderer
 import com.actioncut.feature.editor.ui.newsalert.FlashNewsTextDialog
 import com.actioncut.feature.editor.ui.newsalert.NewsAlertTemplatesDialog
@@ -156,201 +168,242 @@ fun EditorScreen(
         else recordPermission.launch(android.Manifest.permission.RECORD_AUDIO)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .statusBarsPadding(),
-    ) {
-        EditorTopBar(
-            title = uiState.projectName,
-            canUndo = uiState.canUndo,
-            canRedo = uiState.canRedo,
-            onUndo = viewModel::undo,
-            onRedo = viewModel::redo,
-            onBack = onBack,
-            onExport = onExport,
-            onTitleClick = { showRename = true },
-            aspectRatio = uiState.aspectRatio,
-            onAspectRatio = viewModel::setAspectRatio,
-            isFbTemplateEnabled = uiState.canvas.isFbTemplateEnabled,
-            onToggleFbTemplate = {
-                viewModel.toggleFbTemplate()
-                if (!uiState.canvas.isFbTemplateEnabled && uiState.canvas.fbTemplateImageUri == null) {
-                    tplImagePicker.launch(arrayOf("image/*"))
-                }
-            },
-        )
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .statusBarsPadding(),
+        ) {
+            EditorTopBar(
+                title = uiState.projectName,
+                canUndo = uiState.canUndo,
+                canRedo = uiState.canRedo,
+                onUndo = viewModel::undo,
+                onRedo = viewModel::redo,
+                onBack = onBack,
+                onExport = onExport,
+                onTitleClick = { showRename = true },
+                aspectRatio = uiState.aspectRatio,
+                onAspectRatio = viewModel::setAspectRatio,
+                isFbTemplateEnabled = uiState.canvas.isFbTemplateEnabled,
+                onToggleFbTemplate = {
+                    viewModel.toggleFbTemplate()
+                    if (!uiState.canvas.isFbTemplateEnabled && uiState.canvas.fbTemplateImageUri == null) {
+                        tplImagePicker.launch(arrayOf("image/*"))
+                    }
+                },
+            )
 
-        val activePipClips = remember(uiState.timeline) {
-            uiState.timeline.tracks
-                .filter { it.type == TrackType.OVERLAY }
-                .flatMap { it.clips }
-                .filter { it.mediaUri?.contains("news_banner") != true }
-        }
-
-        val activeOverlays = remember(uiState.timeline) {
-            uiState.timeline.allClips.filter {
-                it.type == ClipType.TEXT || it.type == ClipType.STICKER
+            val activePipClips = remember(uiState.timeline) {
+                uiState.timeline.tracks
+                    .filter { it.type == TrackType.OVERLAY }
+                    .flatMap { it.clips }
+                    .filter { it.mediaUri?.contains("news_banner") != true }
             }
-        }
 
-        PreviewPlayer(
-            player = viewModel.playerController.player,
-            aspectRatio = uiState.aspectRatio,
-            isPlaying = uiState.isPlaying,
-            onTogglePlay = viewModel::togglePlayPause,
-            overlays = activeOverlays,
-            playheadMs = uiState.playheadMs,
-            selectedClipId = uiState.selectedClipId,
-            onSelectOverlay = viewModel::selectClip,
-            onMoveOverlay = viewModel::setOverlayPosition,
-            pipPlayer = viewModel.playerController.pipPlayer,
-            pipClips = activePipClips,
-            onScaleOverlay = viewModel::setOverlayScale,
-            onCropChange = { id, crop -> viewModel.setCrop(id, crop) },
-            isCropModeActive = isCropModeActive,
-            fitMode = uiState.canvas.fitMode,
-            backgroundColorArgb = uiState.canvas.backgroundColorArgb,
-            allClips = uiState.timeline.allClips,
-            onScorecardRowTapped = viewModel::onScorecardRowTapped,
-            isFbTemplateEnabled = uiState.canvas.isFbTemplateEnabled,
-            fbTemplateImageUri = uiState.canvas.fbTemplateImageUri,
-            onPickTplImage = { tplImagePicker.launch(arrayOf("image/*")) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-        )
+            val activeOverlays = remember(uiState.timeline) {
+                uiState.timeline.allClips.filter {
+                    it.type == ClipType.TEXT || it.type == ClipType.STICKER
+                }
+            }
 
-        PlaybackBar(
-            playheadMs = uiState.playheadMs,
-            durationMs = uiState.durationMs,
-            isPlaying = uiState.isPlaying,
-            onTogglePlay = viewModel::togglePlayPause,
-        )
+            PreviewPlayer(
+                player = viewModel.playerController.player,
+                aspectRatio = uiState.aspectRatio,
+                isPlaying = uiState.isPlaying,
+                onTogglePlay = viewModel::togglePlayPause,
+                overlays = activeOverlays,
+                playheadMs = uiState.playheadMs,
+                selectedClipId = uiState.selectedClipId,
+                onSelectOverlay = viewModel::selectClip,
+                onMoveOverlay = viewModel::setOverlayPosition,
+                pipPlayer = viewModel.playerController.pipPlayer,
+                pipClips = activePipClips,
+                onScaleOverlay = viewModel::setOverlayScale,
+                onCropChange = { id, crop -> viewModel.setCrop(id, crop) },
+                isCropModeActive = isCropModeActive,
+                fitMode = uiState.canvas.fitMode,
+                backgroundColorArgb = uiState.canvas.backgroundColorArgb,
+                allClips = uiState.timeline.allClips,
+                onScorecardRowTapped = viewModel::onScorecardRowTapped,
+                isFbTemplateEnabled = uiState.canvas.isFbTemplateEnabled,
+                fbTemplateImageUri = uiState.canvas.fbTemplateImageUri,
+                onPickTplImage = { tplImagePicker.launch(arrayOf("image/*")) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            )
 
-        EditorTimeline(
-            timeline = uiState.timeline,
-            playheadMs = uiState.playheadMs,
-            durationMs = uiState.durationMs,
-            pxPerSecond = uiState.pxPerSecond,
-            isPlaying = uiState.isPlaying,
-            selectedClipId = uiState.selectedClipId,
-            onScrub = viewModel::scrubTo,
-            onSelectClip = viewModel::selectClip,
-            onTrimStart = viewModel::trimStart,
-            onTrimEnd = viewModel::trimEnd,
-            onTrimCommit = viewModel::commitTrim,
-            onMoveClip = viewModel::moveClip,
-            onMoveCommit = viewModel::commitArrangement,
-            onLoadWaveform = viewModel::loadWaveform,
-            onAddMedia = { addMediaPicker.launch(arrayOf("image/*", "video/*")) },
-            onPause = viewModel::pause,
-            onScrubStart = viewModel::beginScrub,
-            onScrubEnd = viewModel::endScrub,
-            onZoomChange = viewModel::setZoom,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(120.dp),
-        )
+            PlaybackBar(
+                playheadMs = uiState.playheadMs,
+                durationMs = uiState.durationMs,
+                isPlaying = uiState.isPlaying,
+                onTogglePlay = viewModel::togglePlayPause,
+            )
 
-        Box(modifier = Modifier.navigationBarsPadding()) {
-            val tool = uiState.activeTool
-            if (tool != null && tool.opensPanel) {
-                ToolPanel(
-                    tool = tool,
-                    selectedClip = uiState.selectedClip,
-                    onClose = { viewModel.setActiveTool(null) },
-                    onSpeed = viewModel::setSpeed,
-                    onSpeedRamp = viewModel::setSpeedRamp,
-                    onVolume = viewModel::setVolume,
-                    onFilter = viewModel::setFilter,
-                    onAdjust = viewModel::setAdjustments,
-                    onAddText = viewModel::addTextAtPlayhead,
-                    onAddSticker = viewModel::addStickerAtPlayhead,
-                    canvas = uiState.canvas,
-                    onFitMode = viewModel::setFitMode,
-                    onBackgroundColor = viewModel::setBackgroundColor,
-                    onCrop = { rect -> uiState.selectedClipId?.let { viewModel.setCrop(it, rect) } },
-                    onTransition = viewModel::setTransition,
-                    onToggleEffect = viewModel::toggleEffect,
-                    onAddLibraryTrack = viewModel::addLibraryTrackAtPlayhead,
-                    isRecordingVoiceover = uiState.isRecordingVoiceover,
-                    onStartVoiceover = requestVoiceover,
-                    onStopVoiceover = viewModel::stopVoiceover,
-                    onAddKeyframe = viewModel::addKeyframeAtPlayhead,
-                    onClearKeyframes = viewModel::clearKeyframes,
-                    onApplyTransitionToAll = viewModel::applyTransitionToAll,
-                    onApplyRandomTransitions = viewModel::applyRandomTransitions,
-                )
-            } else {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    val selClip = uiState.selectedClip
-                    val isPipSelected = selClip != null && (
-                        uiState.timeline.tracks.firstOrNull { it.type == TrackType.OVERLAY }
-                            ?.clips?.any { it.id == selClip.id } == true &&
-                            selClip.mediaUri?.contains("news_banner") != true
+            EditorTimeline(
+                timeline = uiState.timeline,
+                playheadMs = uiState.playheadMs,
+                durationMs = uiState.durationMs,
+                pxPerSecond = uiState.pxPerSecond,
+                isPlaying = uiState.isPlaying,
+                selectedClipId = uiState.selectedClipId,
+                onScrub = viewModel::scrubTo,
+                onSelectClip = viewModel::selectClip,
+                onTrimStart = viewModel::trimStart,
+                onTrimEnd = viewModel::trimEnd,
+                onTrimCommit = viewModel::commitTrim,
+                onMoveClip = viewModel::moveClip,
+                onMoveCommit = viewModel::commitArrangement,
+                onLoadWaveform = viewModel::loadWaveform,
+                onAddMedia = { addMediaPicker.launch(arrayOf("image/*", "video/*")) },
+                onPause = viewModel::pause,
+                onScrubStart = viewModel::beginScrub,
+                onScrubEnd = viewModel::endScrub,
+                onZoomChange = viewModel::setZoom,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp),
+            )
+
+            Box(modifier = Modifier.navigationBarsPadding()) {
+                val tool = uiState.activeTool
+                if (tool != null && tool.opensPanel) {
+                    ToolPanel(
+                        tool = tool,
+                        selectedClip = uiState.selectedClip,
+                        onClose = { viewModel.setActiveTool(null) },
+                        onSpeed = viewModel::setSpeed,
+                        onSpeedRamp = viewModel::setSpeedRamp,
+                        onVolume = viewModel::setVolume,
+                        onFilter = viewModel::setFilter,
+                        onAdjust = viewModel::setAdjustments,
+                        onAddText = viewModel::addTextAtPlayhead,
+                        onAddSticker = viewModel::addStickerAtPlayhead,
+                        canvas = uiState.canvas,
+                        onFitMode = viewModel::setFitMode,
+                        onBackgroundColor = viewModel::setBackgroundColor,
+                        onCrop = { rect -> uiState.selectedClipId?.let { viewModel.setCrop(it, rect) } },
+                        onTransition = viewModel::setTransition,
+                        onToggleEffect = viewModel::toggleEffect,
+                        onAddLibraryTrack = viewModel::addLibraryTrackAtPlayhead,
+                        isRecordingVoiceover = uiState.isRecordingVoiceover,
+                        onStartVoiceover = requestVoiceover,
+                        onStopVoiceover = viewModel::stopVoiceover,
+                        onAddKeyframe = viewModel::addKeyframeAtPlayhead,
+                        onClearKeyframes = viewModel::clearKeyframes,
+                        onApplyTransitionToAll = viewModel::applyTransitionToAll,
+                        onApplyRandomTransitions = viewModel::applyRandomTransitions,
                     )
-
-                    if (isPipSelected && selClip != null) {
-                        val isKeyframeMode = selClip.keyframes.isNotEmpty()
-                        val isCutoutActive = selClip.filter?.id?.contains("cutout") == true
-
-                        PipSelectedBar(
-                            isKeyframeMode = isKeyframeMode,
-                            isCropActive = isCropModeActive,
-                            isCutoutActive = isCutoutActive,
-                            onCrop = { isCropModeActive = !isCropModeActive },
-                            onTrimRight = viewModel::trimRightAtPlayhead,
-                            onCutout = { viewModel.togglePipCutout() },
-                            onDelete = viewModel::deleteSelected,
-                            onSettings = { viewModel.setActiveTool(EditorTool.KEYFRAME) },
-                            onKeyframeToggle = viewModel::addKeyframeAtPlayhead,
-                            onClipEnd = viewModel::setPipToClipEnd,
-                            onVidEnd = viewModel::setPipToVideoEnd,
-                            onFlip = viewModel::flipSelectedPip,
+                } else {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        val selClip = uiState.selectedClip
+                        val isPipSelected = selClip != null && (
+                            uiState.timeline.tracks.firstOrNull { it.type == TrackType.OVERLAY }
+                                ?.clips?.any { it.id == selClip.id } == true &&
+                                selClip.mediaUri?.contains("news_banner") != true
                         )
-                    } else if (selClip != null) {
-                        val scorecardTheme = selClip.scorecard?.themeIdx
-                        val isAutoCard = AutoCardRenderer.isAutoCardUri(selClip.mediaUri)
-                        SelectedClipBar(
-                            onSplit = viewModel::splitAtPlayhead,
-                            onDuplicate = viewModel::duplicateSelected,
-                            onDelete = viewModel::deleteSelected,
-                            onTrimRight = viewModel::trimRightAtPlayhead,
-                            onDeselect = { viewModel.selectClip(null) },
-                            onTheme = when {
-                                scorecardTheme != null -> ({ viewModel.cycleScorecardTheme() })
-                                isAutoCard -> ({ viewModel.cycleAutoCardDesign() })
-                                else -> null
-                            },
-                            themeLabel = if (scorecardTheme != null) {
-                                "Design ${ScoreCardComposer.normTheme(scorecardTheme) + 1}: ${ScoreCardComposer.themeName(scorecardTheme)}"
+
+                        if (isPipSelected && selClip != null) {
+                            val isKeyframeMode = selClip.keyframes.isNotEmpty()
+                            val isCutoutActive = selClip.filter?.id?.contains("cutout") == true
+
+                            PipSelectedBar(
+                                isKeyframeMode = isKeyframeMode,
+                                isCropActive = isCropModeActive,
+                                isCutoutActive = isCutoutActive,
+                                onCrop = { isCropModeActive = !isCropModeActive },
+                                onTrimRight = viewModel::trimRightAtPlayhead,
+                                onCutout = { viewModel.togglePipCutout() },
+                                onDelete = viewModel::deleteSelected,
+                                onSettings = { viewModel.setActiveTool(EditorTool.KEYFRAME) },
+                                onKeyframeToggle = viewModel::addKeyframeAtPlayhead,
+                                onClipEnd = viewModel::setPipToClipEnd,
+                                onVidEnd = viewModel::setPipToVideoEnd,
+                                onFlip = viewModel::flipSelectedPip,
+                            )
+                        } else if (selClip != null) {
+                            val scorecardTheme = selClip.scorecard?.themeIdx
+                            val isAutoCard = AutoCardRenderer.isAutoCardUri(selClip.mediaUri)
+                            val hasQueue = uiState.autoCardQueue.isNotEmpty()
+                            val cardLabel = if (hasQueue) {
+                                "Card ${uiState.autoCardQueueIndex + 1}/${uiState.autoCardQueue.size}"
                             } else {
-                                "Design"
+                                "Card"
+                            }
+
+                            SelectedClipBar(
+                                onSplit = viewModel::splitAtPlayhead,
+                                onDuplicate = viewModel::duplicateSelected,
+                                onDelete = viewModel::deleteSelected,
+                                onTrimRight = viewModel::trimRightAtPlayhead,
+                                onDeselect = {
+                                    viewModel.closeCardPopup()
+                                    viewModel.selectClip(null)
+                                },
+                                onTheme = when {
+                                    scorecardTheme != null -> ({ viewModel.cycleScorecardTheme() })
+                                    isAutoCard -> ({ viewModel.cycleAutoCardDesign() })
+                                    else -> null
+                                },
+                                themeLabel = if (scorecardTheme != null) {
+                                    "Design ${ScoreCardComposer.normTheme(scorecardTheme) + 1}: ${ScoreCardComposer.themeName(scorecardTheme)}"
+                                } else {
+                                    "Design"
+                                },
+                                onCardClick = {
+                                    if (hasQueue) viewModel.toggleCardPopup()
+                                    else showAutoCard = true
+                                },
+                                cardLabel = cardLabel,
+                                isCardActive = uiState.isCardPopupVisible,
+                            )
+                        }
+
+                        EditorToolbar(
+                            activeTool = uiState.activeTool,
+                            onToolSelected = { tool ->
+                                when (tool) {
+                                    EditorTool.AUDIO -> audioPicker.launch(arrayOf("audio/*"))
+                                    EditorTool.PIP -> pipMediaPicker.launch(arrayOf("image/*", "video/*"))
+                                    EditorTool.CRIC -> cricPicker.launch(arrayOf("image/*"))
+                                    EditorTool.CRIC_CDN -> showCricCdn = true
+                                    EditorTool.CARD_ADD -> showRegister = true
+                                    EditorTool.PLAYER -> showPlayers = true
+                                    EditorTool.NEWS_ALERT -> showNewsAlertTemplates = true
+                                    EditorTool.AUTO_CARD -> showAutoCard = true
+                                    else -> viewModel.setActiveTool(tool)
+                                }
                             },
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
-
-                    EditorToolbar(
-                        activeTool = uiState.activeTool,
-                        onToolSelected = { tool ->
-                            when (tool) {
-                                EditorTool.AUDIO -> audioPicker.launch(arrayOf("audio/*"))
-                                EditorTool.PIP -> pipMediaPicker.launch(arrayOf("image/*", "video/*"))
-                                EditorTool.CRIC -> cricPicker.launch(arrayOf("image/*"))
-                                EditorTool.CRIC_CDN -> showCricCdn = true
-                                EditorTool.CARD_ADD -> showRegister = true
-                                EditorTool.PLAYER -> showPlayers = true
-                                EditorTool.NEWS_ALERT -> showNewsAlertTemplates = true
-                                EditorTool.AUTO_CARD -> showAutoCard = true
-                                else -> viewModel.setActiveTool(tool)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
                 }
             }
+        }
+
+        // Floating Queued Card Popup (sits above SelectedClipBar without changing app layout)
+        val currentQueuedEntry = uiState.autoCardQueue.getOrNull(uiState.autoCardQueueIndex)
+        if (uiState.isCardPopupVisible && currentQueuedEntry != null) {
+            val hasPhoto = remember(currentQueuedEntry, uiState.autoCardQueueIndex) {
+                !currentQueuedEntry.customPhotoUri.isNullOrBlank() ||
+                    !viewModel.resolvePlayerPhotoUriForAutoCard(currentQueuedEntry.playerName).isNullOrBlank()
+            }
+            QueuedCardPopup(
+                entry = currentQueuedEntry,
+                index = uiState.autoCardQueueIndex,
+                total = uiState.autoCardQueue.size,
+                hasPhoto = hasPhoto,
+                onPrev = viewModel::prevQueuedCard,
+                onNext = viewModel::nextQueuedCard,
+                onAddAtPlayhead = viewModel::insertCurrentQueuedCardAtPlayhead,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(horizontal = 12.dp)
+                    .padding(bottom = 138.dp),
+            )
         }
     }
 
@@ -384,6 +437,10 @@ fun EditorScreen(
             knownPlayerNames = remember { viewModel.getKnownPlayerNamesForAi() },
             resolvePhotoUri = { name -> viewModel.resolvePlayerPhotoUriForAutoCard(name) },
             onDismiss = { showAutoCard = false },
+            onSaveQueue = { entries, durationMs ->
+                showAutoCard = false
+                viewModel.setAutoCardQueue(entries, durationMs)
+            },
             onGenerateAndAdd = { entries, durationMs ->
                 showAutoCard = false
                 viewModel.addAutoCardSequence(entries, durationMs)
@@ -435,6 +492,160 @@ fun EditorScreen(
 }
 
 @Composable
+private fun QueuedCardPopup(
+    entry: AutoCardEntry,
+    index: Int,
+    total: Int,
+    hasPhoto: Boolean,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onAddAtPlayhead: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xF5161820),
+        tonalElevation = 10.dp,
+        shadowElevation = 12.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.5.dp, Color(0xFF00E5FF), RoundedCornerShape(16.dp))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(
+                    onClick = onPrev,
+                    enabled = total > 1,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Previous Card",
+                        tint = if (total > 1) Color.White else Color(0xFF555555),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 6.dp),
+                ) {
+                    Text(
+                        text = "Card ${index + 1} / $total  •  ${entry.playerName}",
+                        color = Color(0xFFFFE600),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                IconButton(
+                    onClick = onNext,
+                    enabled = total > 1,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = "Next Card",
+                        tint = if (total > 1) Color.White else Color(0xFF555555),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF20232E))
+                    .clickable { onAddAtPlayhead() }
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFF2A2E3D))
+                            .padding(horizontal = 7.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.Palette,
+                            contentDescription = null,
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(12.dp),
+                        )
+                        Text(
+                            text = AutoCardRenderer.layoutName(entry.layoutIdx),
+                            color = Color(0xFF00E5FF),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (hasPhoto) Color(0xFF173D26) else Color(0xFF3E3012))
+                            .padding(horizontal = 7.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(
+                            if (hasPhoto) Icons.Filled.Check else Icons.Filled.Image,
+                            contentDescription = null,
+                            tint = if (hasPhoto) Color(0xFF4DFF88) else Color(0xFFFFC107),
+                            modifier = Modifier.size(12.dp),
+                        )
+                        Text(
+                            text = if (hasPhoto) "Photo" else "NC Crest",
+                            color = if (hasPhoto) Color(0xFF4DFF88) else Color(0xFFFFC107),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+
+                    Spacer(Modifier.weight(1f))
+
+                    Text(
+                        text = "+ Tap to Add",
+                        color = Color(0xFFFFC107),
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+
+                Text(
+                    text = entry.text,
+                    color = Color.White,
+                    fontSize = 13.5.sp,
+                    lineHeight = 19.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 160.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun EditorTopBar(
     title: String,
     canUndo: Boolean,
@@ -474,7 +685,7 @@ private fun EditorTopBar(
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                overflow = TextOverflow.Ellipsis,
             )
             Icon(
                 Icons.Filled.Edit,
