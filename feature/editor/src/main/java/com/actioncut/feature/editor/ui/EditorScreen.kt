@@ -224,6 +224,14 @@ fun EditorScreen(
                 onScaleOverlay = viewModel::setOverlayScale,
                 onCropChange = { id, crop -> viewModel.setCrop(id, crop) },
                 onSetPipAnimation = viewModel::setPipAnimation,
+                onDeleteOverlay = { id ->
+                    viewModel.selectClip(id)
+                    viewModel.deleteSelected()
+                },
+                onFlipOverlay = { id ->
+                    viewModel.selectClip(id)
+                    viewModel.flipSelectedPip()
+                },
                 fitMode = uiState.canvas.fitMode,
                 backgroundColorArgb = uiState.canvas.backgroundColorArgb,
                 allClips = uiState.timeline.allClips,
