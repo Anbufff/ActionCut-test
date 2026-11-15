@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -383,7 +382,7 @@ fun EditorScreen(
             }
         }
 
-        // Floating Queued Card Popup (sits above SelectedClipBar without changing app layout)
+        // Floating Queued Card Popup positioned cleanly above SelectedClipBar without overlapping buttons
         val currentQueuedEntry = uiState.autoCardQueue.getOrNull(uiState.autoCardQueueIndex)
         if (uiState.isCardPopupVisible && currentQueuedEntry != null) {
             val hasPhoto = remember(currentQueuedEntry, uiState.autoCardQueueIndex) {
@@ -402,7 +401,7 @@ fun EditorScreen(
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
                     .padding(horizontal = 12.dp)
-                    .padding(bottom = 138.dp),
+                    .padding(bottom = 168.dp),
             )
         }
     }
