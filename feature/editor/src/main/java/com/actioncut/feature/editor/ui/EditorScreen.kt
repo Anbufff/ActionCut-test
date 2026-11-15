@@ -47,6 +47,8 @@ import com.actioncut.core.designsystem.component.PrimaryButton
 import com.actioncut.core.model.AspectRatio
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.TrackType
+import com.actioncut.feature.editor.ui.newsalert.AutoCardDialog
+import com.actioncut.feature.editor.ui.newsalert.AutoCardRenderer
 import com.actioncut.feature.editor.ui.newsalert.FlashNewsTextDialog
 import com.actioncut.feature.editor.ui.newsalert.NewsAlertTemplatesDialog
 import com.actioncut.feature.editor.ui.pip.PipSelectedBar
@@ -72,6 +74,7 @@ fun EditorScreen(
 
     var showNewsAlertTemplates by remember { mutableStateOf(false) }
     var showFlashNewsText by remember { mutableStateOf(false) }
+    var showAutoCard by remember { mutableStateOf(false) }
     var isCropModeActive by remember { mutableStateOf(false) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -309,13 +312,18 @@ fun EditorScreen(
                         )
                     } else if (selClip != null) {
                         val scorecardTheme = selClip.scorecard?.themeIdx
+                        val isAutoCard = AutoCardRenderer.isAutoCardUri(selClip.mediaUri)
                         SelectedClipBar(
                             onSplit = viewModel::splitAtPlayhead,
                             onDuplicate = viewModel::duplicateSelected,
                             onDelete = viewModel::deleteSelected,
                             onTrimRight = viewModel::trimRightAtPlayhead,
                             onDeselect = { viewModel.selectClip(null) },
-                            onTheme = if (scorecardTheme != null) ({ viewModel.cycleScorecardTheme() }) else null,
+                            onTheme = when {
+                                scorecardTheme != null -> ({ viewModel.cycleScorecardTheme() })
+                                isAutoCard -> ({ viewModel.cycleAutoCardDesign() })
+                                else -> null
+                            },
                             themeLabel = if (scorecardTheme != null) {
                                 "Design ${ScoreCardComposer.normTheme(scorecardTheme) + 1}: ${ScoreCardComposer.themeName(scorecardTheme)}"
                             } else {
@@ -335,6 +343,7 @@ fun EditorScreen(
                                 EditorTool.CARD_ADD -> showRegister = true
                                 EditorTool.PLAYER -> showPlayers = true
                                 EditorTool.NEWS_ALERT -> showNewsAlertTemplates = true
+                                EditorTool.AUTO_CARD -> showAutoCard = true
                                 else -> viewModel.setActiveTool(tool)
                             }
                         },
@@ -366,6 +375,18 @@ fun EditorScreen(
             onAiAutoSync = { segments ->
                 showFlashNewsText = false
                 viewModel.addAiFlashNewsSequence(segments)
+            },
+        )
+    }
+
+    if (showAutoCard) {
+        AutoCardDialog(
+            knownPlayerNames = remember { viewModel.getKnownPlayerNamesForAi() },
+            resolvePhotoUri = { name -> viewModel.resolvePlayerPhotoUriForAutoCard(name) },
+            onDismiss = { showAutoCard = false },
+            onGenerateAndAdd = { entries, durationMs ->
+                showAutoCard = false
+                viewModel.addAutoCardSequence(entries, durationMs)
             },
         )
     }
