@@ -1,5 +1,10 @@
 package com.actioncut.feature.editor.ui.pip
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -9,24 +14,30 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -40,23 +51,34 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import coil.compose.AsyncImage
 import com.actioncut.core.designsystem.component.ToolItem
 import com.actioncut.core.model.Clip
+import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.CropRect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
+
+private const val MIN_CROP_FRAC = 0.10f
 
 /**
  * PiP Selected Toolbar:
- * CLIP END மற்றும் FLIP நீக்கப்பட்டு, தேவையான முக்கிய டூல்கள் மட்டும் தெளிவாகக் காட்டப்பட்டுள்ளன.
+ * பழைய லேஅவுட் மற்றும் பட்டன்கள் எதுவும் மாற்றப்படவில்லை.
  */
 @Composable
 fun PipSelectedBar(
@@ -85,7 +107,6 @@ fun PipSelectedBar(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 1. Keyframe +/-
             item {
                 ToolItem(
                     label = "KF +/-",
@@ -94,7 +115,6 @@ fun PipSelectedBar(
                     onClick = onKeyframeToggle,
                 )
             }
-            // 2. VID END
             item {
                 ToolItem(
                     label = "VID END",
@@ -102,7 +122,6 @@ fun PipSelectedBar(
                     onClick = onVidEnd,
                 )
             }
-            // 3. CROP
             item {
                 ToolItem(
                     label = "CROP",
@@ -111,7 +130,6 @@ fun PipSelectedBar(
                     onClick = onCrop,
                 )
             }
-            // 4. TRIM R (Trim Right at playhead)
             item {
                 ToolItem(
                     label = "TRIM R",
@@ -119,7 +137,6 @@ fun PipSelectedBar(
                     onClick = onTrimRight,
                 )
             }
-            // 5. CUTOUT (Google AI Selfie Human Cutout)
             item {
                 ToolItem(
                     label = "CUTOUT",
@@ -128,7 +145,6 @@ fun PipSelectedBar(
                     onClick = onCutout,
                 )
             }
-            // 6. DELETE
             item {
                 ToolItem(
                     label = "DELETE",
@@ -136,7 +152,6 @@ fun PipSelectedBar(
                     onClick = onDelete,
                 )
             }
-            // 7. SETTINGS
             item {
                 ToolItem(
                     label = "SETTINGS",
@@ -149,49 +164,282 @@ fun PipSelectedBar(
 }
 
 /**
- * 8-புள்ளிகள் கொண்ட Interactive Crop Box
+ * Freeform Crop (Free Crop) mode on top of the selected clip/PiP.
+ * Shows the full original image/video frame, 4 pink L-shaped corner handles,
+ * dimmed outside area, 3x3 grid only while dragging, Reset (circular arrow),
+ * and bottom bar (✕ cancel, Crop, ✓ apply).
  */
 @Composable
 fun FreeCropDialog(
     clip: Clip,
+    playheadMs: Long = clip.timelineStartMs,
     onDismiss: () -> Unit,
     onApplyCrop: (CropRect) -> Unit,
 ) {
-    var containerSize by remember { mutableStateOf(IntSize.Zero) }
+    val context = LocalContext.current
     val initialCrop = clip.crop ?: CropRect(0f, 0f, 1f, 1f)
-    var leftRatio by remember { mutableFloatStateOf(initialCrop.left) }
-    var topRatio by remember { mutableFloatStateOf(initialCrop.top) }
-    var rightRatio by remember { mutableFloatStateOf(initialCrop.right) }
-    var bottomRatio by remember { mutableFloatStateOf(initialCrop.bottom) }
+
+    var leftRatio by remember(clip.id) { mutableFloatStateOf(initialCrop.left.coerceIn(0f, 1f - MIN_CROP_FRAC)) }
+    var topRatio by remember(clip.id) { mutableFloatStateOf(initialCrop.top.coerceIn(0f, 1f - MIN_CROP_FRAC)) }
+    var rightRatio by remember(clip.id) {
+        mutableFloatStateOf(initialCrop.right.coerceIn(leftRatio + MIN_CROP_FRAC, 1f))
+    }
+    var bottomRatio by remember(clip.id) {
+        mutableFloatStateOf(initialCrop.bottom.coerceIn(topRatio + MIN_CROP_FRAC, 1f))
+    }
+
+    var originalBitmap by remember(clip.id, clip.mediaUri) { mutableStateOf<Bitmap?>(null) }
+    var failed by remember(clip.id, clip.mediaUri) { mutableStateOf(false) }
+
+    LaunchedEffect(clip.id, clip.mediaUri) {
+        val bmp = withContext(Dispatchers.IO) {
+            loadOriginalFrameBitmap(context, clip, playheadMs)
+        }
+        if (bmp == null) failed = true else originalBitmap = bmp
+    }
+
+    var containerSize by remember { mutableStateOf(IntSize.Zero) }
+    var isDragging by remember { mutableStateOf(false) }
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false),
     ) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = Color.Black.copy(alpha = 0.95f),
+            color = Color(0xFF0E0E10),
         ) {
             Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding(),
             ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .onSizeChanged { containerSize = it },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val bmp = originalBitmap
+                    when {
+                        failed -> Text(
+                            text = "Could not load clip frame.",
+                            color = Color.White,
+                        )
+                        bmp == null -> CircularProgressIndicator(color = Color(0xFFFF2E5B))
+                        else -> {
+                            val imageBitmap = remember(bmp) { bmp.asImageBitmap() }
+                            Canvas(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .pointerInput(bmp, containerSize) {
+                                        var activeHandle: Int? = null
+                                        detectDragGestures(
+                                            onDragStart = { offset ->
+                                                val r = fitRect(containerSize, bmp)
+                                                if (r.width <= 0f || r.height <= 0f) {
+                                                    activeHandle = null
+                                                    return@detectDragGestures
+                                                }
+                                                val l = r.left + leftRatio * r.width
+                                                val t = r.top + topRatio * r.height
+                                                val ri = r.left + rightRatio * r.width
+                                                val b = r.top + bottomRatio * r.height
+                                                val cornerHit = 36.dp.toPx()
+                                                val edgeHit = 22.dp.toPx()
+
+                                                activeHandle = when {
+                                                    (offset - Offset(l, t)).getDistance() <= cornerHit -> 0
+                                                    (offset - Offset(ri, t)).getDistance() <= cornerHit -> 1
+                                                    (offset - Offset(ri, b)).getDistance() <= cornerHit -> 2
+                                                    (offset - Offset(l, b)).getDistance() <= cornerHit -> 3
+                                                    offset.y in t..b && abs(offset.x - l) <= edgeHit -> 4
+                                                    offset.y in t..b && abs(offset.x - ri) <= edgeHit -> 5
+                                                    offset.x in l..ri && abs(offset.y - t) <= edgeHit -> 6
+                                                    offset.x in l..ri && abs(offset.y - b) <= edgeHit -> 7
+                                                    offset.x in l..ri && offset.y in t..b -> 8
+                                                    else -> null
+                                                }
+                                                isDragging = activeHandle != null
+                                            },
+                                            onDrag = { change, dragAmount ->
+                                                val r = fitRect(containerSize, bmp)
+                                                if (r.width <= 0f || r.height <= 0f || activeHandle == null) {
+                                                    return@detectDragGestures
+                                                }
+                                                change.consume()
+                                                val dx = dragAmount.x / r.width
+                                                val dy = dragAmount.y / r.height
+
+                                                when (activeHandle) {
+                                                    0 -> {
+                                                        leftRatio = (leftRatio + dx).coerceIn(0f, rightRatio - MIN_CROP_FRAC)
+                                                        topRatio = (topRatio + dy).coerceIn(0f, bottomRatio - MIN_CROP_FRAC)
+                                                    }
+                                                    1 -> {
+                                                        rightRatio = (rightRatio + dx).coerceIn(leftRatio + MIN_CROP_FRAC, 1f)
+                                                        topRatio = (topRatio + dy).coerceIn(0f, bottomRatio - MIN_CROP_FRAC)
+                                                    }
+                                                    2 -> {
+                                                        rightRatio = (rightRatio + dx).coerceIn(leftRatio + MIN_CROP_FRAC, 1f)
+                                                        bottomRatio = (bottomRatio + dy).coerceIn(topRatio + MIN_CROP_FRAC, 1f)
+                                                    }
+                                                    3 -> {
+                                                        leftRatio = (leftRatio + dx).coerceIn(0f, rightRatio - MIN_CROP_FRAC)
+                                                        bottomRatio = (bottomRatio + dy).coerceIn(topRatio + MIN_CROP_FRAC, 1f)
+                                                    }
+                                                    4 -> {
+                                                        leftRatio = (leftRatio + dx).coerceIn(0f, rightRatio - MIN_CROP_FRAC)
+                                                    }
+                                                    5 -> {
+                                                        rightRatio = (rightRatio + dx).coerceIn(leftRatio + MIN_CROP_FRAC, 1f)
+                                                    }
+                                                    6 -> {
+                                                        topRatio = (topRatio + dy).coerceIn(0f, bottomRatio - MIN_CROP_FRAC)
+                                                    }
+                                                    7 -> {
+                                                        bottomRatio = (bottomRatio + dy).coerceIn(topRatio + MIN_CROP_FRAC, 1f)
+                                                    }
+                                                    8 -> {
+                                                        val boxW = rightRatio - leftRatio
+                                                        val boxH = bottomRatio - topRatio
+                                                        val newLeft = (leftRatio + dx).coerceIn(0f, 1f - boxW)
+                                                        val newTop = (topRatio + dy).coerceIn(0f, 1f - boxH)
+                                                        leftRatio = newLeft
+                                                        rightRatio = newLeft + boxW
+                                                        topRatio = newTop
+                                                        bottomRatio = newTop + boxH
+                                                    }
+                                                }
+                                            },
+                                            onDragEnd = {
+                                                activeHandle = null
+                                                isDragging = false
+                                            },
+                                            onDragCancel = {
+                                                activeHandle = null
+                                                isDragging = false
+                                            },
+                                        )
+                                    },
+                            ) {
+                                val r = fitRect(containerSize, bmp)
+                                if (r.width <= 0f || r.height <= 0f) return@Canvas
+
+                                drawImage(
+                                    image = imageBitmap,
+                                    dstOffset = IntOffset(r.left.roundToInt(), r.top.roundToInt()),
+                                    dstSize = IntSize(r.width.roundToInt(), r.height.roundToInt()),
+                                )
+
+                                val l = r.left + leftRatio * r.width
+                                val t = r.top + topRatio * r.height
+                                val ri = r.left + rightRatio * r.width
+                                val b = r.top + bottomRatio * r.height
+                                val rectW = ri - l
+                                val rectH = b - t
+
+                                // Dim outside the crop box
+                                drawPath(
+                                    path = Path().apply {
+                                        addRect(Rect(r.left, r.top, r.right, r.bottom))
+                                        addRect(Rect(l, t, ri, b))
+                                        fillType = PathFillType.EvenOdd
+                                    },
+                                    color = Color.Black.copy(alpha = 0.65f),
+                                )
+
+                                // Thin white frame
+                                drawRect(
+                                    color = Color.White,
+                                    topLeft = Offset(l, t),
+                                    size = Size(rectW, rectH),
+                                    style = Stroke(width = 1.5.dp.toPx()),
+                                )
+
+                                // 3x3 grid only while dragging
+                                if (isDragging) {
+                                    val gridColor = Color.White.copy(alpha = 0.6f)
+                                    val gridW = 1.dp.toPx()
+                                    drawLine(gridColor, Offset(l + rectW / 3f, t), Offset(l + rectW / 3f, b), gridW)
+                                    drawLine(gridColor, Offset(l + 2f * rectW / 3f, t), Offset(l + 2f * rectW / 3f, b), gridW)
+                                    drawLine(gridColor, Offset(l, t + rectH / 3f), Offset(ri, t + rectH / 3f), gridW)
+                                    drawLine(gridColor, Offset(l, t + 2f * rectH / 3f), Offset(ri, t + 2f * rectH / 3f), gridW)
+                                }
+
+                                // 4 pink L-shaped corner handles
+                                val pink = Color(0xFFFF2E5B)
+                                val arm = minOf(22.dp.toPx(), rectW * 0.35f, rectH * 0.35f)
+                                val strokePx = 4.dp.toPx()
+
+                                // Top-left L
+                                drawLine(pink, Offset(l, t), Offset(l + arm, t), strokePx, StrokeCap.Square)
+                                drawLine(pink, Offset(l, t), Offset(l, t + arm), strokePx, StrokeCap.Square)
+                                // Top-right L
+                                drawLine(pink, Offset(ri - arm, t), Offset(ri, t), strokePx, StrokeCap.Square)
+                                drawLine(pink, Offset(ri, t), Offset(ri, t + arm), strokePx, StrokeCap.Square)
+                                // Bottom-left L
+                                drawLine(pink, Offset(l, b), Offset(l + arm, b), strokePx, StrokeCap.Square)
+                                drawLine(pink, Offset(l, b - arm), Offset(l, b), strokePx, StrokeCap.Square)
+                                // Bottom-right L
+                                drawLine(pink, Offset(ri - arm, b), Offset(ri, b), strokePx, StrokeCap.Square)
+                                drawLine(pink, Offset(ri, b - arm), Offset(ri, b), strokePx, StrokeCap.Square)
+                            }
+                        }
+                    }
+                }
+
+                // Reset (circular arrow icon) row above bottom bar
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(
+                        onClick = {
+                            leftRatio = 0f
+                            topRatio = 0f
+                            rightRatio = 1f
+                            bottomRatio = 1f
+                        },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = "Reset crop",
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp),
+                        )
+                    }
+                }
+
+                // Bottom bar: ✕ cancel, Crop title, ✓ apply
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TextButton(onClick = onDismiss) {
-                        Text("Cancel", color = Color.White)
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Cancel",
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp),
+                        )
                     }
                     Text(
-                        text = "Free Crop",
+                        text = "Crop",
                         color = Color.White,
                         style = MaterialTheme.typography.titleMedium,
                     )
-                    Button(
+                    IconButton(
+                        enabled = originalBitmap != null,
                         onClick = {
                             onApplyCrop(
                                 CropRect(
@@ -202,156 +450,82 @@ fun FreeCropDialog(
                                 ),
                             )
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF2D55)),
                     ) {
-                        Text("Done", color = Color.White)
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(20.dp)
-                        .onGloballyPositioned { containerSize = it.size },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (containerSize.width > 0 && containerSize.height > 0) {
-                        val cWidth = containerSize.width.toFloat()
-                        val cHeight = containerSize.height.toFloat()
-
-                        AsyncImage(
-                            model = clip.mediaUri,
-                            contentDescription = "Crop target",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit,
+                        Icon(
+                            imageVector = Icons.Filled.Check,
+                            contentDescription = "Apply crop",
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp),
                         )
-
-                        Canvas(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(Unit) {
-                                    var activeHandle: Int? = null
-
-                                    detectDragGestures(
-                                        onDragStart = { offset ->
-                                            val l = leftRatio * cWidth
-                                            val t = topRatio * cHeight
-                                            val r = rightRatio * cWidth
-                                            val b = bottomRatio * cHeight
-                                            val radius = 60f
-
-                                            activeHandle = when {
-                                                (offset - Offset(l, t)).getDistance() < radius -> 0
-                                                (offset - Offset(r, t)).getDistance() < radius -> 1
-                                                (offset - Offset(r, b)).getDistance() < radius -> 2
-                                                (offset - Offset(l, b)).getDistance() < radius -> 3
-                                                offset.y in t..b && kotlin.math.abs(offset.x - l) < radius -> 4
-                                                offset.y in t..b && kotlin.math.abs(offset.x - r) < radius -> 5
-                                                offset.x in l..r && kotlin.math.abs(offset.y - t) < radius -> 6
-                                                offset.x in l..r && kotlin.math.abs(offset.y - b) < radius -> 7
-                                                else -> null
-                                            }
-                                        },
-                                        onDrag = { change, dragAmount ->
-                                            change.consume()
-                                            val dx = dragAmount.x / cWidth
-                                            val dy = dragAmount.y / cHeight
-
-                                            when (activeHandle) {
-                                                0 -> {
-                                                    leftRatio = (leftRatio + dx).coerceIn(0f, rightRatio - 0.08f)
-                                                    topRatio = (topRatio + dy).coerceIn(0f, bottomRatio - 0.08f)
-                                                }
-                                                1 -> {
-                                                    rightRatio = (rightRatio + dx).coerceIn(leftRatio + 0.08f, 1f)
-                                                    topRatio = (topRatio + dy).coerceIn(0f, bottomRatio - 0.08f)
-                                                }
-                                                2 -> {
-                                                    rightRatio = (rightRatio + dx).coerceIn(leftRatio + 0.08f, 1f)
-                                                    bottomRatio = (bottomRatio + dy).coerceIn(topRatio + 0.08f, 1f)
-                                                }
-                                                3 -> {
-                                                    leftRatio = (leftRatio + dx).coerceIn(0f, rightRatio - 0.08f)
-                                                    bottomRatio = (bottomRatio + dy).coerceIn(topRatio + 0.08f, 1f)
-                                                }
-                                                4 -> leftRatio = (leftRatio + dx).coerceIn(0f, rightRatio - 0.08f)
-                                                5 -> rightRatio = (rightRatio + dx).coerceIn(leftRatio + 0.08f, 1f)
-                                                6 -> topRatio = (topRatio + dy).coerceIn(0f, bottomRatio - 0.08f)
-                                                7 -> bottomRatio = (bottomRatio + dy).coerceIn(topRatio + 0.08f, 1f)
-                                            }
-                                        },
-                                    )
-                                },
-                        ) {
-                            val l = leftRatio * size.width
-                            val t = topRatio * size.height
-                            val r = rightRatio * size.width
-                            val b = bottomRatio * size.height
-                            val rectW = r - l
-                            val rectH = b - t
-
-                            drawPath(
-                                path = Path().apply {
-                                    addRect(Rect(0f, 0f, size.width, size.height))
-                                    addRect(Rect(l, t, r, b))
-                                    fillType = PathFillType.EvenOdd
-                                },
-                                color = Color.Black.copy(alpha = 0.65f),
-                            )
-
-                            drawRect(
-                                color = Color.White,
-                                topLeft = Offset(l, t),
-                                size = Size(rectW, rectH),
-                                style = Stroke(width = 2.5.dp.toPx()),
-                            )
-
-                            drawLine(Color.White.copy(0.4f), Offset(l + rectW / 3, t), Offset(l + rectW / 3, b), 1.dp.toPx())
-                            drawLine(Color.White.copy(0.4f), Offset(l + 2 * rectW / 3, t), Offset(l + 2 * rectW / 3, b), 1.dp.toPx())
-                            drawLine(Color.White.copy(0.4f), Offset(l, t + rectH / 3), Offset(r, t + rectH / 3), 1.dp.toPx())
-                            drawLine(Color.White.copy(0.4f), Offset(l, t + 2 * rectH / 3), Offset(r, t + 2 * rectH / 3), 1.dp.toPx())
-
-                            val dotRadius = 7.dp.toPx()
-                            drawCircle(Color(0xFF00E5FF), dotRadius, Offset(l, t))
-                            drawCircle(Color(0xFF00E5FF), dotRadius, Offset(r, t))
-                            drawCircle(Color(0xFF00E5FF), dotRadius, Offset(r, b))
-                            drawCircle(Color(0xFF00E5FF), dotRadius, Offset(l, b))
-                        }
-                    }
-                }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 20.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            leftRatio = 0f
-                            topRatio = 0f
-                            rightRatio = 1f
-                            bottomRatio = 1f
-                        },
-                    ) {
-                        Text("Reset", color = Color.White)
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            val side = min(containerSize.width, containerSize.height).toFloat()
-                            val rw = side / containerSize.width
-                            val rh = side / containerSize.height
-                            leftRatio = (1f - rw) / 2f
-                            rightRatio = leftRatio + rw
-                            topRatio = (1f - rh) / 2f
-                            bottomRatio = topRatio + rh
-                        },
-                    ) {
-                        Text("1:1 Square", color = Color.White)
                     }
                 }
             }
         }
+    }
+}
+
+private fun fitRect(size: IntSize, bitmap: Bitmap): Rect {
+    if (size.width <= 0 || size.height <= 0 || bitmap.width <= 0 || bitmap.height <= 0) return Rect.Zero
+    val scale = min(size.width.toFloat() / bitmap.width, size.height.toFloat() / bitmap.height)
+    val w = bitmap.width * scale
+    val h = bitmap.height * scale
+    val left = (size.width - w) / 2f
+    val top = (size.height - h) / 2f
+    return Rect(left, top, left + w, top + h)
+}
+
+private fun loadOriginalFrameBitmap(context: Context, clip: Clip, playheadMs: Long): Bitmap? {
+    val uriStr = clip.mediaUri ?: return null
+    val uri = Uri.parse(uriStr)
+
+    if (clip.type == ClipType.VIDEO) {
+        val retriever = MediaMetadataRetriever()
+        return runCatching {
+            retriever.setDataSource(context, uri)
+            val timeInClipMs = (playheadMs - clip.timelineStartMs).coerceAtLeast(0L)
+            val sourceTimeMs = (clip.sourceInMs + (timeInClipMs * clip.speed).toLong()).coerceAtLeast(0L)
+            val frame = retriever.getFrameAtTime(sourceTimeMs * 1_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.getFrameAtTime()
+                ?: return@runCatching null
+            downscaleIfNeeded(frame, 1920)
+        }.getOrNull().also {
+            runCatching { retriever.release() }
+        }
+    }
+
+    return runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        if (uri.scheme == "file") {
+            val f = File(uri.path ?: "")
+            if (f.exists()) BitmapFactory.decodeFile(f.absolutePath, bounds)
+        } else {
+            context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, bounds)
+            }
+        }
+        var sample = 1
+        val longest = max(bounds.outWidth, bounds.outHeight)
+        while (longest / sample > 1920) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+
+        if (uri.scheme == "file") {
+            val f = File(uri.path ?: "")
+            if (f.exists()) BitmapFactory.decodeFile(f.absolutePath, opts) else null
+        } else {
+            context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, opts)
+            }
+        }
+    }.getOrNull()
+}
+
+private fun downscaleIfNeeded(src: Bitmap, maxLongEdge: Int): Bitmap {
+    val longest = max(src.width, src.height)
+    if (longest <= maxLongEdge) return src
+    val scale = maxLongEdge.toFloat() / longest.toFloat()
+    val w = (src.width * scale).roundToInt().coerceAtLeast(1)
+    val h = (src.height * scale).roundToInt().coerceAtLeast(1)
+    return Bitmap.createScaledBitmap(src, w, h, true).also {
+        if (it !== src) src.recycle()
     }
 }
