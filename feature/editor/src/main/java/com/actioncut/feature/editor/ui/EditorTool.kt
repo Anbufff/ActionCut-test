@@ -13,6 +13,7 @@ enum class EditorTool(val label: String, val opensPanel: Boolean) {
     MUTE("Mute", false),
     AUDIO("Audio", false),
     NEWS_ALERT("NEWS ALERT", false), // Fty News Alert Button
+    AUTO_CARD("Auto Card", false),
     MUSIC("Music", true),
     VOICEOVER("Voiceover", true),
     PIP("PiP", false),
