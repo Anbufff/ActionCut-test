@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -63,7 +64,7 @@ import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 private enum class DragTarget {
-    NONE, MOVE_PIP, SCALE, ANIM_HANDLE
+    NONE, MOVE_PIP, SCALE, ANIM_HANDLE, DELETE_HANDLE, FLIP_HANDLE
 }
 
 private data class BannerFrameSet(
@@ -87,6 +88,8 @@ fun PreviewPlayer(
     onScaleOverlay: (String, Float) -> Unit = { _, _ -> },
     onCropChange: (String, CropRect) -> Unit = { _, _ -> },
     onSetPipAnimation: (String, PipAnimation) -> Unit = { _, _ -> },
+    onDeleteOverlay: (String) -> Unit = {},
+    onFlipOverlay: (String) -> Unit = {},
     isCropModeActive: Boolean = false,
     fitMode: FitMode = FitMode.FILL,
     backgroundColorArgb: Int = 0xFF000000.toInt(),
@@ -546,6 +549,8 @@ fun PreviewPlayer(
                         onMove = onMoveOverlay,
                         onScale = onScaleOverlay,
                         onSetPipAnimation = onSetPipAnimation,
+                        onDelete = onDeleteOverlay,
+                        onFlip = onFlipOverlay,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -623,6 +628,8 @@ private fun PipLayer(
     onMove: (String, Float, Float) -> Unit,
     onScale: (String, Float) -> Unit,
     onSetPipAnimation: (String, PipAnimation) -> Unit,
+    onDelete: (String) -> Unit,
+    onFlip: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val active = pipClips.firstOrNull {
@@ -806,26 +813,33 @@ private fun PipLayer(
                         val ph = size.height.toFloat()
 
                         val curL = pw * liveCrop.left
+                        val curT = ph * liveCrop.top
                         val curR = pw * liveCrop.right
                         val curB = ph * liveCrop.bottom
 
                         val tx = down.position.x
                         val ty = down.position.y
 
-                        val animHandleRadius = 26f * density
+                        val handleRadius = 26f * density
                         val scaleRadius = 32f * density
 
                         val target = when {
-                            isSelected && hypot(tx - curL, ty - curB) <= animHandleRadius -> DragTarget.ANIM_HANDLE
+                            isSelected && hypot(tx - curL, ty - curT) <= handleRadius -> DragTarget.DELETE_HANDLE
+                            isSelected && hypot(tx - curR, ty - curT) <= handleRadius -> DragTarget.FLIP_HANDLE
+                            isSelected && hypot(tx - curL, ty - curB) <= handleRadius -> DragTarget.ANIM_HANDLE
                             isSelected && hypot(tx - curR, ty - curB) <= scaleRadius -> DragTarget.SCALE
                             else -> DragTarget.MOVE_PIP
                         }
 
+                        val isTapHandle = target == DragTarget.ANIM_HANDLE ||
+                            target == DragTarget.DELETE_HANDLE ||
+                            target == DragTarget.FLIP_HANDLE
+
                         var prevPointers = 0
                         var prevDistance = 0f
-                        var totalAnimMove = 0f
+                        var totalHandleMove = 0f
 
-                        if (target != DragTarget.ANIM_HANDLE) {
+                        if (!isTapHandle) {
                             isDraggingPip = true
                         }
 
@@ -834,9 +848,9 @@ private fun PipLayer(
                             val pointers = event.changes.filter { it.pressed }
                             if (pointers.isEmpty()) break
 
-                            if (target == DragTarget.ANIM_HANDLE) {
+                            if (isTapHandle) {
                                 val pointer = pointers[0]
-                                totalAnimMove += hypot(
+                                totalHandleMove += hypot(
                                     pointer.position.x - pointer.previousPosition.x,
                                     pointer.position.y - pointer.previousPosition.y,
                                 )
@@ -884,13 +898,21 @@ private fun PipLayer(
                         } while (true)
 
                         isDraggingPip = false
-                        if (target == DragTarget.ANIM_HANDLE) {
-                            if (totalAnimMove < 16f * density) {
+                        when (target) {
+                            DragTarget.DELETE_HANDLE -> if (totalHandleMove < 16f * density) {
+                                showAnimMenu = false
+                                onDelete(active.id)
+                            }
+                            DragTarget.FLIP_HANDLE -> if (totalHandleMove < 16f * density) {
+                                onFlip(active.id)
+                            }
+                            DragTarget.ANIM_HANDLE -> if (totalHandleMove < 16f * density) {
                                 showAnimMenu = !showAnimMenu
                             }
-                        } else {
-                            onMove(active.id, liveOffsetX, liveOffsetY)
-                            onScale(active.id, liveScale)
+                            else -> {
+                                onMove(active.id, liveOffsetX, liveOffsetY)
+                                onScale(active.id, liveScale)
+                            }
                         }
                     }
                 },
@@ -980,6 +1002,52 @@ private fun PipLayer(
                             )
                         },
                 )
+
+                // Top-left ✕ Delete handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (cL - 14f * density).roundToInt(),
+                                (cT - 14f * density).roundToInt(),
+                            )
+                        }
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF1F1F24))
+                        .border(2.dp, Color.White, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Delete",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+
+                // Top-right Flip handle
+                Box(
+                    modifier = Modifier
+                        .offset {
+                            IntOffset(
+                                (cR - 14f * density).roundToInt(),
+                                (cT - 14f * density).roundToInt(),
+                            )
+                        }
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                        .border(2.dp, Color.White, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Flip,
+                        contentDescription = "Flip",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
 
                 // Bottom-left Animation Effects handle
                 Box(
