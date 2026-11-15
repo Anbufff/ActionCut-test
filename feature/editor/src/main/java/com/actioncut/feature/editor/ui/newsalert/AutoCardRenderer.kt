@@ -30,14 +30,16 @@ data class AutoCardEntry(
 
 /**
  * Smart Multi-Layout + Pure Jersey Color Auto-Card Renderer (100% Offline, 1920x1080).
- * Generates a unique broadcast layout & jersey-matched color palette for each player card,
- * with safe padding so Preview's subtle 1.10x zoom never clips any Tamil/English text.
+ * Supports both built-in stadium/jersey templates and a persistent user-uploaded Custom Background.
  */
 object AutoCardRenderer {
 
     const val LAYOUT_COUNT = 6
     private const val CANVAS_W = 1920f
     private const val CANVAS_H = 1080f
+    private const val PREFS = "actioncut_auto_card_prefs"
+    private const val KEY_USE_CUSTOM_BG = "use_custom_bg"
+    private const val CUSTOM_BG_FILENAME = "custom_bg.jpg"
     private val fileCounter = AtomicInteger(0)
     private val highlightWordRegex = Regex("[A-Za-z0-9]")
 
@@ -54,6 +56,78 @@ object AutoCardRenderer {
 
     fun isAutoCardUri(uri: String?): Boolean = uri?.contains("auto_card_") == true
 
+    // -------------------------------------------------------------------------
+    // Local Storage Management for Custom Background Image
+    // -------------------------------------------------------------------------
+    fun getCustomBackgroundFile(context: Context): File? {
+        val f = File(File(context.filesDir, "auto_cards"), CUSTOM_BG_FILENAME)
+        return if (f.exists() && f.length() > 0L) f else null
+    }
+
+    fun isCustomBackgroundEnabled(context: Context): Boolean {
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return sp.getBoolean(KEY_USE_CUSTOM_BG, false) && getCustomBackgroundFile(context) != null
+    }
+
+    fun setCustomBackgroundEnabled(context: Context, enabled: Boolean) {
+        val actual = enabled && getCustomBackgroundFile(context) != null
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_USE_CUSTOM_BG, actual)
+            .apply()
+    }
+
+    fun saveCustomBackground(context: Context, uri: Uri): Boolean {
+        return runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, bounds)
+            }
+            var sample = 1
+            val longest = max(bounds.outWidth, bounds.outHeight)
+            while (longest / sample > 1920) sample *= 2
+
+            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+            val bmp = context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, opts)
+            } ?: return false
+
+            val dir = File(context.filesDir, "auto_cards").apply { mkdirs() }
+            val target = File(dir, CUSTOM_BG_FILENAME)
+            val tmp = File(dir, "$CUSTOM_BG_FILENAME.tmp")
+            FileOutputStream(tmp).use { out ->
+                bmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+            }
+            bmp.recycle()
+            if (target.exists()) target.delete()
+            val ok = tmp.renameTo(target)
+            if (ok) {
+                setCustomBackgroundEnabled(context, true)
+            } else {
+                tmp.delete()
+            }
+            ok
+        }.getOrDefault(false)
+    }
+
+    fun deleteCustomBackground(context: Context) {
+        runCatching {
+            File(File(context.filesDir, "auto_cards"), CUSTOM_BG_FILENAME).delete()
+        }
+        setCustomBackgroundEnabled(context, false)
+    }
+
+    fun loadCustomBackgroundThumb(context: Context): Bitmap? {
+        val f = getCustomBackgroundFile(context) ?: return null
+        return runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(f.absolutePath, bounds)
+            var sample = 1
+            while (max(bounds.outWidth, bounds.outHeight) / sample > 160) sample *= 2
+            BitmapFactory.decodeFile(f.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
+        }.getOrNull()
+    }
+
     private data class JerseyPalette(
         val bgDark: Int,
         val bgMid: Int,
@@ -63,17 +137,11 @@ object AutoCardRenderer {
     )
 
     private val FALLBACK_PALETTES = listOf(
-        // India Blue & Saffron Gold
         JerseyPalette(0xFF041030.toInt(), 0xFF0B2B7A.toInt(), 0xFF00D4FF.toInt(), 0xFFFF7A00.toInt(), 0xFFFFE600.toInt()),
-        // Night Crimson & Gold
         JerseyPalette(0xFF080509.toInt(), 0xFF52081B.toInt(), 0xFFE5173F.toInt(), 0xFFFFB300.toInt(), 0xFFFFE600.toInt()),
-        // Royal Purple & Electric Cyan
         JerseyPalette(0xFF0D0524.toInt(), 0xFF331173.toInt(), 0xFFAA44FF.toInt(), 0xFF00E5FF.toInt(), 0xFFFFE600.toInt()),
-        // Emerald Stadium & Lime Gold
         JerseyPalette(0xFF031A12.toInt(), 0xFF0B4F37.toInt(), 0xFF00E676.toInt(), 0xFFFFD54F.toInt(), 0xFFD4FF33.toInt()),
-        // CSK Gold & Deep Navy
         JerseyPalette(0xFF081226.toInt(), 0xFF1A2E5C.toInt(), 0xFFFFC107.toInt(), 0xFFFF6D00.toInt(), 0xFFFFF176.toInt()),
-        // Sunset Coral & Indigo
         JerseyPalette(0xFF140718.toInt(), 0xFF47124A.toInt(), 0xFFFF3D7F.toInt(), 0xFFFF9100.toInt(), 0xFFFFE600.toInt()),
     )
 
@@ -207,10 +275,6 @@ object AutoCardRenderer {
         Regex("(?<=^|\\s)மேட்ச்(?=$|\\s|[.,!?-])") to "match",
     )
 
-    /**
-     * Parses Gemini-style numbered key points (e.g. "1. Rohit Sharma: ...", "2. Ruturaj Gaikwad: ...")
-     * or plain "Player Name: text" lines into individual AutoCardEntry items.
-     */
     fun parseKeyPoints(rawText: String, knownPlayers: List<String> = emptyList()): List<AutoCardEntry> {
         val cleanInput = rawText.replace("\r\n", "\n").trim()
         if (cleanInput.isEmpty()) return emptyList()
@@ -300,7 +364,6 @@ object AutoCardRenderer {
         return s.replace(Regex("\\s+"), " ").trim()
     }
 
-    /** Extracts the punchiest numeric stat for Hero Badge display (e.g., "74" to "RUNS"). */
     private fun extractHeroStat(text: String): Pair<String, String>? {
         val patterns = listOf(
             Regex("\\b(\\d+\\*?)\\s*(runs?|run)\\b", RegexOption.IGNORE_CASE) to "RUNS",
@@ -310,7 +373,6 @@ object AutoCardRenderer {
             Regex("\\b(\\d+)\\s*(sixes?|six)\\b", RegexOption.IGNORE_CASE) to "SIXES",
             Regex("\\b(\\d+)\\s*(fours?|four)\\b", RegexOption.IGNORE_CASE) to "FOURS",
         )
-        // Prefer non-zero prominent stats first if multiple exist (e.g. "0 runs, 0 runs, 7 runs, 74 runs" -> "74")
         val allMatches = ArrayList<Pair<String, String>>()
         for ((re, label) in patterns) {
             re.findAll(text).forEach { m ->
@@ -327,9 +389,14 @@ object AutoCardRenderer {
         entry: AutoCardEntry,
         resolvedCutoutUri: String?,
         layoutIdxOverride: Int? = null,
+        customBgPathOverride: String? = null,
     ): String {
         val layoutIdx = ((layoutIdxOverride ?: entry.layoutIdx) % LAYOUT_COUNT + LAYOUT_COUNT) % LAYOUT_COUNT
         val cutoutBmp = decodeBitmap(resolvedCutoutUri)
+        val customBgPath = customBgPathOverride
+            ?: if (isCustomBackgroundEnabled(context)) getCustomBackgroundFile(context)?.absolutePath else null
+        val customBgBmp = customBgPath?.let { decodeBitmap(it) }
+
         val palette = extractJerseyPalette(cutoutBmp, entry.index)
         val heroStat = extractHeroStat(entry.text)
 
@@ -337,15 +404,16 @@ object AutoCardRenderer {
         val canvas = Canvas(out)
 
         when (layoutIdx) {
-            0 -> drawLayoutDiagonalSplit(canvas, entry, cutoutBmp, palette, heroStat)
-            1 -> drawLayoutMirrorGlass(canvas, entry, cutoutBmp, palette, heroStat)
-            2 -> drawLayoutCenterSpotlight(canvas, entry, cutoutBmp, palette, heroStat)
-            3 -> drawLayoutNightBroadcast(canvas, entry, cutoutBmp, palette, heroStat)
-            4 -> drawLayoutBentoStat(canvas, entry, cutoutBmp, palette, heroStat)
-            else -> drawLayoutMagazineHero(canvas, entry, cutoutBmp, palette, heroStat)
+            0 -> drawLayoutDiagonalSplit(canvas, entry, cutoutBmp, customBgBmp, palette, heroStat)
+            1 -> drawLayoutMirrorGlass(canvas, entry, cutoutBmp, customBgBmp, palette, heroStat)
+            2 -> drawLayoutCenterSpotlight(canvas, entry, cutoutBmp, customBgBmp, palette, heroStat)
+            3 -> drawLayoutNightBroadcast(canvas, entry, cutoutBmp, customBgBmp, palette, heroStat)
+            4 -> drawLayoutBentoStat(canvas, entry, cutoutBmp, customBgBmp, palette, heroStat)
+            else -> drawLayoutMagazineHero(canvas, entry, cutoutBmp, customBgBmp, palette, heroStat)
         }
 
         cutoutBmp?.recycle()
+        customBgBmp?.recycle()
 
         val dir = File(context.filesDir, "auto_cards").apply { mkdirs() }
         val baseName = "auto_card_${System.currentTimeMillis()}_${fileCounter.incrementAndGet()}"
@@ -355,7 +423,6 @@ object AutoCardRenderer {
         }
         out.recycle()
 
-        // Sidecar JSON so user can tap "Design" later on Main Track to switch layout cleanly
         val metaFile = File(dir, "$baseName.json")
         runCatching {
             val obj = JSONObject()
@@ -364,13 +431,13 @@ object AutoCardRenderer {
                 .put("text", entry.text)
                 .put("cutoutUri", resolvedCutoutUri ?: "")
                 .put("layoutIdx", layoutIdx)
+                .put("customBgPath", customBgPath ?: "")
             metaFile.writeText(obj.toString())
         }
 
         return Uri.fromFile(pngFile).toString()
     }
 
-    /** Switches an existing Main Track AutoCard to the next layout and returns the new file URI. */
     fun cycleCardDesign(context: Context, currentImageUri: String): Pair<String, Int>? {
         val path = Uri.parse(currentImageUri).path ?: return null
         if (!path.endsWith(".png", ignoreCase = true)) return null
@@ -386,14 +453,20 @@ object AutoCardRenderer {
             layoutIdx = nextLayout,
         )
         val cutoutUri = obj.optString("cutoutUri", "").takeIf { it.isNotBlank() }
-        val newUri = renderCardToFile(context, entry, cutoutUri, layoutIdxOverride = nextLayout)
+        val savedBgPath = obj.optString("customBgPath", "").takeIf { it.isNotBlank() && File(it).exists() }
+        val activeBgPath = savedBgPath
+            ?: if (isCustomBackgroundEnabled(context)) getCustomBackgroundFile(context)?.absolutePath else null
+
+        val newUri = renderCardToFile(
+            context = context,
+            entry = entry,
+            resolvedCutoutUri = cutoutUri,
+            layoutIdxOverride = nextLayout,
+            customBgPathOverride = activeBgPath ?: "",
+        )
         return newUri to nextLayout
     }
 
-    /**
-     * Extracts team/jersey color directly from the lower-torso jersey pixels (48%..86% height),
-     * skipping skin tones, pure black/white, grey, and transparent pixels.
-     */
     private fun extractJerseyPalette(cutoutBmp: Bitmap?, seedIdx: Int): JerseyPalette {
         val fallback = FALLBACK_PALETTES[seedIdx % FALLBACK_PALETTES.size]
         if (cutoutBmp == null || cutoutBmp.width < 20 || cutoutBmp.height < 20) return fallback
@@ -461,12 +534,12 @@ object AutoCardRenderer {
         c: Canvas,
         entry: AutoCardEntry,
         cutout: Bitmap?,
+        customBg: Bitmap?,
         pal: JerseyPalette,
         stat: Pair<String, String>?,
     ) {
-        drawStudioBackdrop(c, pal, spotlightCx = 1420f, spotlightCy = 460f)
+        drawStudioBackdrop(c, pal, spotlightCx = 1420f, spotlightCy = 460f, customBg = customBg)
 
-        // Left angled panel
         val panelPath = Path().apply {
             moveTo(0f, 0f)
             lineTo(1230f, 0f)
@@ -475,15 +548,17 @@ object AutoCardRenderer {
             close()
         }
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        val c0 = if (customBg != null) withAlpha(pal.bgDark, 210) else pal.bgDark
+        val c1 = if (customBg != null) withAlpha(pal.bgMid, 195) else pal.bgMid
+        val c2 = if (customBg != null) withAlpha(darken(pal.bgDark, 0.7f), 220) else darken(pal.bgDark, 0.7f)
         p.shader = LinearGradient(
             0f, 0f, 1100f, CANVAS_H,
-            intArrayOf(pal.bgDark, pal.bgMid, darken(pal.bgDark, 0.7f)),
+            intArrayOf(c0, c1, c2),
             floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP,
         )
         c.drawPath(panelPath, p)
         p.shader = null
 
-        // Glowing diagonal accent slash
         p.style = Paint.Style.STROKE
         p.strokeWidth = 10f
         p.color = pal.accent
@@ -493,10 +568,8 @@ object AutoCardRenderer {
         c.drawLine(1246f, 0f, 1026f, CANVAS_H, p)
         p.style = Paint.Style.FILL
 
-        // Right Cutout
         drawCutoutInZone(c, cutout, entry.playerName, RectF(1070f, 85f, 1860f, 1020f), pal, alignBottom = true)
 
-        // Safe text zone: x = 110..990, y = 115..955
         drawNumPill(c, entry.index + 1, "PLAYER KEY POINT", 110f, 115f, pal.accent, pal.highlight)
         if (stat != null) {
             drawHeroStatPill(c, stat.first, stat.second, 760f, 105f, 220f, 130f, pal)
@@ -522,20 +595,18 @@ object AutoCardRenderer {
         c: Canvas,
         entry: AutoCardEntry,
         cutout: Bitmap?,
+        customBg: Bitmap?,
         pal: JerseyPalette,
         stat: Pair<String, String>?,
     ) {
-        drawStudioBackdrop(c, pal, spotlightCx = 460f, spotlightCy = 480f)
+        drawStudioBackdrop(c, pal, spotlightCx = 460f, spotlightCy = 480f, customBg = customBg)
 
-        // Left orbital halo + cutout
         drawOrbitalRings(c, 470f, 480f, 340f, pal)
         drawCutoutInZone(c, cutout, entry.playerName, RectF(85f, 80f, 845f, 1030f), pal, alignBottom = true)
 
-        // Right frosted glass card (respecting top-right watermark at y < 165)
         val cardRect = RectF(875f, 175f, 1805f, 955f)
         drawGlassCard(c, cardRect, 30f, pal.accent, darkFill = 0xD80A0D18.toInt())
 
-        // Left vertical glow bar inside card
         val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = LinearGradient(
                 0f, cardRect.top + 36f, 0f, cardRect.bottom - 36f,
@@ -551,7 +622,6 @@ object AutoCardRenderer {
         }
         drawPlayerTitle(c, entry.playerName, contentL, cardRect.top + 135f, 590f, pal.highlight, 58f)
 
-        // Divider line
         val divPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = AndroidColor.argb(95, 255, 255, 255)
             strokeWidth = 2f
@@ -575,22 +645,20 @@ object AutoCardRenderer {
         c: Canvas,
         entry: AutoCardEntry,
         cutout: Bitmap?,
+        customBg: Bitmap?,
         pal: JerseyPalette,
         stat: Pair<String, String>?,
     ) {
-        drawStudioBackdrop(c, pal, spotlightCx = 960f, spotlightCy = 350f)
+        drawStudioBackdrop(c, pal, spotlightCx = 960f, spotlightCy = 350f, customBg = customBg)
         drawOrbitalRings(c, 960f, 360f, 290f, pal)
 
-        // Centered Player Cutout at upper half
         drawCutoutInZone(c, cutout, entry.playerName, RectF(610f, 60f, 1310f, 675f), pal, alignBottom = true)
 
-        // Top-Left Number + Player Name Badge
         val topCard = RectF(110f, 105f, 610f, 295f)
         drawGlassCard(c, topCard, 22f, pal.accent, darkFill = 0xCC070B16.toInt())
         drawNumPill(c, entry.index + 1, "SPOTLIGHT", topCard.left + 26f, topCard.top + 24f, pal.accent, pal.highlight)
         drawPlayerTitle(c, entry.playerName, topCard.left + 26f, topCard.top + 100f, topCard.width() - 52f, AndroidColor.WHITE, 46f)
 
-        // Bottom Wide Glass Quote Card
         val botCard = RectF(115f, 645f, 1805f, 970f)
         drawGlassCard(c, botCard, 28f, pal.highlight, darkFill = 0xE6080B14.toInt())
 
@@ -622,14 +690,14 @@ object AutoCardRenderer {
         c: Canvas,
         entry: AutoCardEntry,
         cutout: Bitmap?,
+        customBg: Bitmap?,
         pal: JerseyPalette,
         stat: Pair<String, String>?,
     ) {
-        drawStudioBackdrop(c, pal, spotlightCx = 1430f, spotlightCy = 440f)
+        drawStudioBackdrop(c, pal, spotlightCx = 1430f, spotlightCy = 440f, customBg = customBg)
         drawOrbitalRings(c, 1430f, 440f, 310f, pal)
         drawCutoutInZone(c, cutout, entry.playerName, RectF(1085f, 80f, 1845f, 990f), pal, alignBottom = true)
 
-        // Header Banner on Left
         val hdrRect = RectF(105f, 120f, 1055f, 290f)
         val hdrPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = LinearGradient(
@@ -644,7 +712,6 @@ object AutoCardRenderer {
         drawNumPill(c, entry.index + 1, "BREAKING KEY POINT", hdrRect.left + 32f, hdrRect.top + 22f, pal.bgDark, pal.highlight)
         drawPlayerTitle(c, entry.playerName, hdrRect.left + 32f, hdrRect.top + 92f, hdrRect.width() - 64f, AndroidColor.WHITE, 56f)
 
-        // Main Story Card
         val bodyRect = RectF(105f, 320f, 1055f, 945f)
         drawGlassCard(c, bodyRect, 26f, pal.accent, darkFill = 0xE20B0D18.toInt())
 
@@ -672,19 +739,18 @@ object AutoCardRenderer {
         c: Canvas,
         entry: AutoCardEntry,
         cutout: Bitmap?,
+        customBg: Bitmap?,
         pal: JerseyPalette,
         stat: Pair<String, String>?,
     ) {
-        drawStudioBackdrop(c, pal, spotlightCx = 1460f, spotlightCy = 460f)
+        drawStudioBackdrop(c, pal, spotlightCx = 1460f, spotlightCy = 460f, customBg = customBg)
         drawCutoutInZone(c, cutout, entry.playerName, RectF(1120f, 80f, 1850f, 1020f), pal, alignBottom = true)
 
-        // Tile 1: Top Header Tile
         val tileTop = RectF(110f, 110f, 1090f, 305f)
         drawGlassCard(c, tileTop, 26f, pal.accent, darkFill = 0xDD0B1020.toInt())
         drawNumPill(c, entry.index + 1, "MATCH ANALYSIS", tileTop.left + 30f, tileTop.top + 26f, pal.accent, pal.highlight)
         drawPlayerTitle(c, entry.playerName, tileTop.left + 30f, tileTop.top + 102f, tileTop.width() - 60f, pal.highlight, 58f)
 
-        // Tile 2 (Left Square Stat Tile) + Tile 3 (Main Key Point Tile)
         val statTile = RectF(110f, 330f, 410f, 945f)
         drawGlassCard(c, statTile, 26f, pal.highlight, darkFill = 0xE60E1528.toInt())
         val bigNum = stat?.first ?: String.format("%02d", entry.index + 1)
@@ -710,12 +776,12 @@ object AutoCardRenderer {
         c: Canvas,
         entry: AutoCardEntry,
         cutout: Bitmap?,
+        customBg: Bitmap?,
         pal: JerseyPalette,
         stat: Pair<String, String>?,
     ) {
-        drawStudioBackdrop(c, pal, spotlightCx = 1380f, spotlightCy = 460f)
+        drawStudioBackdrop(c, pal, spotlightCx = 1380f, spotlightCy = 460f, customBg = customBg)
 
-        // Giant translucent background number watermark
         val wmNum = stat?.first ?: String.format("%02d", entry.index + 1)
         val wmPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -724,11 +790,9 @@ object AutoCardRenderer {
         }
         c.drawText(wmNum, 80f, 470f, wmPaint)
 
-        // Cutout on Right
         drawOrbitalRings(c, 1440f, 460f, 330f, pal)
         drawCutoutInZone(c, cutout, entry.playerName, RectF(1070f, 75f, 1850f, 1020f), pal, alignBottom = true)
 
-        // Editorial Left Stripe + Headline
         val stripePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = LinearGradient(0f, 140f, 0f, 930f, intArrayOf(pal.highlight, pal.accent), null, Shader.TileMode.CLAMP)
         }
@@ -755,20 +819,40 @@ object AutoCardRenderer {
     // -------------------------------------------------------------------------
     // Shared Studio Drawing Helpers
     // -------------------------------------------------------------------------
-    private fun drawStudioBackdrop(c: Canvas, pal: JerseyPalette, spotlightCx: Float, spotlightCy: Float) {
+    private fun drawStudioBackdrop(
+        c: Canvas,
+        pal: JerseyPalette,
+        spotlightCx: Float,
+        spotlightCy: Float,
+        customBg: Bitmap?,
+    ) {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.shader = LinearGradient(
-            0f, 0f, CANVAS_W, CANVAS_H,
-            intArrayOf(darken(pal.bgDark, 0.85f), pal.bgMid, pal.bgDark),
-            floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP,
-        )
-        c.drawRect(0f, 0f, CANVAS_W, CANVAS_H, p)
+        if (customBg != null && customBg.width > 0 && customBg.height > 0) {
+            val scale = max(CANVAS_W / customBg.width.toFloat(), CANVAS_H / customBg.height.toFloat())
+            val dw = customBg.width * scale
+            val dh = customBg.height * scale
+            val dl = (CANVAS_W - dw) / 2f
+            val dt = (CANVAS_H - dh) / 2f
+            val bmpPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            c.drawBitmap(customBg, null, RectF(dl, dt, dl + dw, dt + dh), bmpPaint)
+
+            // Dark atmospheric tint so cards & Tamil text pop clearly over any photo
+            p.color = 0x7A040610.toInt()
+            c.drawRect(0f, 0f, CANVAS_W, CANVAS_H, p)
+        } else {
+            p.shader = LinearGradient(
+                0f, 0f, CANVAS_W, CANVAS_H,
+                intArrayOf(darken(pal.bgDark, 0.85f), pal.bgMid, pal.bgDark),
+                floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP,
+            )
+            c.drawRect(0f, 0f, CANVAS_W, CANVAS_H, p)
+        }
 
         p.shader = RadialGradient(
             spotlightCx, spotlightCy, 760f,
             intArrayOf(
-                AndroidColor.argb(140, AndroidColor.red(pal.accent), AndroidColor.green(pal.accent), AndroidColor.blue(pal.accent)),
-                AndroidColor.argb(55, AndroidColor.red(pal.secondary), AndroidColor.green(pal.secondary), AndroidColor.blue(pal.secondary)),
+                AndroidColor.argb(if (customBg != null) 95 else 140, AndroidColor.red(pal.accent), AndroidColor.green(pal.accent), AndroidColor.blue(pal.accent)),
+                AndroidColor.argb(45, AndroidColor.red(pal.secondary), AndroidColor.green(pal.secondary), AndroidColor.blue(pal.secondary)),
                 AndroidColor.TRANSPARENT,
             ),
             floatArrayOf(0f, 0.52f, 1f), Shader.TileMode.CLAMP,
@@ -776,15 +860,21 @@ object AutoCardRenderer {
         c.drawCircle(spotlightCx, spotlightCy, 760f, p)
         p.shader = null
 
-        // Bottom curved stadium turf horizon
-        val turfPath = Path().apply {
-            moveTo(0f, 965f)
-            quadTo(CANVAS_W * 0.5f, 865f, CANVAS_W, 965f)
-            lineTo(CANVAS_W, CANVAS_H)
-            lineTo(0f, CANVAS_H)
-            close()
+        if (customBg == null) {
+            val turfPath = Path().apply {
+                moveTo(0f, 965f)
+                quadTo(CANVAS_W * 0.5f, 865f, CANVAS_W, 965f)
+                lineTo(CANVAS_W, CANVAS_H)
+                lineTo(0f, CANVAS_H)
+                close()
+            }
+            canvasDrawTurf(c, turfPath, pal)
+        } else {
+            // Subtle bottom accent vignette over custom background
+            p.shader = LinearGradient(0f, CANVAS_H * 0.78f, 0f, CANVAS_H, AndroidColor.TRANSPARENT, 0xCC03050C.toInt(), Shader.TileMode.CLAMP)
+            c.drawRect(0f, CANVAS_H * 0.78f, CANVAS_W, CANVAS_H, p)
+            p.shader = null
         }
-        canvasDrawTurf(c, turfPath, pal)
     }
 
     private fun canvasDrawTurf(c: Canvas, turfPath: Path, pal: JerseyPalette) {
@@ -840,7 +930,6 @@ object AutoCardRenderer {
                 if (faded !== cutout) faded.recycle()
             }
         } else {
-            // Glossy NC Crest fallback when player has no photo
             val cx = zone.centerX()
             val cy = zone.centerY()
             val r = min(zone.width(), zone.height()) * 0.32f
@@ -1111,5 +1200,9 @@ object AutoCardRenderer {
         val g = (AndroidColor.green(argb) * factor).toInt().coerceIn(0, 255)
         val b = (AndroidColor.blue(argb) * factor).toInt().coerceIn(0, 255)
         return AndroidColor.argb(a, r, g, b)
+    }
+
+    private fun withAlpha(argb: Int, alpha: Int): Int {
+        return (alpha.coerceIn(0, 255) shl 24) or (argb and 0x00FFFFFF)
     }
 }
