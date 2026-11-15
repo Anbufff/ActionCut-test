@@ -40,6 +40,8 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -728,19 +730,23 @@ private fun PipLayer(
         var liveOffsetY by remember(active.id, t.offsetY) { mutableFloatStateOf(t.offsetY) }
         var liveScale by remember(active.id, t.scale) { mutableFloatStateOf(t.scale) }
         var isDraggingPip by remember(active.id) { mutableStateOf(false) }
+        var touchBoxCoords by remember(active.id) { mutableStateOf<LayoutCoordinates?>(null) }
 
         val liveCrop = active.crop ?: CropRect(0f, 0f, 1f, 1f)
 
         val canvasAspect = if (h > 0f) w / h else (16f / 9f)
         val effectiveAspect = if (mediaAspectRatio > 0f) mediaAspectRatio else canvasAspect
 
-        val (pipPixelW, pipPixelH) = if (effectiveAspect >= canvasAspect) {
-            val pw = w * liveScale
-            pw to (pw / effectiveAspect)
-        } else {
-            val ph = h * liveScale
-            (ph * effectiveAspect) to ph
-        }
+        fun pipDimsFor(scaleValue: Float): Pair<Float, Float> =
+            if (effectiveAspect >= canvasAspect) {
+                val pw = w * scaleValue
+                pw to (pw / effectiveAspect)
+            } else {
+                val ph = h * scaleValue
+                (ph * effectiveAspect) to ph
+            }
+
+        val (pipPixelW, pipPixelH) = pipDimsFor(liveScale)
 
         val cL = pipPixelW * liveCrop.left
         val cT = pipPixelH * liveCrop.top
@@ -788,10 +794,27 @@ private fun PipLayer(
             }
         }
 
+        fun applyScaleKeepingCenter(newScale: Float) {
+            val clamped = newScale.coerceIn(0.10f, 20.0f)
+            val (oldW, oldH) = pipDimsFor(liveScale)
+            val (newW, newH) = pipDimsFor(clamped)
+            val cropCxRel = (liveCrop.left + liveCrop.right) / 2f - 0.5f
+            val cropCyRel = (liveCrop.top + liveCrop.bottom) / 2f - 0.5f
+            val dOffX = cropCxRel * (newW - oldW)
+            val dOffY = cropCyRel * (newH - oldH)
+            liveScale = clamped
+            if (w > 0f && h > 0f) {
+                liveOffsetX = (liveOffsetX - dOffX / (w / 2f)).coerceIn(-12f, 12f)
+                liveOffsetY = (liveOffsetY - dOffY / (h / 2f)).coerceIn(-12f, 12f)
+            }
+        }
+
+        // Unbounded wrapper so zoomed PiP (> canvas height/width) is never clamped or misaligned
         Box(
             modifier = Modifier
-                .align(Alignment.Center)
-                .size((pipPixelW / density).dp, (pipPixelH / density).dp)
+                .fillMaxSize()
+                .wrapContentSize(align = Alignment.Center, unbounded = true)
+                .requiredSize((pipPixelW / density).dp, (pipPixelH / density).dp)
                 .graphicsLayer {
                     translationX = animTx
                     translationY = animTy
@@ -803,120 +826,9 @@ private fun PipLayer(
                     )
                     rotationZ = t.rotationDegrees
                     alpha = props.opacity * autoAnimAlpha
-                }
-                .pointerInput(active.id, isSelected, liveCrop) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        onSelect(active.id)
-
-                        val pw = size.width.toFloat()
-                        val ph = size.height.toFloat()
-
-                        val curL = pw * liveCrop.left
-                        val curT = ph * liveCrop.top
-                        val curR = pw * liveCrop.right
-                        val curB = ph * liveCrop.bottom
-
-                        val tx = down.position.x
-                        val ty = down.position.y
-
-                        val handleRadius = 26f * density
-                        val scaleRadius = 32f * density
-
-                        val target = when {
-                            isSelected && hypot(tx - curL, ty - curT) <= handleRadius -> DragTarget.DELETE_HANDLE
-                            isSelected && hypot(tx - curR, ty - curT) <= handleRadius -> DragTarget.FLIP_HANDLE
-                            isSelected && hypot(tx - curL, ty - curB) <= handleRadius -> DragTarget.ANIM_HANDLE
-                            isSelected && hypot(tx - curR, ty - curB) <= scaleRadius -> DragTarget.SCALE
-                            else -> DragTarget.MOVE_PIP
-                        }
-
-                        val isTapHandle = target == DragTarget.ANIM_HANDLE ||
-                            target == DragTarget.DELETE_HANDLE ||
-                            target == DragTarget.FLIP_HANDLE
-
-                        var prevPointers = 0
-                        var prevDistance = 0f
-                        var totalHandleMove = 0f
-
-                        if (!isTapHandle) {
-                            isDraggingPip = true
-                        }
-
-                        do {
-                            val event = awaitPointerEvent()
-                            val pointers = event.changes.filter { it.pressed }
-                            if (pointers.isEmpty()) break
-
-                            if (isTapHandle) {
-                                val pointer = pointers[0]
-                                totalHandleMove += hypot(
-                                    pointer.position.x - pointer.previousPosition.x,
-                                    pointer.position.y - pointer.previousPosition.y,
-                                )
-                                pointer.consume()
-                            } else if (pointers.size >= 2) {
-                                val p1 = pointers[0].position
-                                val p2 = pointers[1].position
-                                val currentDistance = hypot(p1.x - p2.x, p1.y - p2.y)
-
-                                if (prevPointers >= 2 && prevDistance > 10f) {
-                                    val rawZoom = currentDistance / prevDistance
-                                    val smoothZoom = rawZoom.coerceIn(0.85f, 1.20f)
-                                    liveScale = (liveScale * smoothZoom).coerceIn(0.15f, 4.0f)
-                                }
-                                prevDistance = currentDistance
-                                prevPointers = 2
-
-                                val centroid = (p1 + p2) / 2f
-                                val prevCentroid = (pointers[0].previousPosition + pointers[1].previousPosition) / 2f
-                                val pan = centroid - prevCentroid
-                                liveOffsetX = (liveOffsetX + pan.x / (w / 2f)).coerceIn(-2.5f, 2.5f)
-                                liveOffsetY = (liveOffsetY + pan.y / (h / 2f)).coerceIn(-2.5f, 2.5f)
-
-                                pointers.forEach { it.consume() }
-                            } else if (target != DragTarget.NONE) {
-                                prevPointers = 1
-                                prevDistance = 0f
-                                val pointer = pointers[0]
-                                val dx = pointer.position.x - pointer.previousPosition.x
-                                val dy = pointer.position.y - pointer.previousPosition.y
-
-                                when (target) {
-                                    DragTarget.MOVE_PIP -> {
-                                        liveOffsetX = (liveOffsetX + dx / (w / 2f)).coerceIn(-2.5f, 2.5f)
-                                        liveOffsetY = (liveOffsetY + dy / (h / 2f)).coerceIn(-2.5f, 2.5f)
-                                        pointer.consume()
-                                    }
-                                    DragTarget.SCALE -> {
-                                        liveScale = (liveScale + (dx + dy) / (2f * w)).coerceIn(0.15f, 4.0f)
-                                        pointer.consume()
-                                    }
-                                    else -> {}
-                                }
-                            }
-                        } while (true)
-
-                        isDraggingPip = false
-                        when (target) {
-                            DragTarget.DELETE_HANDLE -> if (totalHandleMove < 16f * density) {
-                                showAnimMenu = false
-                                onDelete(active.id)
-                            }
-                            DragTarget.FLIP_HANDLE -> if (totalHandleMove < 16f * density) {
-                                onFlip(active.id)
-                            }
-                            DragTarget.ANIM_HANDLE -> if (totalHandleMove < 16f * density) {
-                                showAnimMenu = !showAnimMenu
-                            }
-                            else -> {
-                                onMove(active.id, liveOffsetX, liveOffsetY)
-                                onScale(active.id, liveScale)
-                            }
-                        }
-                    }
                 },
         ) {
+            // 1. Clipped PiP media content
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -984,6 +896,139 @@ private fun PipLayer(
                 }
             }
 
+            // 2. Interactive touch box covering ONLY the visible cropped area + 22dp handle margin
+            val padPx = 22f * density
+            Box(
+                modifier = Modifier
+                    .offset {
+                        IntOffset((cL - padPx).roundToInt(), (cT - padPx).roundToInt())
+                    }
+                    .size(((cW + 2f * padPx) / density).dp, ((cH + 2f * padPx) / density).dp)
+                    .onGloballyPositioned { touchBoxCoords = it }
+                    .pointerInput(active.id, isSelected, liveCrop, w, h, effectiveAspect) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            onSelect(active.id)
+
+                            val relL = padPx
+                            val relT = padPx
+                            val relR = size.width.toFloat() - padPx
+                            val relB = size.height.toFloat() - padPx
+
+                            val tx = down.position.x
+                            val ty = down.position.y
+
+                            val handleRadius = 26f * density
+                            val scaleRadius = 32f * density
+
+                            val target = when {
+                                isSelected && hypot(tx - relL, ty - relT) <= handleRadius -> DragTarget.DELETE_HANDLE
+                                isSelected && hypot(tx - relR, ty - relT) <= handleRadius -> DragTarget.FLIP_HANDLE
+                                isSelected && hypot(tx - relL, ty - relB) <= handleRadius -> DragTarget.ANIM_HANDLE
+                                isSelected && hypot(tx - relR, ty - relB) <= scaleRadius -> DragTarget.SCALE
+                                else -> DragTarget.MOVE_PIP
+                            }
+
+                            val isTapHandle = target == DragTarget.ANIM_HANDLE ||
+                                target == DragTarget.DELETE_HANDLE ||
+                                target == DragTarget.FLIP_HANDLE
+
+                            var prevRootPos = touchBoxCoords?.localToRoot(down.position) ?: down.position
+                            var prevRootCentroid = prevRootPos
+                            var prevPointers = 1
+                            var prevDistance = 0f
+                            var totalHandleMove = 0f
+
+                            if (!isTapHandle) {
+                                isDraggingPip = true
+                            }
+
+                            do {
+                                val event = awaitPointerEvent()
+                                val pointers = event.changes.filter { it.pressed }
+                                if (pointers.isEmpty()) break
+
+                                if (isTapHandle) {
+                                    val pointer = pointers[0]
+                                    val curRoot = touchBoxCoords?.localToRoot(pointer.position) ?: pointer.position
+                                    totalHandleMove += hypot(curRoot.x - prevRootPos.x, curRoot.y - prevRootPos.y)
+                                    prevRootPos = curRoot
+                                    pointer.consume()
+                                } else if (pointers.size >= 2) {
+                                    val rp1 = touchBoxCoords?.localToRoot(pointers[0].position) ?: pointers[0].position
+                                    val rp2 = touchBoxCoords?.localToRoot(pointers[1].position) ?: pointers[1].position
+                                    val curDist = hypot(rp1.x - rp2.x, rp1.y - rp2.y)
+                                    val curCentroid = (rp1 + rp2) / 2f
+
+                                    if (prevPointers >= 2 && prevDistance > 10f) {
+                                        val factor = (curDist / prevDistance).coerceIn(0.80f, 1.25f)
+                                        applyScaleKeepingCenter(liveScale * factor)
+
+                                        val pan = curCentroid - prevRootCentroid
+                                        if (w > 0f && h > 0f) {
+                                            liveOffsetX = (liveOffsetX + pan.x / (w / 2f)).coerceIn(-12f, 12f)
+                                            liveOffsetY = (liveOffsetY + pan.y / (h / 2f)).coerceIn(-12f, 12f)
+                                        }
+                                    }
+                                    prevDistance = curDist
+                                    prevRootCentroid = curCentroid
+                                    prevPointers = 2
+                                    pointers.forEach { it.consume() }
+                                } else if (target != DragTarget.NONE) {
+                                    val pointer = pointers[0]
+                                    val curRoot = touchBoxCoords?.localToRoot(pointer.position) ?: pointer.position
+                                    if (prevPointers == 1) {
+                                        val dx = curRoot.x - prevRootPos.x
+                                        val dy = curRoot.y - prevRootPos.y
+                                        when (target) {
+                                            DragTarget.MOVE_PIP -> {
+                                                if (w > 0f && h > 0f) {
+                                                    liveOffsetX = (liveOffsetX + dx / (w / 2f)).coerceIn(-12f, 12f)
+                                                    liveOffsetY = (liveOffsetY + dy / (h / 2f)).coerceIn(-12f, 12f)
+                                                }
+                                            }
+                                            DragTarget.SCALE -> {
+                                                val (curPipW, curPipH) = pipDimsFor(liveScale)
+                                                val halfW = (curPipW * (liveCrop.right - liveCrop.left)) / 2f
+                                                val halfH = (curPipH * (liveCrop.bottom - liveCrop.top)) / 2f
+                                                val diag = hypot(halfW, halfH).coerceAtLeast(16f)
+                                                val proj = (dx * halfW + dy * halfH) / diag
+                                                val factor = ((diag + proj) / diag).coerceIn(0.75f, 1.35f)
+                                                applyScaleKeepingCenter(liveScale * factor)
+                                            }
+                                            else -> {}
+                                        }
+                                    }
+                                    prevRootPos = curRoot
+                                    prevRootCentroid = curRoot
+                                    prevDistance = 0f
+                                    prevPointers = 1
+                                    pointer.consume()
+                                }
+                            } while (true)
+
+                            isDraggingPip = false
+                            when (target) {
+                                DragTarget.DELETE_HANDLE -> if (totalHandleMove < 16f * density) {
+                                    showAnimMenu = false
+                                    onDelete(active.id)
+                                }
+                                DragTarget.FLIP_HANDLE -> if (totalHandleMove < 16f * density) {
+                                    onFlip(active.id)
+                                }
+                                DragTarget.ANIM_HANDLE -> if (totalHandleMove < 16f * density) {
+                                    showAnimMenu = !showAnimMenu
+                                }
+                                else -> {
+                                    onMove(active.id, liveOffsetX, liveOffsetY)
+                                    onScale(active.id, liveScale)
+                                }
+                            }
+                        }
+                    },
+            )
+
+            // 3. Selection border + 4 corner handles
             if (isSelected) {
                 Box(
                     modifier = Modifier
