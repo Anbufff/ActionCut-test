@@ -55,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.actioncut.core.common.time.TimeFormatter
 import com.actioncut.core.designsystem.component.PrimaryButton
 import com.actioncut.core.model.AspectRatio
+import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.TrackType
 import com.actioncut.feature.editor.ui.newsalert.AutoCardDialog
@@ -62,6 +63,7 @@ import com.actioncut.feature.editor.ui.newsalert.AutoCardEntry
 import com.actioncut.feature.editor.ui.newsalert.AutoCardRenderer
 import com.actioncut.feature.editor.ui.newsalert.FlashNewsTextDialog
 import com.actioncut.feature.editor.ui.newsalert.NewsAlertTemplatesDialog
+import com.actioncut.feature.editor.ui.pip.FreeCropDialog
 import com.actioncut.feature.editor.ui.pip.PipSelectedBar
 import com.actioncut.feature.editor.ui.preview.PreviewPlayer
 import com.actioncut.feature.editor.ui.scorecard.PlayerLibrary
@@ -86,7 +88,7 @@ fun EditorScreen(
     var showNewsAlertTemplates by remember { mutableStateOf(false) }
     var showFlashNewsText by remember { mutableStateOf(false) }
     var showAutoCard by remember { mutableStateOf(false) }
-    var isCropModeActive by remember { mutableStateOf(false) }
+    var cropTargetClip by remember { mutableStateOf<Clip?>(null) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -221,7 +223,7 @@ fun EditorScreen(
                 pipClips = activePipClips,
                 onScaleOverlay = viewModel::setOverlayScale,
                 onCropChange = { id, crop -> viewModel.setCrop(id, crop) },
-                isCropModeActive = isCropModeActive,
+                onSetPipAnimation = viewModel::setPipAnimation,
                 fitMode = uiState.canvas.fitMode,
                 backgroundColorArgb = uiState.canvas.backgroundColorArgb,
                 allClips = uiState.timeline.allClips,
@@ -310,9 +312,9 @@ fun EditorScreen(
 
                             PipSelectedBar(
                                 isKeyframeMode = isKeyframeMode,
-                                isCropActive = isCropModeActive,
+                                isCropActive = cropTargetClip?.id == selClip.id,
                                 isCutoutActive = isCutoutActive,
-                                onCrop = { isCropModeActive = !isCropModeActive },
+                                onCrop = { cropTargetClip = selClip },
                                 onTrimRight = viewModel::trimRightAtPlayhead,
                                 onCutout = { viewModel.togglePipCutout() },
                                 onDelete = viewModel::deleteSelected,
@@ -372,6 +374,14 @@ fun EditorScreen(
                                     EditorTool.PLAYER -> showPlayers = true
                                     EditorTool.NEWS_ALERT -> showNewsAlertTemplates = true
                                     EditorTool.AUTO_CARD -> showAutoCard = true
+                                    EditorTool.CROP -> {
+                                        val sel = uiState.selectedClip
+                                        if (sel != null && sel.mediaUri != null && sel.scorecard == null) {
+                                            cropTargetClip = sel
+                                        } else {
+                                            viewModel.setActiveTool(tool)
+                                        }
+                                    }
                                     else -> viewModel.setActiveTool(tool)
                                 }
                             },
@@ -404,6 +414,18 @@ fun EditorScreen(
                     .padding(bottom = 184.dp),
             )
         }
+    }
+
+    cropTargetClip?.let { target ->
+        FreeCropDialog(
+            clip = target,
+            playheadMs = uiState.playheadMs,
+            onDismiss = { cropTargetClip = null },
+            onApplyCrop = { rect ->
+                viewModel.setCrop(target.id, rect)
+                cropTargetClip = null
+            },
+        )
     }
 
     if (showNewsAlertTemplates) {
