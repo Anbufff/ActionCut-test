@@ -5,6 +5,7 @@ import com.actioncut.core.model.CanvasSettings
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.Project
 import com.actioncut.core.model.Timeline
+import com.actioncut.feature.editor.ui.newsalert.AutoCardEntry
 
 /** Complete UI state for the editor screen. */
 data class EditorUiState(
@@ -22,6 +23,10 @@ data class EditorUiState(
     val canRedo: Boolean = false,
     val isExporting: Boolean = false,
     val isRecordingVoiceover: Boolean = false,
+    val autoCardQueue: List<AutoCardEntry> = emptyList(),
+    val autoCardQueueIndex: Int = 0,
+    val autoCardDurationMs: Long = 8_000L,
+    val isCardPopupVisible: Boolean = false,
 ) {
     val durationMs: Long get() = timeline.durationMs
 
