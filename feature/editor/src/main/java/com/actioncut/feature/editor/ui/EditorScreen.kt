@@ -401,7 +401,7 @@ fun EditorScreen(
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
                     .padding(horizontal = 12.dp)
-                    .padding(bottom = 168.dp),
+                    .padding(bottom = 184.dp),
             )
         }
     }
