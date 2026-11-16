@@ -32,7 +32,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.*
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -761,38 +760,39 @@ private fun PipLayer(
             PipAnimations.easeOut(elapsedMs)
         }
 
-        val visCenterOffX = ((liveCrop.left + liveCrop.right) / 2f - 0.5f) * pipPixelW
-        val visCenterOffY = ((liveCrop.top + liveCrop.bottom) / 2f - 0.5f) * pipPixelH
         val restTx = (liveOffsetX / 2f) * w
         val restTy = (liveOffsetY / 2f) * h
+        val restCL = (w / 2f) + restTx - (pipPixelW / 2f) + cL
+        val restCT = (h / 2f) + restTy - (pipPixelH / 2f) + cT
 
-        val animTx: Float
-        val animTy: Float
+        val animShiftX: Float
+        val animShiftY: Float
         val animScale: Float
         when (active.pipAnimation) {
             PipAnimation.SLIDE_LEFT -> {
-                val startTx = -(w / 2f) - visCenterOffX - cW / 2f
-                animTx = startTx + (restTx - startTx) * eased
-                animTy = restTy
+                animShiftX = -(restCL + cW) * (1f - eased)
+                animShiftY = 0f
                 animScale = 1f
             }
             PipAnimation.SLIDE_UP -> {
-                val startTy = (h / 2f) - visCenterOffY + cH / 2f
-                animTx = restTx
-                animTy = startTy + (restTy - startTy) * eased
+                animShiftX = 0f
+                animShiftY = (h - restCT) * (1f - eased)
                 animScale = 1f
             }
             PipAnimation.ZOOM_IN -> {
-                animTx = restTx
-                animTy = restTy
+                animShiftX = 0f
+                animShiftY = 0f
                 animScale = 0.05f + 0.95f * eased
             }
             PipAnimation.NONE -> {
-                animTx = restTx
-                animTy = restTy
+                animShiftX = 0f
+                animShiftY = 0f
                 animScale = 1f
             }
         }
+
+        val visLeft = restCL + animShiftX
+        val visTop = restCT + animShiftY
 
         fun applyScaleKeepingCenter(newScale: Float) {
             val clamped = newScale.coerceIn(0.10f, 20.0f)
@@ -809,96 +809,89 @@ private fun PipLayer(
             }
         }
 
-        // 1. Visual PiP + border + 4 corner handles (unbounded so large zoom never clamps)
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .wrapContentSize(align = Alignment.Center, unbounded = true)
-                .requiredSize((pipPixelW / density).dp, (pipPixelH / density).dp)
-                .graphicsLayer {
-                    translationX = animTx
-                    translationY = animTy
-                    scaleX = animScale
-                    scaleY = animScale
-                    transformOrigin = TransformOrigin(
-                        (liveCrop.left + liveCrop.right) / 2f,
-                        (liveCrop.top + liveCrop.bottom) / 2f,
-                    )
-                    rotationZ = t.rotationDegrees
-                    alpha = props.opacity * autoAnimAlpha
-                },
+                .wrapContentSize(align = Alignment.TopStart, unbounded = true),
         ) {
+            // 1. Hardware-clipped (cW x cH) media container — impossible to leak outside crop during playback
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .drawWithContent {
-                        val crop = liveCrop
-                        val clipRect = Rect(
-                            left = size.width * crop.left,
-                            top = size.height * crop.top,
-                            right = size.width * crop.right,
-                            bottom = size.height * crop.bottom,
-                        )
-                        drawContext.canvas.save()
-                        drawContext.canvas.clipRect(clipRect)
-                        drawContent()
-                        drawContext.canvas.restore()
-                    },
-            ) {
-                if (active.type == ClipType.VIDEO) {
-                    AndroidView(
-                        factory = { ctx ->
-                            PlayerView(ctx).apply {
-                                useController = false
-                                this.player = pipPlayer
-                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                            }
-                        },
-                        update = { it.player = pipPlayer },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                scaleX = if (isFlipped) -1f else 1f
-                            },
-                    )
-                } else {
-                    val pipImgReq = remember(displayUri, cutoutStamp, isAiCutoutOn) {
-                        ImageRequest.Builder(context)
-                            .data(displayUri)
-                            .size(1024, 1024)
-                            .crossfade(false)
-                            .apply {
-                                if (isAiCutoutOn) {
-                                    memoryCacheKey("${displayUri}_$cutoutStamp")
-                                    diskCachePolicy(CachePolicy.DISABLED)
-                                }
-                            }
-                            .build()
+                    .offset { IntOffset(visLeft.roundToInt(), visTop.roundToInt()) }
+                    .requiredSize((cW / density).dp, (cH / density).dp)
+                    .graphicsLayer {
+                        scaleX = animScale
+                        scaleY = animScale
+                        transformOrigin = TransformOrigin.Center
+                        rotationZ = t.rotationDegrees
+                        alpha = props.opacity * autoAnimAlpha
                     }
-                    AsyncImage(
-                        model = pipImgReq,
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        onSuccess = { state ->
-                            val d = state.result.drawable
-                            if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
-                                mediaAspectRatio = d.intrinsicWidth.toFloat() / d.intrinsicHeight.toFloat()
-                            }
+                    .clipToBounds()
+                    .wrapContentSize(align = Alignment.TopStart, unbounded = true),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .offset { IntOffset((-cL).roundToInt(), (-cT).roundToInt()) }
+                        .requiredSize((pipPixelW / density).dp, (pipPixelH / density).dp)
+                        .graphicsLayer {
+                            scaleX = if (isFlipped) -1f else 1f
                         },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                scaleX = if (isFlipped) -1f else 1f
+                ) {
+                    if (active.type == ClipType.VIDEO) {
+                        AndroidView(
+                            factory = { ctx ->
+                                PlayerView(ctx).apply {
+                                    useController = false
+                                    this.player = pipPlayer
+                                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                }
                             },
-                    )
+                            update = { it.player = pipPlayer },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        val pipImgReq = remember(displayUri, cutoutStamp, isAiCutoutOn) {
+                            ImageRequest.Builder(context)
+                                .data(displayUri)
+                                .size(1024, 1024)
+                                .crossfade(false)
+                                .apply {
+                                    if (isAiCutoutOn) {
+                                        memoryCacheKey("${displayUri}_$cutoutStamp")
+                                        diskCachePolicy(CachePolicy.DISABLED)
+                                    }
+                                }
+                                .build()
+                        }
+                        AsyncImage(
+                            model = pipImgReq,
+                            contentDescription = null,
+                            contentScale = ContentScale.Fit,
+                            onSuccess = { state ->
+                                val d = state.result.drawable
+                                if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) {
+                                    mediaAspectRatio = d.intrinsicWidth.toFloat() / d.intrinsicHeight.toFloat()
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
             }
 
+            // 2. Selection dashed border + 4 corner handles (unclipped so corner circles stay crisp)
             if (isSelected) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
+                        .offset { IntOffset(visLeft.roundToInt(), visTop.roundToInt()) }
+                        .requiredSize((cW / density).dp, (cH / density).dp)
+                        .graphicsLayer {
+                            scaleX = animScale
+                            scaleY = animScale
+                            transformOrigin = TransformOrigin.Center
+                            rotationZ = t.rotationDegrees
+                        }
                         .drawBehind {
                             val stroke = Stroke(
                                 width = 2f * density,
@@ -906,8 +899,8 @@ private fun PipLayer(
                             )
                             drawRoundRect(
                                 color = cyanColor,
-                                topLeft = Offset(cL, cT),
-                                size = Size(cW, cH),
+                                topLeft = Offset.Zero,
+                                size = size,
                                 cornerRadius = CornerRadius(2f * density),
                                 style = stroke,
                             )
@@ -919,8 +912,8 @@ private fun PipLayer(
                     modifier = Modifier
                         .offset {
                             IntOffset(
-                                (cL - 14f * density).roundToInt(),
-                                (cT - 14f * density).roundToInt(),
+                                (visLeft - 14f * density).roundToInt(),
+                                (visTop - 14f * density).roundToInt(),
                             )
                         }
                         .size(28.dp)
@@ -942,8 +935,8 @@ private fun PipLayer(
                     modifier = Modifier
                         .offset {
                             IntOffset(
-                                (cR - 14f * density).roundToInt(),
-                                (cT - 14f * density).roundToInt(),
+                                (visLeft + cW - 14f * density).roundToInt(),
+                                (visTop - 14f * density).roundToInt(),
                             )
                         }
                         .size(28.dp)
@@ -965,8 +958,8 @@ private fun PipLayer(
                     modifier = Modifier
                         .offset {
                             IntOffset(
-                                (cL - 14f * density).roundToInt(),
-                                (cB - 14f * density).roundToInt(),
+                                (visLeft - 14f * density).roundToInt(),
+                                (visTop + cH - 14f * density).roundToInt(),
                             )
                         }
                         .size(28.dp)
@@ -988,8 +981,8 @@ private fun PipLayer(
                     modifier = Modifier
                         .offset {
                             IntOffset(
-                                (cR - 14f * density).roundToInt(),
-                                (cB - 14f * density).roundToInt(),
+                                (visLeft + cW - 14f * density).roundToInt(),
+                                (visTop + cH - 14f * density).roundToInt(),
                             )
                         }
                         .size(28.dp)
@@ -998,21 +991,13 @@ private fun PipLayer(
                         .border(3.dp, cyanColor, CircleShape),
                 )
             }
-        }
 
-        // 2. Unclamped Touch Box placed directly on the canvas covering ONLY the visible cropped box + 24dp margin
-        val padPx = 24f * density
-        val screenCL = (w / 2f) + animTx - (pipPixelW / 2f) + cL
-        val screenCT = (h / 2f) + animTy - (pipPixelH / 2f) + cT
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .wrapContentSize(align = Alignment.TopStart, unbounded = true),
-        ) {
+            // 3. Touch Box covering ONLY the visible cropped area + 24dp handle margin
+            val padPx = 24f * density
             Box(
                 modifier = Modifier
                     .offset {
-                        IntOffset((screenCL - padPx).roundToInt(), (screenCT - padPx).roundToInt())
+                        IntOffset((visLeft - padPx).roundToInt(), (visTop - padPx).roundToInt())
                     }
                     .requiredSize(((cW + 2f * padPx) / density).dp, ((cH + 2f * padPx) / density).dp)
                     .onGloballyPositioned { touchBoxCoords = it }
