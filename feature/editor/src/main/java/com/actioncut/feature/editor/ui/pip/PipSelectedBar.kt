@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -47,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -56,15 +59,19 @@ import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.actioncut.core.designsystem.component.ToolItem
+import com.actioncut.core.designsystem.component.clickableNoRipple
+import com.actioncut.core.designsystem.component.rememberHaptic
 import com.actioncut.core.model.Clip
 import com.actioncut.core.model.ClipType
 import com.actioncut.core.model.CropRect
@@ -79,8 +86,7 @@ import kotlin.math.roundToInt
 private const val MIN_CROP_FRAC = 0.10f
 
 /**
- * PiP Selected Toolbar:
- * பழைய லேஅவுட் மற்றும் பட்டன்கள் எதுவும் மாற்றப்படவில்லை.
+ * Compact PiP Sub-Toolbar with visible rounded tool-icon tiles and slim height.
  */
 @Composable
 fun PipSelectedBar(
@@ -100,17 +106,17 @@ fun PipSelectedBar(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        tonalElevation = 3.dp,
+        color = Color(0xFF141114),
+        tonalElevation = 1.dp,
     ) {
         LazyRow(
             modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             item {
-                ToolItem(
+                PipSubToolItem(
                     label = "KF +/-",
                     icon = Icons.Filled.AutoAwesome,
                     selected = isKeyframeMode,
@@ -118,14 +124,14 @@ fun PipSelectedBar(
                 )
             }
             item {
-                ToolItem(
+                PipSubToolItem(
                     label = "VID END",
                     icon = Icons.Filled.FastForward,
                     onClick = onVidEnd,
                 )
             }
             item {
-                ToolItem(
+                PipSubToolItem(
                     label = "CROP",
                     icon = Icons.Filled.Crop,
                     selected = isCropActive,
@@ -133,14 +139,14 @@ fun PipSelectedBar(
                 )
             }
             item {
-                ToolItem(
+                PipSubToolItem(
                     label = "TRIM R",
                     icon = Icons.AutoMirrored.Filled.ArrowForward,
                     onClick = onTrimRight,
                 )
             }
             item {
-                ToolItem(
+                PipSubToolItem(
                     label = "CUTOUT",
                     icon = Icons.Filled.Face,
                     selected = isCutoutActive,
@@ -148,20 +154,57 @@ fun PipSelectedBar(
                 )
             }
             item {
-                ToolItem(
+                PipSubToolItem(
                     label = "DELETE",
                     icon = Icons.Filled.Delete,
                     onClick = onDelete,
                 )
             }
             item {
-                ToolItem(
+                PipSubToolItem(
                     label = "SETTINGS",
                     icon = Icons.Filled.Settings,
                     onClick = onSettings,
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PipSubToolItem(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    selected: Boolean = false,
+) {
+    val haptic = rememberHaptic()
+    val tileColor = if (selected) MaterialTheme.colorScheme.primary else Color(0xFF282226)
+    val iconColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+
+    Column(
+        modifier = Modifier
+            .clickableNoRipple { haptic.tick(); onClick() }
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(tileColor),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = label, tint = iconColor, modifier = Modifier.size(18.dp))
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, lineHeight = 12.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+        )
     }
 }
 
