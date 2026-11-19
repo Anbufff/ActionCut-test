@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
+import android.media.MediaCodecInfo
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
@@ -24,6 +25,7 @@ import androidx.media3.effect.Presentation
 import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
@@ -31,6 +33,7 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
+import androidx.media3.transformer.VideoEncoderSettings
 import com.actioncut.core.domain.port.VideoExporter
 import com.actioncut.core.media.template.FbTemplateBarRenderer
 import com.actioncut.core.media.template.NewsCrickWatermarkRenderer
@@ -48,12 +51,18 @@ import com.actioncut.core.model.Resolution
 import com.actioncut.core.model.TrackType
 import com.actioncut.core.model.TransitionType
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import javax.inject.Inject
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 class Media3VideoExporter @Inject constructor(
@@ -66,6 +75,13 @@ class Media3VideoExporter @Inject constructor(
         val uncropH1: Float,
         val basePipW: Int,
         val basePipH: Int,
+    )
+
+    private data class PreparedExportData(
+        val clips: List<Clip>,
+        val overlays: List<Clip>,
+        val pipSpecs: Map<String, PipVideoSpec>,
+        val blackGapUri: String?,
     )
 
     override fun export(
@@ -97,45 +113,75 @@ class Media3VideoExporter @Inject constructor(
             .filter { it.mediaUri != null && it.type == ClipType.VIDEO }
             .sortedBy { it.timelineStartMs }
 
-        val (clips, preparedPipOverlays, pipVideoSpecs) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            val processedClips = rawClips.map { clip ->
-                if (clip.isReversed && clip.type == ClipType.VIDEO && clip.mediaUri != null) {
-                    val reversedUri = reverser.reverse(clip.mediaUri!!, clip.sourceInMs, clip.sourceOutMs)
-                    if (reversedUri != null) {
-                        clip.copy(mediaUri = reversedUri, isReversed = false, sourceInMs = 0L, sourceOutMs = 0L)
-                    } else {
-                        clip
-                    }
-                } else if (clip.type == ClipType.IMAGE && clip.mediaUri != null) {
-                    if (isFbTpl || clip.scorecard != null) {
-                        clip
-                    } else {
-                        val blurredFrameUri = createBlurredBackdropImage(context, clip, targetWidth, targetHeight)
-                        if (blurredFrameUri != null) {
-                            clip.copy(mediaUri = blurredFrameUri)
+        val totalTimelineMs = project.timeline.durationMs
+
+        val prepared = withContext(Dispatchers.Default) {
+            coroutineScope {
+                val clipsDeferred = rawClips.map { clip ->
+                    async(Dispatchers.Default) {
+                        if (clip.isReversed && clip.type == ClipType.VIDEO && clip.mediaUri != null) {
+                            val reversedUri = reverser.reverse(clip.mediaUri!!, clip.sourceInMs, clip.sourceOutMs)
+                            if (reversedUri != null) {
+                                clip.copy(mediaUri = reversedUri, isReversed = false, sourceInMs = 0L, sourceOutMs = 0L)
+                            } else {
+                                clip
+                            }
+                        } else if (clip.type == ClipType.IMAGE && clip.mediaUri != null) {
+                            if (isFbTpl || clip.scorecard != null) {
+                                clip
+                            } else {
+                                val blurredFrameUri = createBlurredBackdropImage(context, clip, targetWidth, targetHeight)
+                                if (blurredFrameUri != null) {
+                                    clip.copy(mediaUri = blurredFrameUri)
+                                } else {
+                                    clip
+                                }
+                            }
                         } else {
                             clip
                         }
                     }
-                } else {
-                    clip
                 }
-            }
 
-            val processedOverlays = rawOverlayClips.map { ov ->
-                if (ov.type == ClipType.IMAGE && ov.mediaUri != null && ov.mediaUri?.contains("news_banner") != true) {
-                    preparePipImageOverlay(context, ov, targetWidth, targetHeight)
-                } else {
-                    ov
+                val overlaysDeferred = rawOverlayClips.map { ov ->
+                    async(Dispatchers.Default) {
+                        if (ov.type == ClipType.IMAGE && ov.mediaUri != null && ov.mediaUri?.contains("news_banner") != true) {
+                            preparePipImageOverlay(context, ov, targetWidth, targetHeight)
+                        } else {
+                            ov
+                        }
+                    }
                 }
-            }
 
-            val specs = pipVideoClips.associate { pip ->
-                pip.id to probePipVideoSpec(context, pip, targetWidth, targetHeight)
-            }
+                val specsDeferred = pipVideoClips.map { pip ->
+                    async(Dispatchers.IO) {
+                        pip.id to probePipVideoSpec(context, pip, targetWidth, targetHeight)
+                    }
+                }
 
-            Triple(processedClips, processedOverlays, specs)
+                val processedClips = clipsDeferred.awaitAll()
+                val processedOverlays = overlaysDeferred.awaitAll()
+                val specs = specsDeferred.awaitAll().toMap()
+
+                val totalVideoMs = processedClips.sumOf { it.timelineDurationMs }
+                val blackGapUri = if (totalTimelineMs > totalVideoMs && processedClips.isNotEmpty()) {
+                    ensureBlackGapUri(context)
+                } else {
+                    null
+                }
+
+                PreparedExportData(
+                    clips = processedClips,
+                    overlays = processedOverlays,
+                    pipSpecs = specs,
+                    blackGapUri = blackGapUri,
+                )
+            }
         }
+
+        val clips = prepared.clips
+        val preparedPipOverlays = prepared.overlays
+        val pipVideoSpecs = prepared.pipSpecs
 
         val handler = Handler(Looper.getMainLooper())
         var transformer: Transformer? = null
@@ -156,21 +202,12 @@ class Media3VideoExporter @Inject constructor(
                     }
                 }
 
-                val totalTimelineMs = project.timeline.durationMs
                 val totalVideoMs = clips.sumOf { it.timelineDurationMs }
-
-                val exportClips = if (totalTimelineMs > totalVideoMs && clips.isNotEmpty()) {
-                    val blackFile = File(context.cacheDir, "black_gap.png")
-                    if (!blackFile.exists()) {
-                        val bmp = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
-                        val cv = Canvas(bmp)
-                        cv.drawColor(android.graphics.Color.BLACK)
-                        FileOutputStream(blackFile).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-                    }
+                val exportClips = if (totalTimelineMs > totalVideoMs && clips.isNotEmpty() && prepared.blackGapUri != null) {
                     val blackClip = Clip(
                         id = "black_gap_${System.currentTimeMillis()}",
                         type = ClipType.IMAGE,
-                        mediaUri = Uri.fromFile(blackFile).toString(),
+                        mediaUri = prepared.blackGapUri,
                         timelineStartMs = totalVideoMs,
                         timelineEndMs = totalTimelineMs,
                     )
@@ -179,11 +216,18 @@ class Media3VideoExporter @Inject constructor(
                     clips
                 }
 
-                val sharedWatermarkBuffers = PingPongBuffers(targetWidth, targetHeight)
-                val sharedTplBuffers = if (isFbTpl) PingPongBuffers(targetWidth, targetHeight) else null
+                // Compact watermark buffer (~158x118 instead of full 1920x1080) -> ~111x fewer pixels/frame
+                val logoW = (targetWidth * 0.082f).roundToInt().coerceAtLeast(16)
+                val logoH = (logoW * 0.75f).roundToInt().coerceAtLeast(12)
+                val sharedWatermarkBuffers = PingPongBuffers(logoW, logoH)
 
-                val tplOverlay = if (isFbTpl && sharedTplBuffers != null) {
-                    FbTemplateOverlay(context, targetWidth, targetHeight, tplImageUri, sharedTplBuffers)
+                val vH = (targetWidth * (9f / 16f)).roundToInt()
+                val barH = (targetHeight - 2 * vH).coerceAtLeast(2)
+                val tplBottomOverlay = if (isFbTpl) {
+                    FbTemplateBottomOverlay(context, targetWidth, targetHeight, tplImageUri)
+                } else null
+                val tplBarOverlay = if (isFbTpl) {
+                    FbTemplateBarOverlay(targetWidth, targetHeight, vH, barH, PingPongBuffers(targetWidth, barH))
                 } else null
 
                 val editedItems = exportClips.mapIndexed { index, clip ->
@@ -204,13 +248,16 @@ class Media3VideoExporter @Inject constructor(
                     clip.toEditedMediaItem(
                         targetWidth = targetWidth,
                         targetHeight = targetHeight,
+                        logoW = logoW,
+                        logoH = logoH,
                         settings = settings,
                         overlays = overlaysForClip,
                         presentationLayout = presentationLayout,
                         incoming = incoming,
                         outgoing = outgoing,
                         isFbTpl = isFbTpl,
-                        tplOverlay = tplOverlay,
+                        tplBottomOverlay = tplBottomOverlay,
+                        tplBarOverlay = tplBarOverlay,
                         watermarkBuffers = sharedWatermarkBuffers,
                     )
                 }
@@ -249,8 +296,19 @@ class Media3VideoExporter @Inject constructor(
                 }
                 val composition = compositionBuilder.build()
 
+                val videoEncoderSettings = VideoEncoderSettings.Builder()
+                    .setBitrate(settings.effectiveBitrate())
+                    .setBitrateMode(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
+                    .build()
+                val encoderFactory = DefaultEncoderFactory.Builder(context)
+                    .setRequestedVideoEncoderSettings(videoEncoderSettings)
+                    .setEnableFallback(true)
+                    .build()
+
                 val t = Transformer.Builder(context)
                     .setVideoMimeType(settings.format.mimeType)
+                    .setEncoderFactory(encoderFactory)
+                    .experimentalSetMaxFramesInEncoder(8)
                     .addListener(object : Transformer.Listener {
                         override fun onCompleted(composition: Composition, result: ExportResult) {
                             trySend(ExportState.Completed(outputFilePath))
@@ -305,6 +363,17 @@ class Media3VideoExporter @Inject constructor(
         }
     }
 
+    private fun ensureBlackGapUri(context: Context): String {
+        val blackFile = File(context.cacheDir, "black_gap.png")
+        if (!blackFile.exists() || blackFile.length() == 0L) {
+            val bmp = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
+            Canvas(bmp).drawColor(Color.BLACK)
+            FileOutputStream(blackFile).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            bmp.recycle()
+        }
+        return Uri.fromFile(blackFile).toString()
+    }
+
     private fun preparePipImageOverlay(
         context: Context,
         clip: Clip,
@@ -316,17 +385,16 @@ class Media3VideoExporter @Inject constructor(
         val isAiCutout = clip.filter?.id?.contains("cutout") == true
         val cutoutFile = File(context.cacheDir, "cutout_${uriStr.hashCode()}.png")
 
+        val maxSide = max(targetWidth, targetHeight) * 2
         val srcBmp: Bitmap? = if (isAiCutout && cutoutFile.exists() && cutoutFile.length() > 0L) {
             BitmapFactory.decodeFile(cutoutFile.absolutePath)
         } else {
             val uri = Uri.parse(uriStr)
             if (uri.scheme == "file") {
                 val f = File(uri.path ?: "")
-                if (f.exists()) BitmapFactory.decodeFile(f.absolutePath) else null
+                if (f.exists()) decodeSampledFile(f.absolutePath, maxSide) else null
             } else {
-                context.contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it)
-                }
+                decodeSampledUri(context, uri, maxSide)
             }
         }
 
@@ -478,8 +546,11 @@ class Media3VideoExporter @Inject constructor(
         targetHeight: Int,
     ): String? = runCatching {
         val uri = Uri.parse(clip.mediaUri)
-        val src = context.contentResolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it)
+        val maxSide = max(targetWidth, targetHeight)
+        val src = if (uri.scheme == "file") {
+            decodeSampledFile(uri.path ?: "", maxSide)
+        } else {
+            decodeSampledUri(context, uri, maxSide)
         } ?: return@runCatching null
 
         val outBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
@@ -493,7 +564,7 @@ class Media3VideoExporter @Inject constructor(
         canvas.drawBitmap(blurredBg, 0f, 0f, bgPaint)
         blurredBg.recycle()
 
-        canvas.drawColor(android.graphics.Color.argb(90, 0, 0, 0))
+        canvas.drawColor(Color.argb(90, 0, 0, 0))
 
         val scaleFactor = minOf(
             targetWidth.toFloat() / src.width.toFloat(),
@@ -521,25 +592,59 @@ class Media3VideoExporter @Inject constructor(
         canvas.restore()
         src.recycle()
 
-        val outFile = File(context.cacheDir, "blur_export_${clip.id}.png")
+        val outFile = File(context.cacheDir, "blur_export_${clip.id}.jpg")
         FileOutputStream(outFile).use { out ->
-            outBitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            outBitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
         }
         outBitmap.recycle()
 
         Uri.fromFile(outFile).toString()
     }.getOrNull()
 
+    private fun decodeSampledUri(context: Context, uri: Uri, maxSide: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, bounds)
+        }
+        val sample = computeInSampleSize(bounds.outWidth, bounds.outHeight, maxSide)
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        return context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, opts)
+        }
+    }
+
+    private fun decodeSampledFile(path: String, maxSide: Int): Bitmap? {
+        val f = File(path)
+        if (!f.exists()) return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(f.absolutePath, bounds)
+        val sample = computeInSampleSize(bounds.outWidth, bounds.outHeight, maxSide)
+        return BitmapFactory.decodeFile(f.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
+    }
+
+    private fun computeInSampleSize(width: Int, height: Int, maxSide: Int): Int {
+        if (width <= 0 || height <= 0 || maxSide <= 0) return 1
+        var sample = 1
+        val longest = max(width, height)
+        while (longest / (sample * 2) >= maxSide) {
+            sample *= 2
+        }
+        return sample
+    }
+
     private fun Clip.toEditedMediaItem(
         targetWidth: Int,
         targetHeight: Int,
+        logoW: Int,
+        logoH: Int,
         settings: ExportSettings,
         overlays: List<Clip>,
         presentationLayout: Int,
         incoming: com.actioncut.core.model.Transition? = null,
         outgoing: com.actioncut.core.model.Transition? = null,
         isFbTpl: Boolean = false,
-        tplOverlay: FbTemplateOverlay? = null,
+        tplBottomOverlay: FbTemplateBottomOverlay? = null,
+        tplBarOverlay: FbTemplateBarOverlay? = null,
         watermarkBuffers: PingPongBuffers,
     ): EditedMediaItem {
         val mediaItemBuilder = MediaItem.Builder().setUri(mediaUri)
@@ -556,13 +661,13 @@ class Media3VideoExporter @Inject constructor(
             )
         }
 
-        val templateOverlayEffect: Effect? = tplOverlay?.let {
-            OverlayEffect(listOf<TextureOverlay>(it.forClip(timelineStartMs)))
-        }
+        val templateOverlayEffect: Effect? = if (isFbTpl && tplBottomOverlay != null && tplBarOverlay != null) {
+            OverlayEffect(listOf<TextureOverlay>(tplBottomOverlay, tplBarOverlay.forClip(timelineStartMs)))
+        } else null
 
         val watermarkOverlayEffect: Effect = OverlayEffect(
             listOf<TextureOverlay>(
-                NewsCrickWatermarkOverlay(targetWidth, targetHeight, timelineStartMs, watermarkBuffers),
+                NewsCrickWatermarkOverlay(targetWidth, targetHeight, logoW, logoH, timelineStartMs, watermarkBuffers),
             ),
         )
 
@@ -729,19 +834,24 @@ private class PingPongBuffers(width: Int, height: Int) {
 private class NewsCrickWatermarkOverlay(
     targetWidth: Int,
     targetHeight: Int,
+    private val logoW: Int,
+    private val logoH: Int,
     private val clipStartMs: Long = 0L,
     private val buffers: PingPongBuffers,
 ) : BitmapOverlay() {
 
-    private val defaultSettings: OverlaySettings = StaticOverlaySettings.Builder().build()
+    private val defaultSettings: OverlaySettings = run {
+        val marginX = targetWidth * 0.014f
+        val marginY = targetHeight * 0.018f
+        StaticOverlaySettings.Builder()
+            .setOverlayFrameAnchor(1f, 1f)
+            .setBackgroundFrameAnchor(
+                1f - (2f * marginX / targetWidth.toFloat()),
+                1f - (2f * marginY / targetHeight.toFloat()),
+            )
+            .build()
+    }
     private var baseUs = Long.MIN_VALUE
-
-    private val logoW = targetWidth * 0.082f
-    private val logoH = logoW * 0.75f
-    private val marginX = targetWidth * 0.014f
-    private val marginY = targetHeight * 0.018f
-    private val logoX = targetWidth - logoW - marginX
-    private val logoY = marginY
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         if (baseUs == Long.MIN_VALUE) baseUs = presentationTimeUs
@@ -749,50 +859,90 @@ private class NewsCrickWatermarkOverlay(
         val timeSec = currentPlayheadMs / 1000f
 
         return buffers.drawFrame { canvas ->
-            NewsCrickWatermarkRenderer.renderLogo(canvas, logoX, logoY, logoW, logoH, timeSec)
+            NewsCrickWatermarkRenderer.renderLogo(canvas, 0f, 0f, logoW.toFloat(), logoH.toFloat(), timeSec)
         }
     }
 
     override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = defaultSettings
 }
 
-private class FbTemplateOverlay(
-    private val context: Context,
+private class FbTemplateBottomOverlay(
+    context: Context,
+    targetWidth: Int,
+    targetHeight: Int,
+    bottomImageUriStr: String?,
+) : BitmapOverlay() {
+
+    private val settings: OverlaySettings = StaticOverlaySettings.Builder()
+        .setOverlayFrameAnchor(0f, -1f)
+        .setBackgroundFrameAnchor(0f, -1f)
+        .build()
+
+    private val staticBitmap: Bitmap = run {
+        val vH = (targetWidth * (9f / 16f)).roundToInt()
+        val barH = (targetHeight - 2 * vH).coerceAtLeast(0)
+        val bottomY = vH + barH
+        val bottomH = (targetHeight - bottomY).coerceAtLeast(2)
+
+        val bmp = Bitmap.createBitmap(targetWidth, bottomH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        canvas.drawColor(Color.parseColor("#0B0B0B"))
+
+        if (!bottomImageUriStr.isNullOrBlank()) {
+            runCatching {
+                val uri = Uri.parse(bottomImageUriStr)
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream, null, bounds)
+                }
+                var sample = 1
+                val longest = max(bounds.outWidth, bounds.outHeight)
+                val targetMax = max(targetWidth, bottomH)
+                while (targetMax > 0 && longest / sample > targetMax * 2) sample *= 2
+                val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                val src = context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream, null, opts)
+                }
+                if (src != null && !src.isRecycled) {
+                    val iw = src.width.toFloat()
+                    val ih = src.height.toFloat()
+                    val sc = minOf(targetWidth.toFloat() / iw, bottomH.toFloat() / ih)
+                    val dw = iw * sc
+                    val dh = ih * sc
+                    val dx = (targetWidth - dw) / 2f
+                    val dy = (bottomH - dh) / 2f
+                    val imgPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+                    canvas.drawBitmap(src, null, RectF(dx, dy, dx + dw, dy + dh), imgPaint)
+                    src.recycle()
+                }
+            }
+        }
+        bmp
+    }
+
+    override fun getBitmap(presentationTimeUs: Long): Bitmap = staticBitmap
+
+    override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = settings
+}
+
+private class FbTemplateBarOverlay(
     private val targetWidth: Int,
-    private val targetHeight: Int,
-    private val bottomImageUriStr: String?,
+    targetHeight: Int,
+    private val vH: Int,
+    private val barH: Int,
     private val buffers: PingPongBuffers,
     private val clipStartMs: Long = 0L,
 ) : BitmapOverlay() {
 
-    private val defaultSettings: OverlaySettings = StaticOverlaySettings.Builder().build()
-    private var cachedBottomBitmap: Bitmap? = null
+    private val defaultSettings: OverlaySettings = StaticOverlaySettings.Builder()
+        .setOverlayFrameAnchor(0f, 1f)
+        .setBackgroundFrameAnchor(0f, 1f - (2f * vH.toFloat() / targetHeight.toFloat()))
+        .build()
+
     private var baseUs = Long.MIN_VALUE
 
-    private val bgPaint = Paint().apply { color = android.graphics.Color.parseColor("#0B0B0B") }
-    private val imgPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
-
-    private val vH = (targetWidth * (9f / 16f)).roundToInt()
-    private val barH = targetHeight - 2 * vH
-    private val bottomY = vH + barH
-    private val bottomRect = RectF(0f, bottomY.toFloat(), targetWidth.toFloat(), targetHeight.toFloat())
-
-    init {
-        if (!bottomImageUriStr.isNullOrBlank()) {
-            runCatching {
-                val uri = Uri.parse(bottomImageUriStr)
-                context.contentResolver.openInputStream(uri)?.use { stream ->
-                    cachedBottomBitmap = BitmapFactory.decodeStream(stream)
-                }
-            }
-        }
-    }
-
-    fun forClip(startMs: Long): FbTemplateOverlay {
-        val copy = FbTemplateOverlay(context, targetWidth, targetHeight, bottomImageUriStr, buffers, startMs)
-        copy.cachedBottomBitmap = this.cachedBottomBitmap
-        return copy
-    }
+    fun forClip(startMs: Long): FbTemplateBarOverlay =
+        FbTemplateBarOverlay(targetWidth, targetHeight, vH, barH, buffers, startMs)
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         if (baseUs == Long.MIN_VALUE) baseUs = presentationTimeUs
@@ -800,25 +950,7 @@ private class FbTemplateOverlay(
         val timeSeconds = currentPlayheadMs / 1000f
 
         return buffers.drawFrame { canvas ->
-            canvas.save()
-            canvas.translate(0f, vH.toFloat())
             FbTemplateBarRenderer.drawTplBar(canvas, targetWidth.toFloat(), barH.toFloat(), timeSeconds)
-            canvas.restore()
-
-            canvas.drawRect(bottomRect, bgPaint)
-
-            val src = cachedBottomBitmap
-            if (src != null && !src.isRecycled) {
-                val iw = src.width.toFloat()
-                val ih = src.height.toFloat()
-                val sc = minOf(targetWidth.toFloat() / iw, vH.toFloat() / ih)
-                val dw = iw * sc
-                val dh = ih * sc
-                val dx = (targetWidth - dw) / 2f
-                val dy = bottomY + (vH - dh) / 2f
-
-                canvas.drawBitmap(src, null, RectF(dx, dy, dx + dw, dy + dh), imgPaint)
-            }
         }
     }
 
