@@ -83,32 +83,52 @@ object ScorecardManager {
         val statMap = mutableMapOf<Int, Pair<String, String>>()
 
         if (isCdnVector) {
-            val inningsIdx = data.cropStartF.toInt().coerceAtLeast(0)
-            val (inn, opponent) = CdnVectorScoreCardComposer.loadInningsWithOpponent(
-                context,
-                data.sourceImageUri,
-                inningsIdx,
-            ) ?: return@withContext ""
-            val scoreType = if (data.type == "BOWLING") ScoreCardType.BOWLING else ScoreCardType.BATTING
-            val vRows = CdnVectorScoreCardComposer.buildRows(inn, scoreType)
-            val lbl = if (scoreType == ScoreCardType.BOWLING) "WKTS" else "RUNS"
+            val mode = CdnViewMode.fromTypeKey(data.type)
+            val bundle = CdnVectorScoreCardComposer.loadSavedBundle(context, data.sourceImageUri)
+                ?: return@withContext ""
+            val idx = data.cropStartF.toInt().coerceAtLeast(0)
+            val inn = bundle.match?.innings?.getOrNull(idx) ?: bundle.match?.innings?.firstOrNull()
+            val opp = if (inn != null) {
+                bundle.match?.innings?.firstOrNull { it.inningsId != inn.inningsId }?.let {
+                    it.teamName.ifBlank { it.teamShortName }
+                }
+            } else null
+            val ptGroup = bundle.pointsTable?.groups?.getOrNull(idx) ?: bundle.pointsTable?.groups?.firstOrNull()
+            val ptSeriesName = bundle.pointsTable?.seriesName
+            val sqTeam = bundle.squads?.teams?.getOrNull(idx) ?: bundle.squads?.teams?.firstOrNull()
+            val sqOpp = if (sqTeam != null) {
+                bundle.squads?.teams?.firstOrNull { it !== sqTeam }?.let {
+                    it.teamName.ifBlank { it.teamShortName }
+                }
+            } else opp
+
+            val vRows = CdnVectorScoreCardComposer.buildRowsForMode(
+                mode = mode,
+                innings = inn,
+                pointsGroup = ptGroup,
+                pointsSeriesName = ptSeriesName,
+                squadTeam = sqTeam,
+            )
 
             for (i in data.rows.indices) {
-                val composed = CdnVectorScoreCardComposer.composeFrame(
+                val composed = CdnVectorScoreCardComposer.composeModeFrame(
                     context = context,
-                    innings = inn,
-                    type = scoreType,
+                    mode = mode,
                     selected = i,
                     library = library,
                     themeIdx = data.themeIdx,
-                    opponentName = opponent,
+                    innings = inn,
+                    pointsGroup = ptGroup,
+                    pointsSeriesName = ptSeriesName,
+                    squadTeam = sqTeam,
+                    opponentName = if (mode == CdnViewMode.SQUADS) sqOpp else opp,
                     staticRunsTimeMs = null,
                 )
                 rowMap[i] = composed.bitmap
                 rectsMap[i] = composed.rowRects
                 val vr = vRows.getOrNull(i) as? CdnVectorScoreCardComposer.VectorRow.PlayerRow
                 if (vr != null) {
-                    statMap[i] = vr.primaryStat to lbl
+                    statMap[i] = CdnVectorScoreCardComposer.animatedBadgeForMode(mode, vr)
                 }
             }
         } else {
