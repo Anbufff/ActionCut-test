@@ -13,6 +13,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
@@ -31,6 +32,13 @@ object ScoreCardComposer {
     internal const val PANEL_LEFT = LIST_LEFT + LIST_WIDTH // 884f — 0px gap between names & player photo
     internal const val TEXT_PAD_LEFT = 36f
     internal const val TEXT_PAD_RIGHT = 14f
+
+    private const val ARROW_PAD = 24f
+
+    private class CachedArrow(val bitmap: Bitmap, val centerY: Float)
+
+    private val arrowCache = ConcurrentHashMap<Int, CachedArrow>()
+    private val arrowBmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
     fun normTheme(idx: Int): Int = ((idx % THEME_COUNT) + THEME_COUNT) % THEME_COUNT
 
@@ -886,25 +894,20 @@ object ScoreCardComposer {
         canvas.restore()
     }
 
-    fun drawBouncingArrow(
-        canvas: Canvas,
-        targetRow: RectF,
-        timeInClipMs: Long,
-        themeIdx: Int = 0,
-        compact: Boolean = false,
-    ) {
-        val theme = normTheme(themeIdx)
-        val cy = targetRow.centerY()
-
-        val maxBounce = if (compact) 14.0 else 22.0
-        val bounce = ((1.0 - sin(timeInClipMs * 2.0 * Math.PI / 750.0)) / 2.0 * maxBounce).toFloat()
-        val tipX = targetRow.right + (if (compact) 6f else 4f) + bounce
+    private fun getOrBuildArrow(theme: Int, compact: Boolean): CachedArrow {
+        val cacheKey = (theme shl 1) or (if (compact) 1 else 0)
+        arrowCache[cacheKey]?.let { if (!it.bitmap.isRecycled) return it }
 
         val arrowW = if (compact) 86f else 128f
         val arrowH = if (compact) 62f else 84f
         val headLen = if (compact) 38f else 52f
         val halfHeadH = arrowH / 2f
         val halfStemH = if (compact) 13f else 17f
+
+        val bmpW = (arrowW + ARROW_PAD * 2f).toInt()
+        val bmpH = (arrowH + ARROW_PAD * 2f).toInt()
+        val tipX = ARROW_PAD
+        val cy = ARROW_PAD + halfHeadH
         val tailX = tipX + arrowW
 
         val arrowPath = Path().apply {
@@ -948,6 +951,9 @@ object ScoreCardComposer {
             }
         }
 
+        val bmp = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+
         val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
             color = glowColor
@@ -968,9 +974,33 @@ object ScoreCardComposer {
             strokeJoin = Paint.Join.ROUND
         }
 
-        canvas.drawPath(arrowPath, glowPaint)
-        canvas.drawPath(arrowPath, fillPaint)
-        canvas.drawPath(topHalfPath, highlightPaint)
-        canvas.drawPath(arrowPath, strokePaint)
+        c.drawPath(arrowPath, glowPaint)
+        c.drawPath(arrowPath, fillPaint)
+        c.drawPath(topHalfPath, highlightPaint)
+        c.drawPath(arrowPath, strokePaint)
+
+        val cached = CachedArrow(bmp, cy)
+        arrowCache[cacheKey] = cached
+        return cached
+    }
+
+    fun drawBouncingArrow(
+        canvas: Canvas,
+        targetRow: RectF,
+        timeInClipMs: Long,
+        themeIdx: Int = 0,
+        compact: Boolean = false,
+    ) {
+        val theme = normTheme(themeIdx)
+        val cy = targetRow.centerY()
+
+        val maxBounce = if (compact) 14.0 else 22.0
+        val bounce = ((1.0 - sin(timeInClipMs * 2.0 * Math.PI / 750.0)) / 2.0 * maxBounce).toFloat()
+        val tipX = targetRow.right + (if (compact) 6f else 4f) + bounce
+
+        val cached = getOrBuildArrow(theme, compact)
+        if (!cached.bitmap.isRecycled) {
+            canvas.drawBitmap(cached.bitmap, tipX - ARROW_PAD, cy - cached.centerY, arrowBmpPaint)
+        }
     }
 }
