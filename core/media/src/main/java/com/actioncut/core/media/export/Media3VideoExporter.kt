@@ -927,7 +927,7 @@ private class FbTemplateBottomOverlay(
 
 private class FbTemplateBarOverlay(
     private val targetWidth: Int,
-    targetHeight: Int,
+    private val targetHeight: Int,
     private val vH: Int,
     private val barH: Int,
     private val buffers: PingPongBuffers,
