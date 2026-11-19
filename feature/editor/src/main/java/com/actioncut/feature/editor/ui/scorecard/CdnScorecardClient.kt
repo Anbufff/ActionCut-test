@@ -43,6 +43,17 @@ data class CdnBowler(
     val imageId: String?,
 )
 
+data class CdnFow(
+    val id: String?,
+    val name: String,
+    val wicketNumber: Int,
+    val runs: Int,
+    val score: String,
+    val overs: String,
+    val outDesc: String,
+    val imageId: String?,
+)
+
 data class CdnInnings(
     val inningsId: Int,
     val teamName: String,
@@ -53,6 +64,7 @@ data class CdnInnings(
     val isDeclared: Boolean,
     val batters: List<CdnBatter>,
     val bowlers: List<CdnBowler>,
+    val fallOfWickets: List<CdnFow> = emptyList(),
 )
 
 data class CdnMatchScorecard(
@@ -61,6 +73,77 @@ data class CdnMatchScorecard(
     val status: String,
     val source: String,
     val innings: List<CdnInnings>,
+    val seriesId: String? = null,
+    val seriesName: String = "",
+)
+
+data class CdnRecentMatch(
+    val matchId: String,
+    val seriesId: String?,
+    val seriesName: String,
+    val matchDesc: String,
+    val matchFormat: String,
+    val state: String,
+    val status: String,
+    val team1: String,
+    val team2: String,
+    val team1Name: String,
+    val team2Name: String,
+    val team1Score: String,
+    val team2Score: String,
+    val isLive: Boolean,
+)
+
+data class CdnPointsTeam(
+    val pos: Int,
+    val teamId: String?,
+    val teamName: String,
+    val teamFullName: String,
+    val matchesPlayed: Int,
+    val won: Int,
+    val lost: Int,
+    val tied: Int,
+    val nr: Int,
+    val points: Int,
+    val nrr: String,
+    val form: List<String>,
+    val qualified: Boolean,
+    val imageId: String?,
+)
+
+data class CdnPointsGroup(
+    val groupName: String,
+    val teams: List<CdnPointsTeam>,
+)
+
+data class CdnPointsTable(
+    val seriesId: String,
+    val seriesName: String,
+    val groups: List<CdnPointsGroup>,
+)
+
+data class CdnSquadPlayer(
+    val id: String?,
+    val name: String,
+    val role: String,
+    val isCaptain: Boolean,
+    val isWk: Boolean,
+    val isSubstitute: Boolean,
+    val imageId: String?,
+)
+
+data class CdnSquadTeam(
+    val teamId: String?,
+    val teamName: String,
+    val teamShortName: String,
+    val playingXi: List<CdnSquadPlayer>,
+    val bench: List<CdnSquadPlayer>,
+)
+
+data class CdnMatchSquads(
+    val matchId: String,
+    val title: String,
+    val teams: List<CdnSquadTeam>,
 )
 
 object CdnScorecardClient {
@@ -87,6 +170,19 @@ object CdnScorecardClient {
     suspend fun fetch(context: Context, workerBaseUrl: String, matchInput: String): Result<Pair<CdnMatchScorecard, String>> =
         fetchMatchOnly(workerBaseUrl, matchInput)
 
+    private fun httpGet(reqUrl: String): Pair<Int, String> {
+        val conn = (URL(reqUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15_000
+            readTimeout = 20_000
+            requestMethod = "GET"
+        }
+        val code = conn.responseCode
+        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+            ?.bufferedReader()?.use { it.readText() }.orEmpty()
+        conn.disconnect()
+        return code to body
+    }
+
     /** Fetches match scorecard JSON immediately without blocking on all player photos. */
     suspend fun fetchMatchOnly(workerBaseUrl: String, matchInput: String): Result<Pair<CdnMatchScorecard, String>> =
         withContext(Dispatchers.IO) {
@@ -97,16 +193,7 @@ object CdnScorecardClient {
                 val sep = if (base.contains("?")) "&" else "?"
                 val reqUrl = "${base}${sep}matchId=$encoded&_=${System.currentTimeMillis()}"
 
-                val conn = (URL(reqUrl).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 15_000
-                    readTimeout = 20_000
-                    requestMethod = "GET"
-                }
-                val code = conn.responseCode
-                val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
-                    ?.bufferedReader()?.use { it.readText() }.orEmpty()
-                conn.disconnect()
-
+                val (code, body) = httpGet(reqUrl)
                 if (code !in 200..299) {
                     val errMsg = runCatching { JSONObject(body).optString("error") }.getOrNull()
                     throw IllegalStateException(errMsg?.ifBlank { null } ?: "HTTP $code")
@@ -118,7 +205,81 @@ object CdnScorecardClient {
             }
         }
 
-    /** Downloads all batter & bowler photos for an innings in parallel (up to 6 concurrent). */
+    /** Fetches live and recent Cricbuzz matches from the Cloudflare Worker. */
+    suspend fun fetchRecentMatches(workerBaseUrl: String): Result<List<CdnRecentMatch>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val base = workerBaseUrl.trim().trimEnd('/')
+                require(base.startsWith("http")) { "Valid Cloudflare Worker URL required" }
+                val sep = if (base.contains("?")) "&" else "?"
+                val reqUrl = "${base}${sep}action=recent&_=${System.currentTimeMillis()}"
+
+                val (code, body) = httpGet(reqUrl)
+                if (code !in 200..299) {
+                    val errMsg = runCatching { JSONObject(body).optString("error") }.getOrNull()
+                    throw IllegalStateException(errMsg?.ifBlank { null } ?: "HTTP $code")
+                }
+                parseRecentMatchesJson(body)
+            }
+        }
+
+    /** Fetches series Points Table using either seriesId or matchId/URL. */
+    suspend fun fetchPointsTable(
+        workerBaseUrl: String,
+        seriesId: String? = null,
+        matchOrUrl: String = "",
+    ): Result<Pair<CdnPointsTable, String>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val base = workerBaseUrl.trim().trimEnd('/')
+                require(base.startsWith("http")) { "Valid Cloudflare Worker URL required" }
+                val sep = if (base.contains("?")) "&" else "?"
+                val params = buildList {
+                    add("action=pointsTable")
+                    if (!seriesId.isNullOrBlank()) add("seriesId=${URLEncoder.encode(seriesId.trim(), "UTF-8")}")
+                    if (matchOrUrl.isNotBlank()) add("matchId=${URLEncoder.encode(matchOrUrl.trim(), "UTF-8")}")
+                    add("_=${System.currentTimeMillis()}")
+                }.joinToString("&")
+                val reqUrl = "$base$sep$params"
+
+                val (code, body) = httpGet(reqUrl)
+                if (code !in 200..299) {
+                    val errMsg = runCatching { JSONObject(body).optString("error") }.getOrNull()
+                    throw IllegalStateException(errMsg?.ifBlank { null } ?: "Points Table unavailable (HTTP $code)")
+                }
+                val parsed = parsePointsJson(body)
+                require(parsed.groups.isNotEmpty()) { "Points Table not available for this series/match." }
+                parsed to body
+            }
+        }
+
+    /** Fetches Playing XI & Bench Squads for the match. */
+    suspend fun fetchSquads(
+        workerBaseUrl: String,
+        matchInput: String,
+    ): Result<Pair<CdnMatchSquads, String>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val base = workerBaseUrl.trim().trimEnd('/')
+                require(base.startsWith("http")) { "Valid Cloudflare Worker URL required" }
+                val sep = if (base.contains("?")) "&" else "?"
+                val encoded = URLEncoder.encode(matchInput.trim(), "UTF-8")
+                val reqUrl = "${base}${sep}action=squads&matchId=$encoded&_=${System.currentTimeMillis()}"
+
+                val (code, body) = httpGet(reqUrl)
+                if (code !in 200..299) {
+                    val errMsg = runCatching { JSONObject(body).optString("error") }.getOrNull()
+                    throw IllegalStateException(errMsg?.ifBlank { null } ?: "Squads unavailable (HTTP $code)")
+                }
+                val parsed = parseSquadsJson(body)
+                require(parsed.teams.any { it.playingXi.isNotEmpty() || it.bench.isNotEmpty() }) {
+                    "Squads not available for this match yet."
+                }
+                parsed to body
+            }
+        }
+
+    /** Downloads all batter, bowler & FOW photos for an innings in parallel (up to 6 concurrent). */
     suspend fun downloadInningsPhotos(
         context: Context,
         workerBaseUrl: String,
@@ -129,6 +290,7 @@ object CdnScorecardClient {
         val players = buildList {
             innings.batters.forEach { add(Triple(it.imageId, it.id, it.name)) }
             innings.bowlers.forEach { add(Triple(it.imageId, it.id, it.name)) }
+            innings.fallOfWickets.forEach { add(Triple(it.imageId, it.id, it.name)) }
         }.distinctBy { (imgId, pid, name) -> "${imgId.orEmpty()}_${pid.orEmpty()}_${normName(name)}" }
 
         val gate = Semaphore(6)
@@ -141,6 +303,91 @@ object CdnScorecardClient {
                 }
             }.awaitAll()
         }
+    }
+
+    /** Downloads all Playing XI & Bench player photos for a squad team in parallel. */
+    suspend fun downloadSquadPhotos(
+        context: Context,
+        workerBaseUrl: String,
+        team: CdnSquadTeam,
+    ) = withContext(Dispatchers.IO) {
+        val base = workerBaseUrl.trim().trimEnd('/')
+        if (!base.startsWith("http")) return@withContext
+        val players = (team.playingXi + team.bench)
+            .map { Triple(it.imageId, it.id, it.name) }
+            .distinctBy { (imgId, pid, name) -> "${imgId.orEmpty()}_${pid.orEmpty()}_${normName(name)}" }
+
+        val gate = Semaphore(6)
+        coroutineScope {
+            players.map { (imgId, pid, name) ->
+                async {
+                    gate.withPermit {
+                        ensurePlayerPhoto(context, base, imgId, pid, name)
+                    }
+                }
+            }.awaitAll()
+        }
+    }
+
+    /** Downloads team crests/logos for a Points Table group if imageIds are present. */
+    suspend fun downloadPointsLogos(
+        context: Context,
+        workerBaseUrl: String,
+        group: CdnPointsGroup,
+    ) = withContext(Dispatchers.IO) {
+        val base = workerBaseUrl.trim().trimEnd('/')
+        if (!base.startsWith("http")) return@withContext
+        val gate = Semaphore(6)
+        coroutineScope {
+            group.teams.mapNotNull { it.imageId?.takeIf { id -> id.isNotBlank() } }.distinct().map { imgId ->
+                async {
+                    gate.withPermit {
+                        ensureTeamLogo(context, base, imgId)
+                    }
+                }
+            }.awaitAll()
+        }
+    }
+
+    suspend fun ensureTeamLogo(
+        context: Context,
+        workerBaseUrl: String,
+        imageId: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (imageId.isBlank() || imageId == "0" || imageId == PLACEHOLDER_IMAGE_ID) return@withContext false
+        val dir = File(context.filesDir, "scorecards/cdn_teams").apply { mkdirs() }
+        val target = File(dir, "team_$imageId.png")
+        if (target.exists() && target.length() > 0L) return@withContext true
+
+        val base = workerBaseUrl.trim().trimEnd('/')
+        if (!base.startsWith("http")) return@withContext false
+        val sep = if (base.contains("?")) "&" else "?"
+        val imgUrl = "${base}${sep}imgId=$imageId"
+
+        runCatching {
+            val conn = (URL(imgUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 8_000
+                readTimeout = 10_000
+            }
+            val ok = if (conn.responseCode in 200..299) {
+                val bmp = conn.inputStream.use { BitmapFactory.decodeStream(it) }
+                if (bmp != null) {
+                    val tmp = File(dir, "${target.name}.tmp")
+                    FileOutputStream(tmp).use { bmp.compress(Bitmap.CompressFormat.PNG, 95, it) }
+                    bmp.recycle()
+                    tmp.renameTo(target)
+                } else false
+            } else false
+            conn.disconnect()
+            ok
+        }.getOrDefault(false)
+    }
+
+    fun cachedTeamLogo(context: Context, imageId: String?): Bitmap? {
+        if (imageId.isNullOrBlank() || imageId == "0" || imageId == PLACEHOLDER_IMAGE_ID) return null
+        val file = File(context.filesDir, "scorecards/cdn_teams/team_$imageId.png")
+        if (!file.exists() || file.length() <= 0L) return null
+        return runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()
     }
 
     /**
@@ -298,10 +545,6 @@ object CdnScorecardClient {
     private fun normName(name: String): String =
         name.lowercase().replace(Regex("[^a-z]"), "")
 
-    /**
-     * Detects Cricbuzz's generic "cb" cricket-ball placeholder image (transparent or solid corners,
-     * symmetrical white ball ring, and green/gray non-skin center) so it is never shown or cached.
-     */
     fun isCricbuzzPlaceholder(bmp: Bitmap): Boolean {
         val w = bmp.width
         val h = bmp.height
@@ -343,7 +586,6 @@ object CdnScorecardClient {
         }
         if (!cornersTransparent && !cornersUniform) return false
 
-        // Reject if warm human skin tone is present in the center area (protects real player photos)
         for (yp in 36..64 step 7) {
             for (xp in 36..64 step 7) {
                 val c = px(xp / 100f, yp / 100f)
@@ -396,6 +638,21 @@ object CdnScorecardClient {
                     imageId = w.opt("imageId")?.toString()?.takeIf { it != "null" && it.isNotBlank() },
                 )
             }
+            val fowArr = o.optJSONArray("fallOfWickets") ?: JSONArray()
+            val fallOfWickets = (0 until fowArr.length()).map { fi ->
+                val f = fowArr.getJSONObject(fi)
+                val rawId = f.opt("id")?.toString()?.takeIf { it != "null" && it.isNotBlank() }
+                CdnFow(
+                    id = rawId,
+                    name = f.optString("name", ""),
+                    wicketNumber = f.optInt("wicketNumber", fi + 1),
+                    runs = f.optInt("runs", 0),
+                    score = f.optString("score", "${f.optInt("runs", 0)}-${f.optInt("wicketNumber", fi + 1)}"),
+                    overs = f.optString("overs", "0"),
+                    outDesc = f.optString("outDesc", ""),
+                    imageId = f.opt("imageId")?.toString()?.takeIf { it != "null" && it.isNotBlank() },
+                )
+            }
             CdnInnings(
                 inningsId = o.optInt("inningsId", idx + 1),
                 teamName = o.optString("teamName", "Team ${idx + 1}"),
@@ -406,6 +663,7 @@ object CdnScorecardClient {
                 isDeclared = o.optBoolean("isDeclared", false),
                 batters = batters,
                 bowlers = bowlers,
+                fallOfWickets = fallOfWickets,
             )
         }
         return CdnMatchScorecard(
@@ -414,6 +672,110 @@ object CdnScorecardClient {
             status = root.optString("status", ""),
             source = root.optString("source", ""),
             innings = inningsList,
+            seriesId = root.opt("seriesId")?.toString()?.takeIf { it != "null" && it.isNotBlank() },
+            seriesName = root.optString("seriesName", ""),
+        )
+    }
+
+    fun parseRecentMatchesJson(raw: String): List<CdnRecentMatch> {
+        val root = JSONObject(raw)
+        val arr = root.optJSONArray("matches") ?: JSONArray()
+        return (0 until arr.length()).mapNotNull { idx ->
+            val o = arr.optJSONObject(idx) ?: return@mapNotNull null
+            val mid = o.optString("matchId", "")
+            if (mid.isBlank()) return@mapNotNull null
+            CdnRecentMatch(
+                matchId = mid,
+                seriesId = o.opt("seriesId")?.toString()?.takeIf { it != "null" && it.isNotBlank() },
+                seriesName = o.optString("seriesName", ""),
+                matchDesc = o.optString("matchDesc", ""),
+                matchFormat = o.optString("matchFormat", ""),
+                state = o.optString("state", ""),
+                status = o.optString("status", ""),
+                team1 = o.optString("team1", "T1"),
+                team2 = o.optString("team2", "T2"),
+                team1Name = o.optString("team1Name", o.optString("team1", "")),
+                team2Name = o.optString("team2Name", o.optString("team2", "")),
+                team1Score = o.optString("team1Score", ""),
+                team2Score = o.optString("team2Score", ""),
+                isLive = o.optBoolean("isLive", false),
+            )
+        }
+    }
+
+    fun parsePointsJson(raw: String): CdnPointsTable {
+        val root = JSONObject(raw)
+        val gArr = root.optJSONArray("groups") ?: JSONArray()
+        val groups = (0 until gArr.length()).map { gi ->
+            val g = gArr.getJSONObject(gi)
+            val tArr = g.optJSONArray("teams") ?: JSONArray()
+            val teams = (0 until tArr.length()).map { ti ->
+                val t = tArr.getJSONObject(ti)
+                val fArr = t.optJSONArray("form") ?: JSONArray()
+                val form = (0 until fArr.length()).mapNotNull { fi ->
+                    fArr.optString(fi, "").takeIf { it.isNotBlank() }
+                }
+                CdnPointsTeam(
+                    pos = t.optInt("pos", ti + 1),
+                    teamId = t.opt("teamId")?.toString()?.takeIf { it != "null" && it.isNotBlank() },
+                    teamName = t.optString("teamName", ""),
+                    teamFullName = t.optString("teamFullName", t.optString("teamName", "")),
+                    matchesPlayed = t.optInt("matchesPlayed", 0),
+                    won = t.optInt("won", 0),
+                    lost = t.optInt("lost", 0),
+                    tied = t.optInt("tied", 0),
+                    nr = t.optInt("nr", 0),
+                    points = t.optInt("points", 0),
+                    nrr = t.optString("nrr", "0.000"),
+                    form = form,
+                    qualified = t.optBoolean("qualified", false),
+                    imageId = t.opt("imageId")?.toString()?.takeIf { it != "null" && it.isNotBlank() },
+                )
+            }
+            CdnPointsGroup(
+                groupName = g.optString("groupName", "Standings"),
+                teams = teams,
+            )
+        }
+        return CdnPointsTable(
+            seriesId = root.optString("seriesId", ""),
+            seriesName = root.optString("seriesName", "POINTS TABLE"),
+            groups = groups,
+        )
+    }
+
+    fun parseSquadsJson(raw: String): CdnMatchSquads {
+        val root = JSONObject(raw)
+        val tArr = root.optJSONArray("teams") ?: JSONArray()
+        val teams = (0 until tArr.length()).map { ti ->
+            val t = tArr.getJSONObject(ti)
+            fun parsePlayers(arr: JSONArray?): List<CdnSquadPlayer> {
+                if (arr == null) return emptyList()
+                return (0 until arr.length()).map { pi ->
+                    val p = arr.getJSONObject(pi)
+                    CdnSquadPlayer(
+                        id = p.opt("id")?.toString()?.takeIf { it != "null" && it.isNotBlank() },
+                        name = p.optString("name", ""),
+                        role = p.optString("role", ""),
+                        isCaptain = p.optBoolean("isCaptain", false),
+                        isWk = p.optBoolean("isWk", false),
+                        isSubstitute = p.optBoolean("isSubstitute", false),
+                        imageId = p.opt("imageId")?.toString()?.takeIf { it != "null" && it.isNotBlank() },
+                    )
+                }
+            }
+            CdnSquadTeam(
+                teamId = t.opt("teamId")?.toString()?.takeIf { it != "null" && it.isNotBlank() },
+                teamName = t.optString("teamName", "Team ${ti + 1}"),
+                teamShortName = t.optString("teamShortName", t.optString("teamName", "T${ti + 1}")),
+                playingXi = parsePlayers(t.optJSONArray("playingXi")),
+                bench = parsePlayers(t.optJSONArray("bench")),
+            )
+        }
+        return CdnMatchSquads(
+            matchId = root.optString("matchId", ""),
+            title = root.optString("title", "SQUADS"),
+            teams = teams,
         )
     }
 }
