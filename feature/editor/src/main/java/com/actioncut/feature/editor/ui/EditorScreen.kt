@@ -90,7 +90,26 @@ fun EditorScreen(
     var showAutoCard by remember { mutableStateOf(false) }
     var cropTargetClip by remember { mutableStateOf<Clip?>(null) }
 
+    var replaceDialogClipId by remember { mutableStateOf<String?>(null) }
+    var pendingReplaceClipId by remember { mutableStateOf<String?>(null) }
+
     val context = androidx.compose.ui.platform.LocalContext.current
+
+    val replaceImagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        val targetId = pendingReplaceClipId
+        pendingReplaceClipId = null
+        if (uri != null && targetId != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            viewModel.replaceMainTrackImage(targetId, uri.toString())
+        }
+    }
 
     val tplImagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
@@ -271,6 +290,7 @@ fun EditorScreen(
                 onScrubStart = viewModel::beginScrub,
                 onScrubEnd = viewModel::endScrub,
                 onZoomChange = viewModel::setZoom,
+                onReplaceImage = { clipId -> replaceDialogClipId = clipId },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(120.dp),
@@ -424,6 +444,17 @@ fun EditorScreen(
         }
     }
 
+    replaceDialogClipId?.let { targetClipId ->
+        ReplacePictureDialog(
+            onDismiss = { replaceDialogClipId = null },
+            onReplace = {
+                pendingReplaceClipId = targetClipId
+                replaceDialogClipId = null
+                replaceImagePicker.launch(arrayOf("image/*"))
+            },
+        )
+    }
+
     cropTargetClip?.let { target ->
         FreeCropDialog(
             clip = target,
@@ -518,6 +549,31 @@ fun EditorScreen(
             onConfirm = viewModel::renameProject,
         )
     }
+}
+
+@Composable
+private fun ReplacePictureDialog(
+    onDismiss: () -> Unit,
+    onReplace: () -> Unit,
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
+        title = { Text("Replace Picture") },
+        text = {
+            Text("இந்த timeline படத்தை புதிய படத்துடன் மாற்றவா? (Duration, animations மற்றும் effects அப்படியே இருக்கும்.)")
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onReplace) {
+                Text("Replace Image")
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 @Composable
