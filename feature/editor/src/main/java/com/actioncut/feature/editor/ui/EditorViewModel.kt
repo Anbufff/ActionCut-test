@@ -401,6 +401,37 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    fun replaceMainTrackImage(clipId: String, newUriStr: String) {
+        viewModelScope.launch {
+            val located = TimelineEditor.findClip(_uiState.value.timeline, clipId) ?: return@launch
+            val (track, clip) = located
+            if (track.type != TrackType.VIDEO || clip.type != ClipType.IMAGE) return@launch
+
+            val media = resolveAnyMedia(newUriStr)
+            if (media == null || media.type != MediaType.IMAGE) {
+                Toast.makeText(context, "Could not load selected image", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+
+            if (track.clips.firstOrNull()?.id == clipId) {
+                loadedProject = loadedProject?.copy(thumbnailUri = media.uri)
+            }
+
+            mutate(structural = true) { timeline ->
+                TimelineEditor.updateClip(timeline, clipId) { c ->
+                    c.copy(
+                        mediaUri = media.uri,
+                        crop = null,
+                        rotationDegrees = 0,
+                        scorecard = null,
+                    )
+                }
+            }
+            _uiState.update { it.copy(selectedClipId = clipId) }
+            Toast.makeText(context, "Picture replaced!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun addNewsBannerOverlay(text: String) {
         if (text.isBlank()) return
         viewModelScope.launch {
@@ -1511,46 +1542,3 @@ class EditorViewModel @Inject constructor(
 
     private fun currentClip(id: String): Clip? =
         _uiState.value.timeline.allClips.firstOrNull { it.id == id }
-
-    private fun clipAtPlayhead(): Clip? {
-        val pos = _uiState.value.playheadMs
-        return _uiState.value.timeline.tracks
-            .firstOrNull { it.type == TrackType.VIDEO }
-            ?.clips?.firstOrNull { it.contains(pos) }
-    }
-
-    private fun mutate(structural: Boolean = false, transform: (Timeline) -> Timeline) {
-        val currentTimeline = _uiState.value.timeline
-        val newTimeline = transform(currentTimeline)
-        if (newTimeline == currentTimeline) return
-
-        undoStack.addLast(currentTimeline)
-        redoStack.clear()
-
-        _uiState.update {
-            it.copy(
-                timeline = newTimeline,
-                canUndo = undoStack.isNotEmpty(),
-                canRedo = redoStack.isNotEmpty(),
-            )
-        }
-        loadedProject = loadedProject?.copy(timeline = newTimeline)
-
-        if (structural) {
-            playerController.setTimeline(newTimeline, preservePositionMs = _uiState.value.playheadMs)
-        }
-        scheduleSave()
-    }
-
-    private fun scheduleSave() {
-        saveJob?.cancel()
-        saveJob = viewModelScope.launch {
-            delay(500L)
-            loadedProject?.let { saveProject(it) }
-        }
-    }
-
-    companion object {
-        const val ARG_PROJECT_ID = "projectId"
-    }
-}
