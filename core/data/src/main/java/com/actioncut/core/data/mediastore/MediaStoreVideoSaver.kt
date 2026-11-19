@@ -46,11 +46,26 @@ class MediaStoreVideoSaver @Inject constructor(
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Video.Media.MIME_TYPE, mimeType)
+            put(MediaStore.Video.Media.SIZE, source.length())
             put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/ActionCut")
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         val uri = resolver.insert(collection, values) ?: return null
-        resolver.openOutputStream(uri)?.use { out -> source.inputStream().use { it.copyTo(out) } }
+        val copied = runCatching {
+            resolver.openOutputStream(uri)?.use { out ->
+                source.inputStream().use { input ->
+                    input.copyTo(out, bufferSize = COPY_BUFFER_BYTES)
+                }
+                true
+            } ?: false
+        }.getOrElse {
+            runCatching { resolver.delete(uri, null, null) }
+            throw it
+        }
+        if (!copied) {
+            runCatching { resolver.delete(uri, null, null) }
+            return null
+        }
         values.clear()
         values.put(MediaStore.Video.Media.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
@@ -62,16 +77,25 @@ class MediaStoreVideoSaver @Inject constructor(
         val moviesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
         val targetDir = File(moviesDir, "ActionCut").apply { mkdirs() }
         val target = File(targetDir, displayName)
-        source.inputStream().use { input -> target.outputStream().use { input.copyTo(it) } }
+        source.inputStream().use { input ->
+            target.outputStream().use { out ->
+                input.copyTo(out, bufferSize = COPY_BUFFER_BYTES)
+            }
+        }
 
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Video.Media.MIME_TYPE, mimeType)
+            put(MediaStore.Video.Media.SIZE, target.length())
             @Suppress("DEPRECATION")
             put(MediaStore.Video.Media.DATA, target.absolutePath)
         }
         val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
         return uri?.toString()
+    }
+
+    private companion object {
+        const val COPY_BUFFER_BYTES = 256 * 1024
     }
 }
