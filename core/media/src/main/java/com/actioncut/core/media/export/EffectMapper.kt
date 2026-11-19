@@ -267,8 +267,8 @@ object EffectMapper {
         val volume = clip.volume
         if (volume != 1f && volume != 0f) {
             processors += ChannelMixingAudioProcessor().apply {
-                putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(volume))
-                putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(volume))
+                putChannelMixingMatrix(ChannelMixingMatrix.createForConstantGain(1, 1).scaleBy(volume))
+                putChannelMixingMatrix(ChannelMixingMatrix.createForConstantGain(2, 2).scaleBy(volume))
             }
         }
         return processors
