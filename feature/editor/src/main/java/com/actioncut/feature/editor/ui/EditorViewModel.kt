@@ -1542,3 +1542,46 @@ class EditorViewModel @Inject constructor(
 
     private fun currentClip(id: String): Clip? =
         _uiState.value.timeline.allClips.firstOrNull { it.id == id }
+
+    private fun clipAtPlayhead(): Clip? {
+        val pos = _uiState.value.playheadMs
+        return _uiState.value.timeline.tracks
+            .firstOrNull { it.type == TrackType.VIDEO }
+            ?.clips?.firstOrNull { it.contains(pos) }
+    }
+
+    private fun mutate(structural: Boolean = false, transform: (Timeline) -> Timeline) {
+        val currentTimeline = _uiState.value.timeline
+        val newTimeline = transform(currentTimeline)
+        if (newTimeline == currentTimeline) return
+
+        undoStack.addLast(currentTimeline)
+        redoStack.clear()
+
+        _uiState.update {
+            it.copy(
+                timeline = newTimeline,
+                canUndo = undoStack.isNotEmpty(),
+                canRedo = redoStack.isNotEmpty(),
+            )
+        }
+        loadedProject = loadedProject?.copy(timeline = newTimeline)
+
+        if (structural) {
+            playerController.setTimeline(newTimeline, preservePositionMs = _uiState.value.playheadMs)
+        }
+        scheduleSave()
+    }
+
+    private fun scheduleSave() {
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch {
+            delay(500L)
+            loadedProject?.let { saveProject(it) }
+        }
+    }
+
+    companion object {
+        const val ARG_PROJECT_ID = "projectId"
+    }
+}
