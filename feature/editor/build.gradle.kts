@@ -14,7 +14,7 @@ androidComponents {
 
 android {
     namespace = "com.actioncut.feature.editor"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 26
