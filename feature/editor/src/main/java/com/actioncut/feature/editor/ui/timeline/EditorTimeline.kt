@@ -6,7 +6,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
@@ -57,6 +56,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -67,6 +67,7 @@ import coil.decode.VideoFrameDecoder
 import coil.request.ImageRequest
 import coil.request.videoFrameMillis
 import com.actioncut.core.designsystem.component.clickableNoRipple
+import com.actioncut.core.designsystem.component.rememberHaptic
 import com.actioncut.core.designsystem.theme.LaneAudio
 import com.actioncut.core.designsystem.theme.LaneText
 import com.actioncut.core.designsystem.theme.LaneVideo
@@ -84,6 +85,7 @@ private const val TRACK_HEIGHT = 52
 private const val RULER_HEIGHT = 22
 private const val MIN_ZOOM_PX_PER_SEC = 24f
 private const val MAX_ZOOM_PX_PER_SEC = 320f
+private const val REPLACE_HOLD_DURATION_MS = 2_000L
 
 @Composable
 fun EditorTimeline(
@@ -106,6 +108,7 @@ fun EditorTimeline(
     onScrubStart: () -> Unit = {},
     onScrubEnd: (Long) -> Unit = {},
     onZoomChange: (Float) -> Unit = {},
+    onReplaceImage: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -278,6 +281,7 @@ fun EditorTimeline(
                         onMoveCommit = onMoveCommit,
                         onLoadWaveform = onLoadWaveform,
                         onAddMedia = onAddMedia,
+                        onReplaceImage = onReplaceImage,
                         playheadMsProvider = { currentPlayheadMs },
                     )
                 }
@@ -342,6 +346,7 @@ private fun TrackLane(
     onMoveCommit: () -> Unit,
     onLoadWaveform: (suspend (String) -> FloatArray)?,
     onAddMedia: () -> Unit,
+    onReplaceImage: (String) -> Unit,
     playheadMsProvider: () -> Long,
 ) {
     val density = LocalDensity.current
@@ -366,6 +371,7 @@ private fun TrackLane(
                     onMoveClip = onMoveClip,
                     onMoveCommit = onMoveCommit,
                     onLoadWaveform = onLoadWaveform,
+                    onReplaceImage = onReplaceImage,
                     playheadMsProvider = playheadMsProvider,
                 )
             }
@@ -417,17 +423,24 @@ private fun ClipBlock(
     onMoveClip: (String, Long) -> Unit = { _, _ -> },
     onMoveCommit: () -> Unit = {},
     onLoadWaveform: (suspend (String) -> FloatArray)? = null,
+    onReplaceImage: (String) -> Unit = {},
     playheadMsProvider: () -> Long = { 0L },
 ) {
     val density = LocalDensity.current
     val context = LocalContext.current
+    val haptic = rememberHaptic()
     val widthDp = with(density) { (clip.timelineDurationMs / 1000f * pxPerSecond).toDp() }
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent
 
+    val canReplaceImage =
+        trackType == TrackType.VIDEO && clip.type == ClipType.IMAGE && clip.scorecard == null
+
     val currentClipStartMs by rememberUpdatedState(clip.timelineStartMs)
     val currentPxPerSecond by rememberUpdatedState(pxPerSecond)
+    val currentOnSelect by rememberUpdatedState(onSelect)
     val currentOnMoveClip by rememberUpdatedState(onMoveClip)
     val currentOnMoveCommit by rememberUpdatedState(onMoveCommit)
+    val currentOnReplaceImage by rememberUpdatedState(onReplaceImage)
 
     var moveAnchor by remember(clip.id) { mutableLongStateOf(clip.timelineStartMs) }
     var moveAcc by remember(clip.id) { mutableFloatStateOf(0f) }
@@ -440,21 +453,96 @@ private fun ClipBlock(
             .background(laneColor(clip, trackType))
             .border(2.dp, borderColor, RoundedCornerShape(6.dp))
             .clickableNoRipple { onSelect() }
-            .pointerInput(clip.id) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = {
-                        onSelect()
-                        moveAnchor = currentClipStartMs
-                        moveAcc = 0f
-                    },
-                    onDrag = { _, drag ->
-                        moveAcc += drag.x
-                        val deltaMs = (moveAcc / currentPxPerSecond * 1000f).toLong()
-                        currentOnMoveClip(clip.id, moveAnchor + deltaMs)
-                    },
-                    onDragEnd = { currentOnMoveCommit() },
-                    onDragCancel = { currentOnMoveCommit() },
-                )
+            .pointerInput(clip.id, canReplaceImage) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val touchSlop = viewConfiguration.touchSlop
+                    val longPressMs = viewConfiguration.longPressTimeoutMillis
+
+                    var pointerDown = true
+                    var movedOrConsumed = false
+
+                    withTimeoutOrNull(longPressMs) {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null || !change.pressed) {
+                                pointerDown = false
+                                break
+                            }
+                            if (change.isConsumed || (change.position - down.position).getDistance() > touchSlop) {
+                                movedOrConsumed = true
+                                break
+                            }
+                        }
+                    }
+
+                    if (!pointerDown || movedOrConsumed) {
+                        return@awaitEachGesture
+                    }
+
+                    currentOnSelect()
+                    moveAnchor = currentClipStartMs
+                    moveAcc = 0f
+
+                    var startDrag = !canReplaceImage
+                    if (canReplaceImage) {
+                        val remainingHoldMs = (REPLACE_HOLD_DURATION_MS - longPressMs).coerceAtLeast(1_000L)
+                        val holdOutcome = withTimeoutOrNull(remainingHoldMs) {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                if (change == null || !change.pressed || change.isConsumed) {
+                                    pointerDown = false
+                                    break
+                                }
+                                if ((change.position - down.position).getDistance() > touchSlop) {
+                                    startDrag = true
+                                    val dx = change.positionChange().x
+                                    change.consume()
+                                    if (dx != 0f) {
+                                        moveAcc += dx
+                                        val deltaMs = (moveAcc / currentPxPerSecond * 1000f).toLong()
+                                        currentOnMoveClip(clip.id, moveAnchor + deltaMs)
+                                    }
+                                    break
+                                }
+                                change.consume()
+                            }
+                        }
+
+                        if (holdOutcome == null && pointerDown && !startDrag) {
+                            haptic.longPress()
+                            currentOnReplaceImage(clip.id)
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                ev.changes.forEach { it.consume() }
+                                if (ev.changes.none { it.pressed }) break
+                            }
+                            return@awaitEachGesture
+                        }
+                    }
+
+                    if (pointerDown && startDrag) {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null || !change.pressed || change.isConsumed) {
+                                currentOnMoveCommit()
+                                break
+                            }
+                            val delta = change.positionChange()
+                            if (delta != Offset.Zero) {
+                                change.consume()
+                                if (delta.x != 0f) {
+                                    moveAcc += delta.x
+                                    val deltaMs = (moveAcc / currentPxPerSecond * 1000f).toLong()
+                                    currentOnMoveClip(clip.id, moveAnchor + deltaMs)
+                                }
+                            }
+                        }
+                    }
+                }
             },
         contentAlignment = Alignment.CenterStart,
     ) {
